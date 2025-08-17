@@ -38,23 +38,20 @@ namespace actor_zeta { namespace base {
 
     // clang-format on
 
-    template <typename Fun>
-    struct is_fun_ptr: std::integral_constant<
-              bool,
-              std::is_pointer<Fun>::value && std::is_function<typename std::remove_pointer<Fun>::type>::value>
-    {
+    template<typename Fun>
+    struct is_fun_ptr : std::integral_constant<bool, std::is_pointer<Fun>::value && std::is_function<typename std::remove_pointer<Fun>::type>::value> {
     };
 
     template<typename F,
              class Args = typename type_traits::get_callable_trait<F>::args_types,
              int Args_size = type_traits::get_callable_trait<F>::number_of_arguments,
              bool method = is_fun_ptr<F>::value>
-    struct transformer ;
+    struct transformer;
 
-    template<typename F,class Args , int Args_size >
-    struct transformer<F, Args,Args_size, false> {
-        auto operator()(F&& f) -> action {
-            action tmp([func = type_traits::decay_t<F>(f)](mailbox::message* ctx) -> void {
+    template<typename F, class Args, int Args_size>
+    struct transformer<F, Args, Args_size, false> {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, F&& f) -> action {
+            action tmp(resource, [func = type_traits::decay_t<F>(f)](mailbox::message* ctx) -> void {
                 apply_impl(func, ctx, type_traits::make_index_sequence<Args_size>{});
             });
             return tmp;
@@ -62,9 +59,9 @@ namespace actor_zeta { namespace base {
     };
 
     template<typename F, class Args>
-    struct transformer<F, Args,0, false> final {
-        auto operator()(F&& f) -> action {
-            action tmp([func = type_traits::decay_t<F>(f)](mailbox::message*) -> void {
+    struct transformer<F, Args, 0, false> final {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, F&& f) -> action {
+            action tmp(resource, [func = type_traits::decay_t<F>(f)](mailbox::message*) -> void {
                 func();
             });
             return tmp;
@@ -72,9 +69,9 @@ namespace actor_zeta { namespace base {
     };
 
     template<typename F, class Args>
-    struct transformer<F, Args, 1,false> final {
-        auto operator()(F&& f) -> action {
-            action tmp([func = type_traits::decay_t<F>(f)](mailbox::message* ctx) -> void {
+    struct transformer<F, Args, 1, false> final {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, F&& f) -> action {
+            action tmp(resource, [func = type_traits::decay_t<F>(f)](mailbox::message* ctx) -> void {
                 using arg_type = type_traits::type_list_at_t<Args, 0>;
                 using clear_args_type = type_traits::decay_t<arg_type>;
                 auto& tmp = ctx->body();
@@ -84,10 +81,10 @@ namespace actor_zeta { namespace base {
         }
     };
 
-    template<typename F,class Args , int Args_size >
-    struct transformer<F, Args,Args_size, true> {
-        auto operator()(F&& f) -> action {
-            action tmp([func = std::move(f)](mailbox::message* ctx) -> void {
+    template<typename F, class Args, int Args_size>
+    struct transformer<F, Args, Args_size, true> {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, F&& f) -> action {
+            action tmp(resource, [func = std::move(f)](mailbox::message* ctx) -> void {
                 apply_impl(func, ctx, type_traits::make_index_sequence<Args_size>{});
             });
             return tmp;
@@ -95,9 +92,9 @@ namespace actor_zeta { namespace base {
     };
 
     template<typename F, class Args>
-    struct transformer<F, Args,0, true> final {
-        auto operator()(F&& f) -> action {
-            action tmp([func = std::move(f)](mailbox::message*) -> void {
+    struct transformer<F, Args, 0, true> final {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, F&& f) -> action {
+            action tmp(resource, [func = std::move(f)](mailbox::message*) -> void {
                 func();
             });
             return tmp;
@@ -105,9 +102,9 @@ namespace actor_zeta { namespace base {
     };
 
     template<typename F, class Args>
-    struct transformer<F, Args, 1,true> final {
-        auto operator()(F&& f) -> action {
-            action tmp([func = std::move(f)](mailbox::message* ctx) -> void {
+    struct transformer<F, Args, 1, true> final {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, F&& f) -> action {
+            action tmp(resource, [func = std::move(f)](mailbox::message* ctx) -> void {
                 using arg_type = type_traits::type_list_at_t<Args, 0>;
                 using clear_args_type = type_traits::decay_t<arg_type>;
                 auto& tmp = ctx->body();
@@ -137,9 +134,9 @@ namespace actor_zeta { namespace base {
         class Args = typename type_traits::get_callable_trait<F>::args_types,
         int Args_size = type_traits::get_callable_trait<F>::number_of_arguments>
     struct transformer_for_class {
-        auto operator()(ClassPtr* ptr, F&& f) -> action {
-            action tmp([func = std::move(f), ptr](mailbox::message* ctx) -> void {
-                apply_impl_for_class(ptr,func, ctx, type_traits::make_index_sequence<Args_size>{});
+        auto operator()(actor_zeta::pmr::memory_resource* resource, ClassPtr* ptr, F&& f) -> action {
+            action tmp(resource, [func = std::move(f), ptr](mailbox::message* ctx) -> void {
+                apply_impl_for_class(ptr, func, ctx, type_traits::make_index_sequence<Args_size>{});
             });
             return tmp;
         }
@@ -149,9 +146,9 @@ namespace actor_zeta { namespace base {
         typename ClassPtr,
         typename F,
         class Args>
-    struct transformer_for_class<ClassPtr,F, Args, 0> final {
-        auto operator()(ClassPtr* ptr, F&& f) -> action {
-            action tmp([func = std::move(f), ptr](mailbox::message*) -> void {
+    struct transformer_for_class<ClassPtr, F, Args, 0> final {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, ClassPtr* ptr, F&& f) -> action {
+            action tmp(resource, [func = std::move(f), ptr](mailbox::message*) -> void {
                 (ptr->*func)();
             });
             return tmp;
@@ -162,9 +159,9 @@ namespace actor_zeta { namespace base {
         typename ClassPtr,
         typename F,
         class Args>
-    struct transformer_for_class<ClassPtr,F, Args, 1> final {
-        auto operator()(ClassPtr* ptr, F&& f) -> action {
-            action tmp([func = std::move(f), ptr](mailbox::message* arg) -> void {
+    struct transformer_for_class<ClassPtr, F, Args, 1> final {
+        auto operator()(actor_zeta::pmr::memory_resource* resource, ClassPtr* ptr, F&& f) -> action {
+            action tmp(resource, [func = std::move(f), ptr](mailbox::message* arg) -> void {
                 using arg_type_0 = type_traits::type_list_at_t<Args, 0>;
                 using decay_arg_type_0 = type_traits::decay_t<arg_type_0>;
                 auto& tmp = arg->body();
@@ -176,13 +173,13 @@ namespace actor_zeta { namespace base {
     };
 
     template<typename F>
-    auto make_handler(F&& f) -> action {
-        return transformer<F>{}(std::forward<F>(f));
+    auto make_handler(actor_zeta::pmr::memory_resource* resource, F&& f) -> action {
+        return transformer<F>{}(resource, std::forward<F>(f));
     }
 
-    template<typename ClassPtr,typename F>
-    auto make_handler(ClassPtr* self, F&& f) -> action {
-        return transformer_for_class<ClassPtr, F>{}(self, std::forward<F>(f));
+    template<typename ClassPtr, typename F>
+    auto make_handler(actor_zeta::pmr::memory_resource* resource, ClassPtr* self, F&& f) -> action {
+        return transformer_for_class<ClassPtr, F>{}(resource, self, std::forward<F>(f));
     }
 
 }} // namespace actor_zeta::base

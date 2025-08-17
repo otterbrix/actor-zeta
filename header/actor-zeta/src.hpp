@@ -23,6 +23,5 @@
 #include <actor-zeta/impl/mailbox/id.ipp>
 #include <actor-zeta/impl/mailbox/message.ipp>
 
-#include <actor-zeta/impl/make_message.ipp>
 #include <actor-zeta/impl/send.ipp>
 // clang-format on

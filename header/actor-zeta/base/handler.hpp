@@ -8,9 +8,9 @@ namespace actor_zeta { namespace base {
     using action = detail::unique_function<void(mailbox::message*)>;
 
     template<typename F>
-    auto make_handler(F&& f)-> action ;
+    auto make_handler(actor_zeta::pmr::memory_resource* resource, F&& f) -> action;
 
-    template<typename ClassPtr,typename F>
-    auto make_handler(ClassPtr*self,F&& f ) -> action ;
+    template<typename ClassPtr, typename F>
+    auto make_handler(actor_zeta::pmr::memory_resource* resource, ClassPtr* self, F&& f) -> action;
 
 }} // namespace actor_zeta::base

@@ -20,9 +20,7 @@ namespace actor_zeta { namespace base {
         behavior_t(behavior_t&&) = default;
         behavior_t& operator=(behavior_t&&) = default;
 
-        behavior_t(actor_zeta::pmr::memory_resource*, action handler) {
-            handler_ = std::move(handler);
-        }
+        behavior_t(actor_zeta::pmr::memory_resource*, action handler):handler_ (std::move(handler)) {}
 
         explicit operator bool() {
             return bool(handler_);
@@ -38,13 +36,13 @@ namespace actor_zeta { namespace base {
 
     template<class Value>
     behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, Value&& f) {
-        return {resource, make_handler(std::forward<Value>(f))};
+        return {resource, make_handler(resource,std::forward<Value>(f))};
     }
 
 
     template<class Actor, typename F>
     behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, Actor* ptr, F&& f) {
-        return {resource, make_handler(ptr, std::forward<F>(f))};
+        return {resource, make_handler(resource,ptr, std::forward<F>(f))};
     }
 
 
