@@ -101,25 +101,28 @@ TEST_CASE("rt_tuple") {
     SECTION("actor_zeta::detail::get f5") {
         auto f = [](
                      UNUSED std::unique_ptr<int64_t>&& up1,
+                     UNUSED std::unique_ptr<int64_t>&& up2,
                      UNUSED const int16_t* p2) {};
 
         std::unique_ptr<int64_t> uptr = std::unique_ptr<int64_t>(new int64_t(64));
         int16_t i16 = 16;
         int16_t* p_i16 = &i16;
 
-        rtt r(nullptr, std::move(uptr), p_i16);
+        rtt r(nullptr, std::move(uptr),std::unique_ptr<int64_t>(new int64_t(64)), p_i16);
         REQUIRE_FALSE(uptr);
         using call_trait = actor_zeta::type_traits::get_callable_trait_t<actor_zeta::type_traits::remove_reference_t<decltype(f)>>;
         using args_type_list = typename call_trait::args_types;
 
-        REQUIRE(actor_zeta::detail::get<1, args_type_list>(r) == p_i16);
+        REQUIRE(actor_zeta::detail::get<2, args_type_list>(r) == p_i16);
 
         REQUIRE(*actor_zeta::detail::get<0, args_type_list>(r) == 64);
-        REQUIRE(*actor_zeta::detail::get<1, args_type_list>(r) == i16);
+        REQUIRE(*actor_zeta::detail::get<1, args_type_list>(r) == 64);
+        REQUIRE(*actor_zeta::detail::get<2, args_type_list>(r) == i16);
 
 
         REQUIRE(std::is_same<decltype(actor_zeta::detail::get<0, args_type_list>(r)), std::unique_ptr<int64_t>&& >::value);
-        REQUIRE(std::is_same<decltype(actor_zeta::detail::get<1, args_type_list>(r)), const int16_t*>::value);
+        REQUIRE(std::is_same<decltype(actor_zeta::detail::get<1, args_type_list>(r)), std::unique_ptr<int64_t>&& >::value);
+        REQUIRE(std::is_same<decltype(actor_zeta::detail::get<2, args_type_list>(r)), const int16_t*>::value);
     }
 
     SECTION("actor_zeta::detail::get f6") {
