@@ -24,63 +24,13 @@ namespace actor_zeta { namespace base {
     public:
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, Traits, actor_type::classic>, pmr::deleter_t>;
 
-        scheduler::resume_result resume(actor_zeta::scheduler::scheduler_t*scheduler,size_t max_throughput) final {
-            detail::ignore_unused(scheduler);
-            static constexpr size_t quantum = 3;
-            size_t handled_msgs = 0;
-            mailbox::message_ptr ptr;
-
-            auto handle_async = [this, max_throughput, &handled_msgs](mailbox::message& x) -> detail::task_result {
-                reactivate(x);
-                return ++handled_msgs < max_throughput
-                           ? detail::task_result::resume
-                           : detail::task_result::stop_all;
-            };
-
-            while (handled_msgs < max_throughput) {
-                if (!inbox().empty()) {
-                    inbox().fetch_more();
-                    auto prev_handled_msgs = handled_msgs;
-                    high(inbox()).new_round(quantum * 3, handle_async);
-                    normal(inbox()).new_round(quantum, handle_async);
-                    if (handled_msgs == prev_handled_msgs && inbox().try_block()) {
-                        return scheduler::resume_result::awaiting;
-                    }
-                }
-            }
-            if (inbox().try_block()) {
-                return scheduler::resume_result::awaiting;
-            }
-            return scheduler::resume_result::resume;
+        scheduler::resume_result resume(actor_zeta::scheduler::scheduler_t* sched, size_t max_throughput) noexcept final {
+            detail::ignore_unused(sched);
+            return resume_core_(max_throughput);
         }
 
-        scheduler::resume_result resume(size_t max_throughput) {
-            static constexpr size_t quantum = 3;
-            size_t handled_msgs = 0;
-            mailbox::message_ptr ptr;
-
-            auto handle_async = [this, max_throughput, &handled_msgs](mailbox::message& x) -> detail::task_result {
-                reactivate(x);
-                return ++handled_msgs < max_throughput
-                           ? detail::task_result::resume
-                           : detail::task_result::stop_all;
-            };
-
-            while (handled_msgs < max_throughput) {
-                if (!inbox().empty()) {
-                    inbox().fetch_more();
-                    auto prev_handled_msgs = handled_msgs;
-                    high(inbox()).new_round(quantum * 3, handle_async);
-                    normal(inbox()).new_round(quantum, handle_async);
-                    if (handled_msgs == prev_handled_msgs && inbox().try_block()) {
-                        return scheduler::resume_result::awaiting;
-                    }
-                }
-            }
-            if (inbox().try_block()) {
-                return scheduler::resume_result::awaiting;
-            }
-            return scheduler::resume_result::resume;
+        scheduler::resume_result resume(size_t max_throughput) noexcept {
+            return resume_core_(max_throughput);
         }
 
         void intrusive_ptr_add_ref_impl() final {
@@ -121,6 +71,58 @@ namespace actor_zeta { namespace base {
         }
 
     private:
+        class current_msg_guard final {
+        public:
+            current_msg_guard(cooperative_actor* s, mailbox::message* m) noexcept
+                : self(s), prev(s->current_message_) { self->current_message_ = m; }
+            ~current_msg_guard() noexcept { self->current_message_ = nullptr; }
+        private:
+            cooperative_actor* self;
+            mailbox::message*  prev;
+            current_msg_guard(const current_msg_guard&);
+            current_msg_guard& operator=(const current_msg_guard&);
+        };
+
+        scheduler::resume_result resume_core_(size_t max_throughput) noexcept {
+            const size_t nq = 3u;
+            const size_t hq = nq * 3u;
+            size_t handled = 0;
+
+            if (inbox().empty()) {
+                return inbox().try_block()
+                       ? scheduler::resume_result::awaiting
+                       : scheduler::resume_result::resume;
+            }
+
+            auto handler = [this, &handled, max_throughput](mailbox::message& m) noexcept -> detail::task_result {
+                current_msg_guard guard(this, &m);
+                self()->behavior(current_message_);
+                ++handled;
+                return (handled < max_throughput)
+                       ? detail::task_result::resume
+                       : detail::task_result::stop_all;
+            };
+
+            while (handled < max_throughput) {
+                inbox().fetch_more();
+                const size_t before = handled;
+
+                high(inbox()).new_round(hq, handler);
+                normal(inbox()).new_round(nq, handler);
+
+                if (handled == before) {
+                    return inbox().try_block()
+                           ? scheduler::resume_result::awaiting
+                           : scheduler::resume_result::resume;
+                }
+            }
+
+            return inbox().try_block()
+                   ? scheduler::resume_result::awaiting
+                   : scheduler::resume_result::resume;
+        }
+
+
         mailbox::message* current_message() noexcept { return current_message_; }
 
         inline const Actor* self() const noexcept {
@@ -133,11 +135,6 @@ namespace actor_zeta { namespace base {
 
         inline traits::inbox_t& inbox() {
             return inbox_;
-        }
-
-        auto reactivate(mailbox::message& x) -> void {
-            current_message_ = &x;
-            self()->behavior(current_message_);
         }
 
         mailbox::message* current_message_;
