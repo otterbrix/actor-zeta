@@ -87,7 +87,7 @@ namespace actor_zeta { namespace base {
 
         address_t address() noexcept;
         id_t id() const;
-        void enqueue(mailbox::message_ptr);
+        bool enqueue(mailbox::message_ptr);
         pmr::memory_resource* resource() const noexcept;
 
         template<class T>
@@ -104,7 +104,7 @@ namespace actor_zeta { namespace base {
         actor_abstract_t(actor_abstract_t&&) = delete;
         actor_abstract_t& operator=(actor_abstract_t&&) = delete;
 
-        virtual void enqueue_impl(mailbox::message_ptr) = 0;
+        virtual bool enqueue_impl(mailbox::message_ptr) = 0;
 
     private:
         actor_zeta::pmr::memory_resource* resource_;

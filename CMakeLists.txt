@@ -217,18 +217,7 @@ endif ()
 
 message(STATUS "CONAN_SETTINGS: ${CONAN_SETTINGS}")
 
-if(CONAN_EXPORTED)
-    conan_basic_setup(TARGETS)
-else()
-    conan_cmake_run(REQUIRES
-            catch2/2.13.6
-            benchmark/1.8.0
-            BASIC_SETUP CMAKE_TARGETS
-            SETTINGS ${CONAN_SETTINGS}
-            ENV CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LDFLAGS=${LINKFLAGS}
-            BUILD missing
-    )
-endif()
+
 # configuration
 #############################################################################################
 #conan

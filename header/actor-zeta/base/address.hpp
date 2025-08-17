@@ -37,7 +37,6 @@ namespace actor_zeta { namespace base {
         operator bool() const noexcept;
         auto operator!() const noexcept -> bool;
         void swap(address_t& other);
-        actor_abstract_t* get() const;
 
     private:
         address_t() noexcept;

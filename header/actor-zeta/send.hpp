@@ -1,6 +1,7 @@
 #pragma once
 
 #include <actor-zeta/base/forwards.hpp>
+#include <actor-zeta/scheduler/forwards.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/make_message.hpp>
 
@@ -26,5 +27,7 @@ namespace actor_zeta {
             make_message(
                 std::forward<Args>(args)...));
     }
+
+    void enqueue(actor_zeta::scheduler_t* scheduler, actor_zeta::scheduler::resumable_t* ptr) ;
 
 } // namespace actor_zeta

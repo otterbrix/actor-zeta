@@ -9,9 +9,6 @@
 
 namespace actor_zeta { namespace base {
 
-    void error_skip(const std::string& sender, const std::string& reciever, mailbox::message_id handler);
-    void error_skip(const std::string& reciever, mailbox::message_id handler);
-
     struct keep_behavior_t final {
         constexpr keep_behavior_t() noexcept {}
     };
@@ -29,9 +26,7 @@ namespace actor_zeta { namespace base {
         behavior_t(behavior_t&&) = default;
         behavior_t& operator=(behavior_t&&) = default;
 
-        behavior_t(actor_zeta::pmr::memory_resource*, id name, action handler) {
-            ///assert(id_.integer_value() == mailbox::detail::default_async_value);
-            id_ = name;
+        behavior_t(actor_zeta::pmr::memory_resource*, action handler) {
             handler_ = std::move(handler);
         }
 
@@ -40,64 +35,23 @@ namespace actor_zeta { namespace base {
         }
 
         void operator()(mailbox::message* msg) {
-            ///assert(msg->command() == id_);
             handler_(msg);
         }
 
-        void assign(id name, action handler) {
-            id_ = name;
-            handler_ = std::move(handler);
-        }
-
     private:
-        id id_{mailbox::detail::default_async_value};
         action handler_;
     };
 
-    template<class Key, class Value>
-    behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, Key key, Value&& f) {
-        return {resource, mailbox::make_message_id(static_cast<uint64_t>(key)), make_handler(std::forward<Value>(f))};
-    }
-
     template<class Value>
-    behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, mailbox::message_id key, Value&& f) {
-        return {resource, key, make_handler(std::forward<Value>(f))};
+    behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, Value&& f) {
+        return {resource, make_handler(std::forward<Value>(f))};
     }
 
-    template<class Key, class Actor, typename F>
-    behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, Key key, Actor* ptr, F&& f) {
-        auto id = static_cast<uint64_t>(key);
-        return {resource, mailbox::make_message_id(id), make_handler(ptr, std::forward<F>(f))};
+
+    template<class Actor, typename F>
+    behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, Actor* ptr, F&& f) {
+        return {resource, make_handler(ptr, std::forward<F>(f))};
     }
 
-    template<class F>
-    behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, F&& f) {
-        return {resource, mailbox::message_id{}, action(std::forward<F>(f))};
-    }
-    //// todo: rename behavior
-    /*template<class F>
-    behavior_t make_behavior(actor_zeta::pmr::memory_resource*resource, F&& f) {
-        return {resource,mailbox::message_id{}, std::move(action(std::forward<F>(f)))};
-    }*/
-    /*
-    template<class Actor, typename Value>
-    behavior_t behavior(actor_zeta::pmr::memory_resource*resource, Actor* ptr, Value&& f) {
-        return {resource,mailbox::message_id{}, ptr,std::forward<Value>(f)};
-    }
-*/
-    template<class T>
-    void invoke(behavior_t& instance, T* , mailbox::message* msg) {
-        instance(msg);
-        /// todo: add error handling
-        /*
-        auto reciever = ptr->type();
-        if (msg->sender()) {
-            auto sender = msg->sender()->type();
-            error_skip(sender, reciever, msg->command());
-        } else {
-            error_skip(reciever, msg->command());
-        }
-         */
-    }
 
 }} // namespace actor_zeta::base

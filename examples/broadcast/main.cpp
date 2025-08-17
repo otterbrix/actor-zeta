@@ -20,9 +20,55 @@ auto thread_pool_deleter = [](actor_zeta::scheduler_t* ptr) {
 static std::atomic<uint64_t> counter_download_data{0};
 static std::atomic<uint64_t> counter_work_data{0};
 
-class supervisor_lite;
-class worker_t;
 using actor_zeta::pmr::memory_resource;
+
+class worker_t final : public actor_zeta::basic_actor<worker_t> {
+public:
+    enum class command_t : uint64_t {
+        download = 0x00,
+        work_data
+    };
+
+    worker_t(actor_zeta::pmr::memory_resource* ptr)
+        : actor_zeta::basic_actor<worker_t>(ptr)
+        , download_(actor_zeta::make_behavior(resource(), command_t::download, this, &worker_t::download))
+        , work_data_(actor_zeta::make_behavior(resource(), command_t::work_data, this, &worker_t::work_data)) {
+    }
+
+    actor_zeta::behavior_t behavior() {
+        return actor_zeta::make_behavior(
+            resource(),
+            [this](actor_zeta::message* msg) -> void {
+                switch (msg->command()) {
+                    case actor_zeta::make_message_id(command_t::download): {
+                        download_(msg);
+                        break;
+                    }
+                    case actor_zeta::make_message_id(command_t::work_data): {
+                        work_data_(msg);
+                        break;
+                    }
+                }
+            });
+    }
+
+
+    void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
+        tmp_ = url;
+        counter_download_data++;
+    }
+
+    void work_data(const std::string& data, const std::string& /*operatorName*/) {
+        tmp_ = data;
+        counter_work_data++;
+    }
+
+private:
+    actor_zeta::behavior_t download_;
+    actor_zeta::behavior_t work_data_;
+    std::string tmp_;
+};
+
 /// non thread safe
 class supervisor_lite final : public actor_zeta::actor_abstract_t {
 public:
@@ -98,6 +144,9 @@ private:
         for (std::size_t i = 0, end = size_actor(); i != end; ++i) {
             actor_zeta::send(actors_[i].get(), std::move(msgs[i]));
         }
+        for (std::size_t i = 0, end = size_actor(); i != end; ++i) {
+            actor_zeta::enqueue(e_.get(),(actors_[i].get()));
+        }
     }
 
     actor_zeta::behavior_t create_;
@@ -105,53 +154,6 @@ private:
     std::unique_ptr<actor_zeta::scheduler_t, actor_zeta::pmr::deleter_t> e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};
-};
-
-class worker_t final : public actor_zeta::basic_actor<worker_t> {
-public:
-    enum class command_t : uint64_t {
-        download = 0x00,
-        work_data
-    };
-
-    worker_t(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<worker_t>(ptr)
-        , download_(actor_zeta::make_behavior(resource(), command_t::download, this, &worker_t::download))
-        , work_data_(actor_zeta::make_behavior(resource(), command_t::work_data, this, &worker_t::work_data)) {
-    }
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(command_t::download): {
-                        download_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(command_t::work_data): {
-                        work_data_(msg);
-                        break;
-                    }
-                }
-            });
-    }
-
-
-    void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
-        tmp_ = url;
-        counter_download_data++;
-    }
-
-    void work_data(const std::string& data, const std::string& /*operatorName*/) {
-        tmp_ = data;
-        counter_work_data++;
-    }
-
-private:
-    actor_zeta::behavior_t download_;
-    actor_zeta::behavior_t work_data_;
-    std::string tmp_;
 };
 
 int main() {

@@ -27,9 +27,6 @@ namespace actor_zeta { namespace test {
 
     } // namespace
 
-    clock_test& scheduler_test_t::clock() noexcept {
-        return clock_;
-    }
 
     void scheduler_test_t::start() {}
 
@@ -72,7 +69,5 @@ namespace actor_zeta { namespace test {
         return res;
     }
 
-    size_t scheduler_test_t::advance_time(clock::clock_t::duration_type time) {
-        return clock_.advance_time(time);
-    }
+
 }} // namespace actor_zeta::test

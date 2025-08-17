@@ -55,10 +55,6 @@ namespace actor_zeta { namespace base {
         std::swap(ptr_, other.ptr_);
     }
 
-    actor_abstract_t* address_t::get() const {
-        return ptr_;
-    }
-
     address_t::~address_t() noexcept {
         ptr_ = nullptr;
     }

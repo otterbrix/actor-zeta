@@ -1,6 +1,5 @@
 #pragma once
 
-#include "hfsm.hpp"
 #include "traits_actor.hpp"
 #include <actor-zeta/base/actor_abstract.hpp>
 #include <actor-zeta/base/behavior.hpp>
@@ -39,12 +38,14 @@ namespace actor_zeta { namespace base {
             };
 
             while (handled_msgs < max_throughput) {
-                inbox().fetch_more();
-                auto prev_handled_msgs = handled_msgs;
-                high(inbox()).new_round(quantum * 3, handle_async);
-                normal(inbox()).new_round(quantum, handle_async);
-                if (handled_msgs == prev_handled_msgs && inbox().try_block()) {
-                    return scheduler::resume_result::awaiting;
+                if (!inbox().empty()) {
+                    inbox().fetch_more();
+                    auto prev_handled_msgs = handled_msgs;
+                    high(inbox()).new_round(quantum * 3, handle_async);
+                    normal(inbox()).new_round(quantum, handle_async);
+                    if (handled_msgs == prev_handled_msgs && inbox().try_block()) {
+                        return scheduler::resume_result::awaiting;
+                    }
                 }
             }
             if (inbox().try_block()) {
@@ -66,12 +67,14 @@ namespace actor_zeta { namespace base {
             };
 
             while (handled_msgs < max_throughput) {
-                inbox().fetch_more();
-                auto prev_handled_msgs = handled_msgs;
-                high(inbox()).new_round(quantum * 3, handle_async);
-                normal(inbox()).new_round(quantum, handle_async);
-                if (handled_msgs == prev_handled_msgs && inbox().try_block()) {
-                    return scheduler::resume_result::awaiting;
+                if (!inbox().empty()) {
+                    inbox().fetch_more();
+                    auto prev_handled_msgs = handled_msgs;
+                    high(inbox()).new_round(quantum * 3, handle_async);
+                    normal(inbox()).new_round(quantum, handle_async);
+                    if (handled_msgs == prev_handled_msgs && inbox().try_block()) {
+                        return scheduler::resume_result::awaiting;
+                    }
                 }
             }
             if (inbox().try_block()) {
@@ -97,17 +100,22 @@ namespace actor_zeta { namespace base {
             inbox().try_block(); //todo: bug
         }
 
-        void enqueue_impl(mailbox::message_ptr msg) final {
+        bool enqueue_impl(mailbox::message_ptr msg) final {
             assert(msg);
             switch (inbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
                     intrusive_ptr_add_ref(this);
-                    break;
+                    return true;
                 }
-                case detail::enqueue_result::success:
-                    break;
-                case detail::enqueue_result::queue_closed:
-                    break;
+                case detail::enqueue_result::success: {
+                    return true;
+                }
+                case detail::enqueue_result::queue_closed: {
+                    return false;
+                }
+                default: {
+                    return false;
+                }
             }
         }
 
@@ -134,8 +142,7 @@ namespace actor_zeta { namespace base {
 
         auto reactivate(mailbox::message& x) -> void {
             current_message_ = &x;
-            auto behavior = self()->behavior();
-            invoke(behavior, self(), current_message_);
+            self()->behavior(current_message_);
         }
 
         mailbox::message* current_message_;

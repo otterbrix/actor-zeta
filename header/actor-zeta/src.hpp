@@ -12,9 +12,6 @@
 #include <actor-zeta/impl/actor/behavior.ipp>
 #include <actor-zeta/impl/actor/cooperative_actor.ipp>
 
-#include <actor-zeta/impl/clock/clock.ipp>
-#include <actor-zeta/impl/clock/thread_safe_clock.ipp>
-
 #include <actor-zeta/impl/detail/pmr/memory_resource.ipp>
 #include <actor-zeta/impl/detail/aligned_allocate.ipp>
 #include <actor-zeta/impl/detail/launch_thread.ipp>
@@ -23,8 +20,8 @@
 #include <actor-zeta/impl/scheduler/resumable.ipp>
 #include <actor-zeta/impl/scheduler/sharing_scheduler.ipp>
 
-#include <actor-zeta/impl/messaging/id.ipp>
-#include <actor-zeta/impl/messaging/message.ipp>
+#include <actor-zeta/impl/mailbox/id.ipp>
+#include <actor-zeta/impl/mailbox/message.ipp>
 
 #include <actor-zeta/impl/make_message.ipp>
 #include <actor-zeta/impl/send.ipp>

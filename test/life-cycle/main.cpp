@@ -4,10 +4,6 @@
 #include "classes.hpp"
 #include <actor-zeta.hpp>
 
-inline void enqueue(actor_zeta::scheduler_t* scheduler, actor_zeta::scheduler::resumable_t* ptr) {
-    scheduler->schedule(ptr);
-}
-
 TEST_CASE("life-cycle") {
     std::unique_ptr<actor_zeta::pmr::memory_resource> resource = std::unique_ptr<actor_zeta::pmr::memory_resource>(actor_zeta::pmr::get_default_resource());
     {

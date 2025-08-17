@@ -16,7 +16,6 @@ namespace actor_zeta { namespace test {
         bool run_once();
         size_t run(size_t max_count = std::numeric_limits<size_t>::max());
         size_t advance_time(clock::clock_t::duration_type);
-        clock_test& clock() noexcept;
 
     ///protected:
         void start() override;
@@ -24,7 +23,6 @@ namespace actor_zeta { namespace test {
         void schedule(scheduler::resumable_t* ptr) override;
 
     private:
-        clock_test clock_;
     };
 
 }} // namespace actor_zeta::test

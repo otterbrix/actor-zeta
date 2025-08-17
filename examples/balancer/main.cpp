@@ -32,47 +32,42 @@ class collection_part_t final : public actor_zeta::basic_actor<collection_part_t
 public:
     collection_part_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<collection_part_t>(ptr)
-        , insert_(actor_zeta::make_behavior(resource(), collection_method::insert, [this](std::string& key, std::string& value) -> void {
+        , insert_(actor_zeta::make_behavior(resource(), [this](std::string& key, std::string& value) -> void {
             data_.emplace(key, value);
             std::cerr << id() << " " << key << " " << value << std::endl;
             ++count_insert;
         }))
-        , remove_(actor_zeta::make_behavior(resource(), collection_method::remove, [this](std::string& key) -> void {
+        , remove_(actor_zeta::make_behavior(resource(),  [this](std::string& key) -> void {
             data_.erase(key);
         }))
-        , update_(actor_zeta::make_behavior(resource(), collection_method::update, [this](std::string& key, std::string& value) -> void {
+        , update_(actor_zeta::make_behavior(resource(),  [this](std::string& key, std::string& value) -> void {
             data_[key] = value;
         }))
-        , find_(actor_zeta::make_behavior(resource(), collection_method::find, [this](std::string& key) -> std::string {
+        , find_(actor_zeta::make_behavior(resource(), [this](std::string& key) -> std::string {
             return data_[key];
         })) {
         ++count_collection_part;
     }
 
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(collection_method::insert): {
-                        insert_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(collection_method::remove): {
-                        remove_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(collection_method::update): {
-                        update_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(collection_method::find): {
-                        find_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(collection_method::insert): {
+                insert_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(collection_method::remove): {
+                remove_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(collection_method::update): {
+                update_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(collection_method::find): {
+                find_(msg);
+                break;
+            }
+        }
     }
 
 private:
@@ -106,7 +101,7 @@ public:
     }
 
 protected:
-    auto enqueue_impl(actor_zeta::message_ptr msg) -> void final {
+    bool enqueue_impl(actor_zeta::message_ptr msg) {
         auto tmp = std::move(msg);
             switch (tmp->command()) {
                 case actor_zeta::make_message_id(collection_method::insert):
@@ -117,10 +112,11 @@ protected:
                     actors_[index]->enqueue(std::move(tmp));
                     ++cursor_;
                     ++count_balancer;
-                    break;
+                    return true;
                 }
                 default: {
                     std::cerr << "unknown command" << std::endl;
+                    return false;
                 }
             }
 
@@ -138,7 +134,7 @@ static constexpr auto sleep_time = std::chrono::milliseconds(60);
 
 
 
-auto main() -> int {
+int main() {
     auto* resource = actor_zeta::pmr::get_default_resource();
     auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource,1, 100);
     auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());
