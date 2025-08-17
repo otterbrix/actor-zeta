@@ -96,8 +96,8 @@ namespace actor_zeta { namespace detail {
 
     public:
         template<typename... Args>
-        explicit rtt(actor_zeta::pmr::memory_resource* memory_resource, Args&&... args)
-            : memory_resource_(nullptr)
+        explicit rtt(actor_zeta::pmr::memory_resource* resource, Args&&... args)
+            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(0)
             , volume_(0)
             , allocation(nullptr)
@@ -105,8 +105,6 @@ namespace actor_zeta { namespace detail {
             , objects_(nullptr)
             , objects_idx_(0) {
             constexpr std::size_t sz = getSize<0, Args...>();
-            memory_resource_ = memory_resource ? memory_resource : actor_zeta::pmr::get_default_resource();
-            assert(memory_resource_);
             capacity_ = sz;
             allocation = memory_resource_->allocate(capacity_ + capacity_ * sizeof(objects_t));
             assert(allocation);
@@ -123,18 +121,7 @@ namespace actor_zeta { namespace detail {
         }
         // https://github.com/duckstax/actor-zeta/issues/118
         // @TODO Remove default ctors for actor_zeta::base::message and actor_zeta::detail::rtt (message body) #118
-        rtt()
-            : memory_resource_(actor_zeta::pmr::get_default_resource())
-            , capacity_(0)
-            , volume_(0)
-            , allocation(nullptr)
-            , data_(nullptr)
-            , objects_(nullptr)
-            , objects_idx_(0) {
-#ifdef __ENABLE_TESTS_MEASUREMENTS__
-            rtt_test::default_ctor_++;
-#endif
-        }
+        rtt() = delete;
         rtt(rtt&& other)
             : memory_resource_(other.memory_resource_)
             , capacity_(other.capacity_)

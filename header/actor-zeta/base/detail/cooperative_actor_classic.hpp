@@ -101,7 +101,7 @@ namespace actor_zeta { namespace base {
         }
 
         bool enqueue_impl(mailbox::message_ptr msg) final {
-            assert(msg);
+            assert(msg.get() != nullptr);
             switch (inbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
                     intrusive_ptr_add_ref(this);
@@ -114,25 +114,20 @@ namespace actor_zeta { namespace base {
                     return false;
                 }
                 default: {
+                    assert(false && "enqueue_result: unreachable");
                     return false;
                 }
             }
         }
 
-        auto current_message() -> mailbox::message* {
-            return current_message_;
-        }
-
-        auto set_current_message(mailbox::message_ptr msg) -> void {
-            current_message_ = msg.release();
-        }
-
     private:
-        auto self() noexcept -> Actor* {
-            return static_cast<Actor*>(this);
+        mailbox::message* current_message() noexcept { return current_message_; }
+
+        inline const Actor* self() const noexcept {
+            return static_cast<const Actor*>(this);
         }
 
-        auto self() const noexcept -> Actor* {
+        inline Actor* self() noexcept {
             return static_cast<Actor*>(this);
         }
 

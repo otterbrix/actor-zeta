@@ -9,12 +9,6 @@
 
 namespace actor_zeta { namespace base {
 
-    struct keep_behavior_t final {
-        constexpr keep_behavior_t() noexcept {}
-    };
-
-    constexpr keep_behavior_t skip_behavior = keep_behavior_t{};
-
     class behavior_t final {
     public:
         using id = mailbox::message_id;

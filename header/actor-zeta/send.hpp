@@ -11,7 +11,9 @@ namespace actor_zeta {
     void send(base::actor_abstract_t* actor, Args... args) {
         actor->enqueue(
             make_message(
-                std::forward<Args>(args)...));
+                actor->resource(),
+                std::forward<Args>(args)...)
+        );
     }
 
     template<class Actor>

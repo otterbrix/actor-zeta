@@ -2,12 +2,13 @@
 
 #include <cassert>
 
-#include <actor-zeta/base/address.hpp>
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/mailbox/priority.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
+#include <actor-zeta/detail/memory_resource.hpp>
+#include "actor-zeta/detail/memory.hpp"
 
 namespace actor_zeta { namespace mailbox {
 
@@ -19,14 +20,14 @@ namespace actor_zeta { namespace mailbox {
     public:
         // https://github.com/duckstax/actor-zeta/issues/118
         // @TODO Remove default ctors for actor_zeta::base::message and actor_zeta::detail::rtt (message body) #118
-        message();
+        message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;
         message(message&& other) = default;
         message& operator=(message&&) = default;
-        ~message() = default;
-        message(base::address_t /*sender*/, message_id /*name*/);
-        message(base::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt /*body*/);
+        ~message() noexcept = default;
+        message(actor_zeta::pmr::memory_resource* resource, base::address_t /*sender*/, message_id /*name*/);
+        message(actor_zeta::pmr::memory_resource* resource, base::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt /*body*/);
         message* prev;
         auto command() const noexcept -> message_id;
         auto sender() & noexcept -> base::address_t&;
@@ -47,7 +48,61 @@ namespace actor_zeta { namespace mailbox {
     static_assert(std::is_move_constructible<message>::value, "");
     static_assert(not std::is_copy_constructible<message>::value, "");
 
-    using message_ptr = std::unique_ptr<message>;
+    namespace detail {
+
+        constexpr std::size_t align_up(std::size_t n, std::size_t a) {
+            return (n + (a - 1)) & ~(a - 1);
+        }
+
+        constexpr std::size_t kAllocAlign =
+            alignof(std::max_align_t) < alignof(message)
+                                      ? alignof(message)
+                                      : alignof(std::max_align_t);
+
+        struct BlockHdr {
+            actor_zeta::pmr::memory_resource* r;
+            std::size_t total;
+        };
+
+        constexpr std::size_t kFront = align_up(sizeof(BlockHdr), alignof(message));
+
+        inline BlockHdr* hdr_from_message(void* pmsg) {
+            unsigned char* base = static_cast<unsigned char*>(pmsg) - kFront;
+            return reinterpret_cast<BlockHdr*>(base);
+        }
+
+        inline void* base_from_message(void* pmsg) {
+            return static_cast<unsigned char*>(pmsg) - kFront;
+        }
+
+    }
+
+    struct message_deleter {
+        void operator()(message* p) const noexcept {
+            if (!p) return;
+            detail::BlockHdr* hdr = detail::hdr_from_message(p);
+            p->~message(); // обязательно, т.к. message создан placement-new
+            hdr->r->deallocate(detail::base_from_message(p), hdr->total, detail::kAllocAlign);
+        }
+    };
+
+    static_assert(std::is_empty<message_deleter>::value, "EBO expected");
+
+    using message_ptr =  std::unique_ptr<message, message_deleter> ;
+
+    template<class... Args>
+    message_ptr pmr_make_message(actor_zeta::pmr::memory_resource& r, Args&&... args) {
+        using namespace detail;
+        const std::size_t total = kFront + sizeof(message);
+
+        void* base = 0;
+        base = r.allocate(total, kAllocAlign);
+        (void)new (base) BlockHdr{ &r, total };
+        unsigned char* msg_mem = static_cast<unsigned char*>(base) + kFront;
+        message* m = new (msg_mem) message(std::forward<Args>(args)...);
+        return message_ptr(m, message_deleter());
+
+    }
 
 }} // namespace actor_zeta::mailbox
 
