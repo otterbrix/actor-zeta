@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.15)
 PROJECT(actor-zeta LANGUAGES C CXX)
 
 message(STATUS "CMAKE_CXX_COMPILER_ID = ${CMAKE_CXX_COMPILER_ID}")
@@ -24,38 +24,35 @@ option(RTTI_DISABLE                 "RTTI DISABLE"              ON)
 option(EXCEPTIONS_DISABLE           "EXCEPTIONS DISABLE"        ON)
 
 if (NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (default Debug):" FORCE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (default Debug)" FORCE)
 endif()
 
+# Флаги RTTI/Exceptions
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-
     if (EXCEPTIONS_DISABLE)
-        message("Disable C++ exceptions.")
+        message(STATUS "Disable C++ exceptions (MSVC).")
         string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
         add_compile_definitions(__EXCEPTIONS_DISABLE__)
-    endif ()
+    endif()
 
     if (RTTI_DISABLE)
-        message("Disable RTTI.")
+        message(STATUS "Disable RTTI (MSVC).")
         string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
-    endif ()
-
-elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
-
+    endif()
+elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang"))
     if (EXCEPTIONS_DISABLE)
-        message("Disable C++ exceptions.")
+        message(STATUS "Disable C++ exceptions (GNU/Clang).")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions")
         add_compile_definitions(__EXCEPTIONS_DISABLE__)
-    endif ()
+    endif()
 
     if (RTTI_DISABLE)
-        message("Disable RTTI.")
+        message(STATUS "Disable RTTI (GNU/Clang).")
         string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
-    endif ()
-
+    endif()
 endif()
 
 message(STATUS "ALLOW_EXAMPLES = ${ALLOW_EXAMPLES}")
@@ -90,7 +87,7 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
     )
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     add_compile_options(/W4 /WX)
-endif ()
+endif()
 
 ############## FINAL PROJECT CONFIG #################
 
@@ -194,8 +191,8 @@ add_library(
 
 find_package(Threads REQUIRED)
 target_link_libraries(${PROJECT_NAME} PUBLIC
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${CMAKE_DL_LIBS}
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
 )
 
 #################################################################
@@ -207,7 +204,6 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 if (CONAN_EXPERIMENTAL_INCLUDE)
     set(CONAN_SYSTEM_INCLUDES "On")
 endif ()
-include(conan.cmake)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang"  AND UNIX AND NOT APPLE )
     # https://docs.conan.io/1/reference/config_files/settings.yml.html#c-standard-libraries-aka-compiler-libcxx
@@ -224,7 +220,7 @@ message(STATUS "CONAN_SETTINGS: ${CONAN_SETTINGS}")
 
 if (ALLOW_EXAMPLES)
     add_subdirectory(examples)
-endif ()
+endif()
 
 if (ALLOW_TESTS)
     include(CTest)
@@ -233,5 +229,5 @@ if (ALLOW_TESTS)
 endif()
 
 if (ALLOW_BENCHMARK)
-#    add_subdirectory(benchmark)
+    # add_subdirectory(benchmark)
 endif()

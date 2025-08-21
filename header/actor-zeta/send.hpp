@@ -27,6 +27,7 @@ namespace actor_zeta {
     void send(base::address_t& address, Args... args) {
         address->enqueue(
             make_message(
+            address->resource(),
                 std::forward<Args>(args)...));
     }
 

@@ -126,7 +126,7 @@ namespace {
             auto num = num_workers_;
             workers_.reserve(num);
             for (size_t i = 0; i < num; ++i) {
-                workers_.emplace_back(std::make_unique<worker_type>(i, this, max_throughput_));
+                workers_.emplace_back(actor_zeta::make_unique<worker_type>(i, this, max_throughput_));
             }
             for (auto& w : workers_) {
                 w->start();

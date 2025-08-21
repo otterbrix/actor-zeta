@@ -31,25 +31,21 @@ public:
 
     worker_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_t>(ptr)
-        , download_(actor_zeta::make_behavior(resource(), command_t::download, this, &worker_t::download))
-        , work_data_(actor_zeta::make_behavior(resource(), command_t::work_data, this, &worker_t::work_data)) {
+        , download_(actor_zeta::make_behavior(resource(), this, &worker_t::download))
+        , work_data_(actor_zeta::make_behavior(resource(),  this, &worker_t::work_data)) {
     }
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(command_t::download): {
-                        download_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(command_t::work_data): {
-                        work_data_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(command_t::download): {
+                download_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(command_t::work_data): {
+                work_data_(msg);
+                break;
+            }
+        }
     }
 
 
@@ -79,8 +75,8 @@ public:
 
     supervisor_lite(memory_resource* ptr)
         : actor_zeta::actor_abstract_t(ptr)
-        , create_(actor_zeta::make_behavior(resource(), system_command::create, this, &supervisor_lite::create))
-        , broadcast_(actor_zeta::make_behavior(resource(), system_command::broadcast, this, &supervisor_lite::broadcast_impl))
+        , create_(actor_zeta::make_behavior(resource(),  this, &supervisor_lite::create))
+        , broadcast_(actor_zeta::make_behavior(resource(), this, &supervisor_lite::broadcast_impl))
         , e_(actor_zeta::scheduler::make_sharing_scheduler(ptr, 2, 1000)) {
         e_->start();
     }
@@ -91,21 +87,17 @@ public:
         ++size_actors_;
     }
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(system_command::create): {
-                        create_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(system_command::broadcast): {
-                        broadcast_(msg);
-                        break;
-                    }
-                }
-            });
+    void  behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(system_command::create): {
+                create_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(system_command::broadcast): {
+                broadcast_(msg);
+                break;
+            }
+        }
     }
 
     template<class Id = uint64_t, class... Args>
@@ -114,7 +106,8 @@ public:
         std::vector<actor_zeta::message_ptr> tmp;
         tmp.reserve(size);
         for (std::size_t i = 0, e = size; i != e; ++i) {
-            auto ptr = actor_zeta::make_message_ptr(
+            auto ptr = actor_zeta::make_message(
+                resource(),
                 address(),
                 id,
                 std::forward<const Args&>(args)...);
@@ -122,6 +115,7 @@ public:
         }
 
         auto msg = actor_zeta::make_message(
+            resource(),
             address(),
             system_command::broadcast,
             std::move(tmp));
@@ -129,9 +123,13 @@ public:
     }
 
 protected:
-    void enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp = std::move(msg);
-        behavior()(tmp.get());
+    bool enqueue_impl(actor_zeta::message_ptr msg) override {
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            auto tmp = std::move(msg);
+            behavior(tmp.get());
+        }
+        return true;
     }
 
 private:
@@ -139,7 +137,7 @@ private:
         return size_actors_.load();
     }
 
-    void broadcast_impl(std::vector<actor_zeta::message_ptr>& msg) {
+    void broadcast_impl(std::vector<actor_zeta::message_ptr> msg) {
         auto msgs = std::move(msg);
         for (std::size_t i = 0, end = size_actor(); i != end; ++i) {
             actor_zeta::send(actors_[i].get(), std::move(msgs[i]));
@@ -154,6 +152,7 @@ private:
     std::unique_ptr<actor_zeta::scheduler_t, actor_zeta::pmr::deleter_t> e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};
+    std::mutex mutex_;
 };
 
 int main() {

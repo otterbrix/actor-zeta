@@ -94,12 +94,6 @@ public:
 
     }
 
-
-
-    auto make_scheduler() noexcept -> actor_zeta::scheduler_t* {
-        return e_;
-    }
-
 protected:
     bool enqueue_impl(actor_zeta::message_ptr msg) {
         auto tmp = std::move(msg);
@@ -110,6 +104,7 @@ protected:
                 case actor_zeta::make_message_id(collection_method::find): {
                     auto index = cursor_ % actors_.size();
                     actors_[index]->enqueue(std::move(tmp));
+                    e_->schedule(actors_[index].get());
                     ++cursor_;
                     ++count_balancer;
                     return true;

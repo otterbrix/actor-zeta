@@ -11,7 +11,7 @@
 #include "actor-zeta/detail/memory.hpp"
 #include "test/tooltestsuites/scheduler_test.hpp"
 #include <actor-zeta.hpp>
-#include <actor-zeta/make.hpp>
+#include <actor-zeta/spawn.hpp>
 
 using actor_zeta::pmr::memory_resource;
 class dummy_supervisor;
