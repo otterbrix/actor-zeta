@@ -14,14 +14,6 @@ jobs:
         cxx_standard: [11, 14, 17]
         build_type: ["Release", "Debug"]
         configuration: [
-          {"UBUNTU_VERSION":"16.04", "TOOLCHAIN_VERSION":"4.9"},
-
-          {"UBUNTU_VERSION":"18.04", "TOOLCHAIN_VERSION":"4.8"},
-          {"UBUNTU_VERSION":"18.04", "TOOLCHAIN_VERSION":"5"},
-          {"UBUNTU_VERSION":"18.04", "TOOLCHAIN_VERSION":"6"},
-          {"UBUNTU_VERSION":"18.04", "TOOLCHAIN_VERSION":"7"},
-          {"UBUNTU_VERSION":"18.04", "TOOLCHAIN_VERSION":"8"},
-
           {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"7"},
           {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"8"},
           {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"},
@@ -32,18 +24,13 @@ jobs:
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"}
         ]
-        exclude:
-          - cxx_standard: 17
-            configuration: {"UBUNTU_VERSION":"18.04", "TOOLCHAIN_VERSION":"4.8"}
-          - cxx_standard: 17
-            configuration: {"UBUNTU_VERSION":"16.04", "TOOLCHAIN_VERSION":"4.9"}
 
     runs-on: ubuntu-latest
     container:
       image: ubuntu:${{matrix.configuration.UBUNTU_VERSION}}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Install system dependencies
         env:

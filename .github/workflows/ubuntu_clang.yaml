@@ -14,19 +14,6 @@ jobs:
         cxx_standard: [11, 14, 17]
         build_type: ["Release", "Debug"]
         configuration: [
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"5.0"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"6.0"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"7"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"8"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"9"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"10"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"11"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"12"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"13"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"14"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"15"},
-          {"UBUNTU_VERSION":"18.04", "UBUNTU_RELEASE":"bionic", "TOOLCHAIN_VERSION":"16"},
-
 #          {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"9"},
 #          {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"10"},
 #          {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"11"},
@@ -47,7 +34,7 @@ jobs:
       image: ubuntu:${{matrix.configuration.UBUNTU_VERSION}}
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Install system dependencies
         env:
