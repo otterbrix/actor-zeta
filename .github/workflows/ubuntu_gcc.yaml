@@ -76,7 +76,8 @@ jobs:
             -DENABLE_TESTS_MEASUREMENTS=ON \
             -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
-            -DRTTI_DISABLE=ON
+            -DRTTI_DISABLE=ON \
+            -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake
 
       - name: Build
         run: cmake --build build

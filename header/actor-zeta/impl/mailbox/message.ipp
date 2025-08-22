@@ -25,6 +25,12 @@ namespace actor_zeta { namespace mailbox {
         , command_(std::move(name))
         , body_(resource,std::move(body)) {}
 
+    message::message(actor_zeta::pmr::memory_resource* resource)
+        : singly_linked(nullptr)
+        , prev(nullptr)
+        , sender_(address_t::empty_address())
+        , body_(resource){}
+
     void message::swap(message& other) noexcept {
         using std::swap;
         swap(sender_, other.sender_);

@@ -26,8 +26,9 @@ namespace actor_zeta { namespace mailbox {
         message(message&& other) = default;
         message& operator=(message&&) = default;
         ~message() noexcept = default;
-        message(actor_zeta::pmr::memory_resource* resource, base::address_t /*sender*/, message_id /*name*/);
-        message(actor_zeta::pmr::memory_resource* resource, base::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt /*body*/);
+        explicit message(actor_zeta::pmr::memory_resource* /* resource */);
+        message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/);
+        message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt /*body*/);
         message* prev;
         auto command() const noexcept -> message_id;
         auto sender() & noexcept -> base::address_t&;

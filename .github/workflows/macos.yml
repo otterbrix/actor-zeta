@@ -35,7 +35,8 @@ jobs:
             -DALLOW_EXAMPLES=ON \
             -DALLOW_TESTS=ON \
             -DENABLE_TESTS_MEASUREMENTS=ON \
-            -DALLOW_BENCHMARK=ON 
+            -DALLOW_BENCHMARK=ON \ 
+            -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake
 
       - name: Build
         run: cmake --build build
