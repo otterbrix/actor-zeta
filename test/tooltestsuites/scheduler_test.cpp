@@ -31,9 +31,7 @@ namespace actor_zeta { namespace test {
     void scheduler_test_t::start() {}
 
     void scheduler_test_t::stop() {
-        while (run() > 0) {
-            clock_.trigger_timeouts();
-        }
+        while (run() > 0) {}
     }
 
     void scheduler_test_t::schedule(scheduler::resumable_t* ptr) {

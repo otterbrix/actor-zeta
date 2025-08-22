@@ -3,7 +3,6 @@
 #include <deque>
 
 #include "actor-zeta/scheduler/scheduler.hpp"
-#include "clock_test.hpp"
 
 namespace actor_zeta { namespace test {
 
@@ -15,7 +14,6 @@ namespace actor_zeta { namespace test {
 
         bool run_once();
         size_t run(size_t max_count = std::numeric_limits<size_t>::max());
-        size_t advance_time(clock::clock_t::duration_type);
 
     ///protected:
         void start() override;

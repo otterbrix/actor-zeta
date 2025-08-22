@@ -2,7 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta/detail/memory_resource.hpp>
-#include <actor-zeta/detail/unique_function_2.hpp>
+#include <actor-zeta/detail/unique_function.hpp>
 #include <cassert>
 #include <iostream>
 #include <string>
