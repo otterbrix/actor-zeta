@@ -119,6 +119,20 @@ namespace actor_zeta { namespace detail {
             rtt_test::templated_ctor_++;
 #endif
         }
+
+        rtt(actor_zeta::pmr::memory_resource* resource)
+           : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+           , capacity_(0)
+           , volume_(0)
+           , allocation(nullptr)
+           , data_(nullptr)
+           , objects_(nullptr)
+           , objects_idx_(0) {
+#ifdef __ENABLE_TESTS_MEASUREMENTS__
+            rtt_test::default_ctor_++;
+#endif
+        }
+
         // https://github.com/duckstax/actor-zeta/issues/118
         // @TODO Remove default ctors for actor_zeta::base::message and actor_zeta::detail::rtt (message body) #118
         rtt() = delete;
