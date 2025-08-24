@@ -23,7 +23,7 @@ namespace actor_zeta { namespace mailbox {
     message::message(actor_zeta::pmr::memory_resource* resource,address_t sender, message_id name, actor_zeta::detail::rtt body)
         : sender_(std::move(sender))
         , command_(std::move(name))
-        , body_(resource,std::move(body)) {}
+        , body_(std::move(body)) {}
 
     message::message(actor_zeta::pmr::memory_resource* resource)
         : singly_linked(nullptr)
