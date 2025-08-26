@@ -48,7 +48,7 @@ jobs:
 
           add-apt-repository ppa:ubuntu-toolchain-r/test
           python3 -m pip install --upgrade pip
-          python3 -m pip install --no-cache-dir conan==1.59 cmake 
+          python3 -m pip install --no-cache-dir conan==2.15.0 cmake 
 
       - name: Install compiler
         run: |

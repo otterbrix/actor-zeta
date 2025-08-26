@@ -8,7 +8,7 @@ file(GLOB ${PROJECT_NAME}_HEADERS
 file(GLOB ${PROJECT_NAME}_SOURCES
     ./*.cpp
 )
-find_package(Catch2 2.13.7 REQUIRED)
+find_package(Catch2 2.13 REQUIRED)
 
 message(STATUS "PROJECT_NAME = ${PROJECT_NAME}")
 
