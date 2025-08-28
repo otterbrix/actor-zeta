@@ -29,6 +29,10 @@ jobs:
           CXX_STANDARD: ${{matrix.cxx_standard}}
         run: |
           mkdir -p build
+          
+          conan profile detect --force
+          conan install .  -of build  --build=missing   
+          
           cmake -B build -GNinja \
             -DCMAKE_BUILD_TYPE=${{matrix.build_type}} \
             -DCMAKE_CXX_STANDARD=${{matrix.cxx_standard}} \

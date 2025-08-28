@@ -67,6 +67,7 @@ jobs:
         run: |
           mkdir -p build
           
+          conan profile detect --force
           conan install .  -of build  --build=missing   
           
           cmake -B build -GNinja \
