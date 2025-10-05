@@ -15,21 +15,21 @@ namespace actor_zeta { namespace mailbox {
         return /*!command_ ||*/ bool(sender_) || !body_.empty();
     }
 
-    message::message(actor_zeta::pmr::memory_resource* resource,address_t sender, message_id name)
+    message::message(actor_zeta::pmr::memory_resource* resource, address_t sender, message_id name)
         : sender_(std::move(sender))
         , command_(std::move(name))
         , body_(resource) {}
 
-    message::message(actor_zeta::pmr::memory_resource* resource,address_t sender, message_id name, actor_zeta::detail::rtt body)
+    message::message(actor_zeta::pmr::memory_resource* resource, address_t sender, message_id name, actor_zeta::detail::rtt body)
         : sender_(std::move(sender))
         , command_(std::move(name))
-        , body_(std::move(body)) {}
+        , body_(resource, std::move(body)) {}
 
     message::message(actor_zeta::pmr::memory_resource* resource)
         : singly_linked(nullptr)
         , prev(nullptr)
         , sender_(address_t::empty_address())
-        , body_(resource){}
+        , body_(resource) {}
 
     void message::swap(message& other) noexcept {
         using std::swap;
@@ -59,4 +59,4 @@ namespace actor_zeta { namespace mailbox {
         return sender_;
     }
 
-}} // namespace actor_zeta::base
+}} // namespace actor_zeta::mailbox

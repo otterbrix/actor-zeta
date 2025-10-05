@@ -18,8 +18,6 @@ namespace actor_zeta { namespace mailbox {
 
     class message final : public actor_zeta::detail::singly_linked<message> {
     public:
-        // https://github.com/duckstax/actor-zeta/issues/118
-        // @TODO Remove default ctors for actor_zeta::base::message and actor_zeta::detail::rtt (message body) #118
         message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;
@@ -46,7 +44,7 @@ namespace actor_zeta { namespace mailbox {
         actor_zeta::detail::rtt body_;
     };
 
-    static_assert(std::is_move_constructible<message>::value, "");
+    // static_assert(std::is_move_constructible<message>::value, "");
     static_assert(not std::is_copy_constructible<message>::value, "");
 
     namespace detail {
@@ -92,13 +90,13 @@ namespace actor_zeta { namespace mailbox {
     using message_ptr =  std::unique_ptr<message, message_deleter> ;
 
     template<class... Args>
-    message_ptr pmr_make_message(actor_zeta::pmr::memory_resource& r, Args&&... args) {
+    message_ptr pmr_make_message(actor_zeta::pmr::memory_resource* resource, Args&&... args) {
         using namespace detail;
         const std::size_t total = kFront + sizeof(message);
 
-        void* base = 0;
-        base = r.allocate(total, kAllocAlign);
-        (void)new (base) BlockHdr{ &r, total };
+        void* base = nullptr;
+        base = resource->allocate(total, kAllocAlign);
+        (void)new (base) BlockHdr{ resource, total };
         unsigned char* msg_mem = static_cast<unsigned char*>(base) + kFront;
         message* m = new (msg_mem) message(std::forward<Args>(args)...);
         return message_ptr(m, message_deleter());

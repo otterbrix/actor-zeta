@@ -1,7 +1,7 @@
 #pragma once
 
-#include <actor-zeta/detail/pmr/aligned_allocate.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
+#include <actor-zeta/detail/pmr/aligned_allocate.hpp>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
@@ -121,23 +121,23 @@ namespace actor_zeta { namespace detail {
         }
 
         rtt(actor_zeta::pmr::memory_resource* resource)
-           : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
-           , capacity_(0)
-           , volume_(0)
-           , allocation(nullptr)
-           , data_(nullptr)
-           , objects_(nullptr)
-           , objects_idx_(0) {
+            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+            , capacity_(0)
+            , volume_(0)
+            , allocation(nullptr)
+            , data_(nullptr)
+            , objects_(nullptr)
+            , objects_idx_(0) {
 #ifdef __ENABLE_TESTS_MEASUREMENTS__
             rtt_test::default_ctor_++;
 #endif
         }
 
-        // https://github.com/duckstax/actor-zeta/issues/118
-        // @TODO Remove default ctors for actor_zeta::base::message and actor_zeta::detail::rtt (message body) #118
         rtt() = delete;
-        rtt(rtt&& other)
-            : memory_resource_(other.memory_resource_)
+        rtt(rtt&& other) = delete;
+
+        rtt(actor_zeta::pmr::memory_resource* resource, rtt&& other) noexcept
+            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(other.capacity_)
             , volume_(other.volume_)
             , allocation(other.allocation)
@@ -160,7 +160,8 @@ namespace actor_zeta { namespace detail {
         ~rtt() {
             clear();
         }
-
+        rtt& operator=(rtt&& other) = delete;
+        /*
         rtt& operator=(rtt&& other) noexcept {
             clear();
 
@@ -186,6 +187,7 @@ namespace actor_zeta { namespace detail {
 
             return *this;
         }
+        */
         rtt& operator=(const rtt& other) = delete;
         rtt& operator=(rtt& other) = delete;
 
