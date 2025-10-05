@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -134,10 +135,9 @@ namespace actor_zeta { namespace detail {
         }
 
         rtt() = delete;
-        rtt(rtt&& other) = delete;
 
-        rtt(actor_zeta::pmr::memory_resource* resource, rtt&& other) noexcept
-            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+        rtt(rtt&& other) noexcept
+            : memory_resource_(other.memory_resource_)
             , capacity_(other.capacity_)
             , volume_(other.volume_)
             , allocation(other.allocation)
@@ -155,31 +155,88 @@ namespace actor_zeta { namespace detail {
             rtt_test::move_ctor_++;
 #endif
         }
+
+
+        rtt(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, rtt&& other) noexcept
+            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+            , capacity_(0)
+            , volume_(0)
+            , allocation(nullptr)
+            , data_(nullptr)
+            , objects_(nullptr)
+            , objects_idx_(0) {
+
+            if (resource == other.memory_resource_) {
+                // Same arena - cheap move (just steal pointers)
+                capacity_ = other.capacity_;
+                volume_ = other.volume_;
+                allocation = other.allocation;
+                data_ = other.data_;
+                objects_ = other.objects_;
+                objects_idx_ = other.objects_idx_;
+
+                other.memory_resource_ = nullptr;
+                other.capacity_ = 0;
+                other.volume_ = 0;
+                other.allocation = nullptr;
+                other.data_ = nullptr;
+                other.objects_ = nullptr;
+                other.objects_idx_ = 0;
+            } else {
+                // Different arena - must migrate (reallocate in new arena)
+                if (other.capacity_ > 0) {
+                    capacity_ = other.capacity_;
+                    allocation = memory_resource_->allocate(capacity_ + capacity_ * sizeof(objects_t));
+                    assert(allocation);
+                    data_ = static_cast<char*>(allocation);
+                    objects_ = static_cast<objects_t*>(static_cast<void*>(data_ + capacity_));
+
+                    // Copy raw data and metadata
+                    std::memcpy(data_, other.data_, other.volume_);
+                    std::memcpy(objects_, other.objects_, other.objects_idx_ * sizeof(objects_t));
+                    volume_ = other.volume_;
+                    objects_idx_ = other.objects_idx_;
+                }
+                // Note: other will be destroyed by its destructor
+            }
+
+#ifdef __ENABLE_TESTS_MEASUREMENTS__
+            rtt_test::move_ctor_++;
+#endif
+        }
         rtt(const rtt& other) = delete;
         rtt(rtt& other) = delete;
         ~rtt() {
             clear();
         }
-        rtt& operator=(rtt&& other) = delete;
-        /*
+
         rtt& operator=(rtt&& other) noexcept {
-            clear();
+            if (this == &other) return *this;
 
-            memory_resource_ = other.memory_resource_;
-            capacity_ = other.capacity_;
-            volume_ = other.volume_;
-            allocation = other.allocation;
-            data_ = other.data_;
-            objects_ = other.objects_;
-            objects_idx_ = other.objects_idx_;
+            if (memory_resource_ == other.memory_resource_) {
+                // Same arena - cheap path
+                clear();
 
-            other.memory_resource_ = nullptr;
-            other.capacity_ = 0;
-            other.volume_ = 0;
-            other.allocation = nullptr;
-            other.data_ = nullptr;
-            other.objects_ = nullptr;
-            other.objects_idx_ = 0;
+                memory_resource_ = other.memory_resource_;
+                capacity_ = other.capacity_;
+                volume_ = other.volume_;
+                allocation = other.allocation;
+                data_ = other.data_;
+                objects_ = other.objects_;
+                objects_idx_ = other.objects_idx_;
+
+                other.memory_resource_ = nullptr;
+                other.capacity_ = 0;
+                other.volume_ = 0;
+                other.allocation = nullptr;
+                other.data_ = nullptr;
+                other.objects_ = nullptr;
+                other.objects_idx_ = 0;
+            } else {
+                // Different arena - migrate through allocator-extended move constructor
+                rtt tmp(std::allocator_arg, memory_resource_, std::move(other));
+                swap(tmp);
+            }
 
 #ifdef __ENABLE_TESTS_MEASUREMENTS__
             rtt_test::move_operator_++;
@@ -187,7 +244,7 @@ namespace actor_zeta { namespace detail {
 
             return *this;
         }
-        */
+
         rtt& operator=(const rtt& other) = delete;
         rtt& operator=(rtt& other) = delete;
 

@@ -10,6 +10,7 @@
 #include <queue>
 #include <vector>
 #include <memory>      // unique_ptr
+#include <tuple>       // piecewise_construct
 #include <type_traits>
 
 using actor_zeta::base::address_t;
@@ -24,77 +25,77 @@ constexpr static auto three = actor_zeta::make_message_id(3);
 
 namespace {
 
-// C++11 аналога make_unique нет — свой хелпер
-template<class T, class... Args>
-std::unique_ptr<T> make_unique11(Args&&... args) {
-    return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
-}
-
-// Фабрика сообщения: создаём rtt как lvalue, затем конструируем message на куче
-inline std::unique_ptr<message>
-make_msg(actor_zeta::pmr::memory_resource* res,
-         message_id id,
-         const std::string& s)
-{
-    rtt body(res, std::string(s), 12, 14, 15); // lvalue -> копирование, не move
-    return make_unique11<message>(res, address_t::empty_address(), id, body);
-}
-
-// --- Общие проверки для последовательных контейнеров unique_ptr<message> ---
-
 template<class Seq>
 void check_seq_push_back(Seq& v, actor_zeta::pmr::memory_resource* res) {
-    v.push_back(make_msg(res, one,   "1"));
-    v.push_back(make_msg(res, two,   "2"));
-    v.push_back(make_msg(res, three, "3"));
+    v.emplace_back(res, address_t::empty_address(), one);
+    v.emplace_back(res, address_t::empty_address(), two);
+    v.emplace_back(res, address_t::empty_address(), three);
     REQUIRE(v.size() == 3);
     v.clear();
 }
 
 template<class Seq>
 void check_seq_insert_at_end(Seq& v, actor_zeta::pmr::memory_resource* res) {
-    v.insert(v.end(), make_msg(res, one,   "1"));
-    v.insert(v.end(), make_msg(res, two,   "2"));
-    v.insert(v.end(), make_msg(res, three, "3"));
+    v.emplace(v.end(), res, address_t::empty_address(), one);
+    v.emplace(v.end(), res, address_t::empty_address(), two);
+    v.emplace(v.end(), res, address_t::empty_address(), three);
     REQUIRE(v.size() == 3);
     v.clear();
 }
 
-// Перегрузки для std::queue<unique_ptr<message>>
-inline void check_queue_push(std::queue<std::unique_ptr<message>>& q,
+// Для queue<message>
+inline void check_queue_push(std::queue<message>& q,
                              actor_zeta::pmr::memory_resource* res) {
-    q.push(make_msg(res, one,   "1"));
-    q.push(make_msg(res, two,   "2"));
-    q.push(make_msg(res, three, "3"));
+    q.emplace(res, address_t::empty_address(), one);
+    q.emplace(res, address_t::empty_address(), two);
+    q.emplace(res, address_t::empty_address(), three);
     REQUIRE(q.size() == 3);
     while (!q.empty()) q.pop();
 }
 
-// --- Для map<size_t, unique_ptr<message>> ---
+// --- Для map<size_t, message> ---
 
-inline void check_map_basic(std::map<size_t, std::unique_ptr<message>>& m,
+inline void check_map_basic(std::map<size_t, message>& m,
                             actor_zeta::pmr::memory_resource* res) {
-    m.insert(std::make_pair(0ul, make_msg(res, one,   "1")));
-    m.insert(std::make_pair(1ul, make_msg(res, two,   "2")));
-    m.insert(std::make_pair(2ul, make_msg(res, three, "3")));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(0ul),
+              std::forward_as_tuple(res, address_t::empty_address(), one));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(1ul),
+              std::forward_as_tuple(res, address_t::empty_address(), two));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(2ul),
+              std::forward_as_tuple(res, address_t::empty_address(), three));
     REQUIRE(m.size() == 3);
     m.clear();
 }
 
-inline void check_map_emplace(std::map<size_t, std::unique_ptr<message>>& m,
+inline void check_map_emplace(std::map<size_t, message>& m,
                               actor_zeta::pmr::memory_resource* res) {
-    m.emplace(0ul, make_msg(res, one,   "1"));
-    m.emplace(1ul, make_msg(res, two,   "2"));
-    m.emplace(2ul, make_msg(res, three, "3"));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(0ul),
+              std::forward_as_tuple(res, address_t::empty_address(), one));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(1ul),
+              std::forward_as_tuple(res, address_t::empty_address(), two));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(2ul),
+              std::forward_as_tuple(res, address_t::empty_address(), three));
     REQUIRE(m.size() == 3);
     m.clear();
 }
 
-inline void check_map_zero_id(std::map<size_t, std::unique_ptr<message>>& m,
+inline void check_map_zero_id(std::map<size_t, message>& m,
                               actor_zeta::pmr::memory_resource* res) {
-    m.emplace(0ul, make_msg(res, zero, "0"));
-    m.emplace(1ul, make_msg(res, zero, "1"));
-    m.emplace(2ul, make_msg(res, zero, "2"));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(0ul),
+              std::forward_as_tuple(res, address_t::empty_address(), zero));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(1ul),
+              std::forward_as_tuple(res, address_t::empty_address(), zero));
+    m.emplace(std::piecewise_construct,
+              std::forward_as_tuple(2ul),
+              std::forward_as_tuple(res, address_t::empty_address(), zero));
     REQUIRE(m.size() == 3);
     m.clear();
 }
@@ -104,45 +105,166 @@ inline void check_map_zero_id(std::map<size_t, std::unique_ptr<message>>& m,
 TEST_CASE("message (no move/copy of message/rtt)") {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
-    SECTION("vector of messages (unique_ptr)") {
-        std::vector<std::unique_ptr<message>> v;
+    SECTION("vector of messages") {
+        std::vector<message> v;
         check_seq_push_back(v, resource);
         check_seq_insert_at_end(v, resource);
     }
 
-    SECTION("list of messages (unique_ptr)") {
-        std::list<std::unique_ptr<message>> v;
+    SECTION("list of messages") {
+        std::list<message> v;
         check_seq_push_back(v, resource);
         check_seq_insert_at_end(v, resource);
     }
 
-    SECTION("deque of messages (unique_ptr)") {
-        std::deque<std::unique_ptr<message>> v;
+    SECTION("deque of messages") {
+        std::deque<message> v;
         check_seq_push_back(v, resource);
         check_seq_insert_at_end(v, resource);
     }
 
-    SECTION("queue of messages (unique_ptr)") {
-        std::queue<std::unique_ptr<message>> q;
+    SECTION("queue of messages") {
+        std::queue<message> q;
         check_queue_push(q, resource);
     }
 
-    SECTION("map of messages (unique_ptr)") {
-        std::map<size_t, std::unique_ptr<message>> m;
+    SECTION("map of messages") {
+        std::map<size_t, message> m;
         check_map_basic(m, resource);
         check_map_emplace(m, resource);
         check_map_zero_id(m, resource);
     }
 
     SECTION("simple") {
-        // 1) простое сообщение через фабрику
-        auto p = make_msg(resource, one, "");
-        REQUIRE( static_cast<bool>(*p) ); // оператор bool у message
-        REQUIRE( p->command() == actor_zeta::make_message_id(1) );
+        // 1) простое сообщение через make_message
+        auto msg = actor_zeta::make_message(resource, address_t::empty_address(), one);
+        REQUIRE( static_cast<bool>(msg) ); // оператор bool у message_ptr
+        REQUIRE( msg->command() == actor_zeta::make_message_id(1) );
 
-        // 2) отдельный payload как lvalue и явное построение message
-        rtt body(resource, int(1));               // lvalue, копирование в message
-        message msg2(resource, address_t::empty_address(), one, body);
+        // 2) отдельный payload - используем специализированный move constructor rtt
+        rtt body(resource, int(1));
+        message msg2(resource, address_t::empty_address(), one, std::move(body));
         REQUIRE(msg2.body().get<int>(0) == 1);
+    }
+
+    SECTION("swap messages") {
+        message msg1(resource, address_t::empty_address(), one);
+        message msg2(resource, address_t::empty_address(), two);
+
+        msg1.swap(msg2);
+
+        REQUIRE( msg1.command() == actor_zeta::make_message_id(2) );
+        REQUIRE( msg2.command() == actor_zeta::make_message_id(1) );
+    }
+
+    SECTION("allocator-extended move constructor") {
+        message msg1(resource, address_t::empty_address(), three);
+        REQUIRE( msg1.command() == actor_zeta::make_message_id(3) );
+
+        // Используем allocator-extended move constructor (PMR migration)
+        message msg2(std::allocator_arg, resource, std::move(msg1));
+        REQUIRE( msg2.command() == actor_zeta::make_message_id(3) );
+    }
+
+    SECTION("message with multiple payload values") {
+        auto msg = actor_zeta::make_message(resource, address_t::empty_address(), one,
+                                           int(42), std::string("test"), double(3.14));
+        REQUIRE( msg->body().get<int>(0) == 42 );
+        REQUIRE( msg->body().get<std::string>(1) == "test" );
+        REQUIRE( msg->body().get<double>(2) == 3.14 );
+    }
+
+    SECTION("sender access") {
+        auto addr = address_t::empty_address();
+        message msg(resource, addr, one);
+
+        REQUIRE( msg.sender() == addr );
+
+        // Проверка различных перегрузок sender()
+        const message& const_msg = msg;
+        REQUIRE( const_msg.sender() == addr );
+    }
+
+    SECTION("zero message id") {
+        message msg(resource, address_t::empty_address(), zero);
+        REQUIRE( msg.command() == actor_zeta::make_message_id(0) );
+    }
+
+    SECTION("rtt migration between different arenas") {
+        // Создаем две разные арены
+        auto* arena1 = actor_zeta::pmr::get_default_resource();
+        auto monotonic_buffer = std::vector<char>(1024);
+        actor_zeta::pmr::monotonic_buffer_resource arena2(monotonic_buffer.data(), monotonic_buffer.size());
+
+        // Создаем rtt в arena1 с данными
+        rtt rtt1(arena1, int(42), std::string("test"), double(3.14));
+        REQUIRE( rtt1.get<int>(0) == 42 );
+        REQUIRE( rtt1.get<std::string>(1) == "test" );
+        REQUIRE( rtt1.get<double>(2) == 3.14 );
+
+        // Мигрируем в arena2 через allocator-extended move constructor
+        rtt rtt2(std::allocator_arg, &arena2, std::move(rtt1));
+
+        // Проверяем что данные сохранились после миграции
+        REQUIRE( rtt2.get<int>(0) == 42 );
+        REQUIRE( rtt2.get<std::string>(1) == "test" );
+        REQUIRE( rtt2.get<double>(2) == 3.14 );
+    }
+
+    SECTION("message migration between different arenas") {
+        // Создаем две разные арены
+        auto* arena1 = actor_zeta::pmr::get_default_resource();
+        auto monotonic_buffer = std::vector<char>(2048);
+        actor_zeta::pmr::monotonic_buffer_resource arena2(monotonic_buffer.data(), monotonic_buffer.size());
+
+        // Создаем сообщение в arena1
+        rtt body1(arena1, int(100), std::string("hello"));
+        message msg1(arena1, address_t::empty_address(), one, std::move(body1));
+
+        REQUIRE( msg1.command() == actor_zeta::make_message_id(1) );
+        REQUIRE( msg1.body().get<int>(0) == 100 );
+        REQUIRE( msg1.body().get<std::string>(1) == "hello" );
+
+        // Мигрируем сообщение в arena2
+        message msg2(std::allocator_arg, &arena2, std::move(msg1));
+
+        // Проверяем что все данные сохранились
+        REQUIRE( msg2.command() == actor_zeta::make_message_id(1) );
+        REQUIRE( msg2.body().get<int>(0) == 100 );
+        REQUIRE( msg2.body().get<std::string>(1) == "hello" );
+    }
+
+    SECTION("rtt move assignment with different arenas") {
+        auto* arena1 = actor_zeta::pmr::get_default_resource();
+        auto monotonic_buffer = std::vector<char>(1024);
+        actor_zeta::pmr::monotonic_buffer_resource arena2(monotonic_buffer.data(), monotonic_buffer.size());
+
+        rtt rtt1(arena1, int(42));
+        rtt rtt2(&arena2, int(99));
+
+        REQUIRE( rtt1.get<int>(0) == 42 );
+        REQUIRE( rtt2.get<int>(0) == 99 );
+
+        // Move assignment с разными аренами должен мигрировать данные
+        rtt2 = std::move(rtt1);
+
+        REQUIRE( rtt2.get<int>(0) == 42 );
+    }
+
+    SECTION("message move assignment with different arenas") {
+        auto* arena1 = actor_zeta::pmr::get_default_resource();
+        auto monotonic_buffer = std::vector<char>(2048);
+        actor_zeta::pmr::monotonic_buffer_resource arena2(monotonic_buffer.data(), monotonic_buffer.size());
+
+        message msg1(arena1, address_t::empty_address(), one);
+        message msg2(&arena2, address_t::empty_address(), two);
+
+        REQUIRE( msg1.command() == actor_zeta::make_message_id(1) );
+        REQUIRE( msg2.command() == actor_zeta::make_message_id(2) );
+
+        // Move assignment должен мигрировать данные между аренами
+        msg2 = std::move(msg1);
+
+        REQUIRE( msg2.command() == actor_zeta::make_message_id(1) );
     }
 }

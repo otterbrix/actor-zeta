@@ -82,11 +82,11 @@ namespace actor_zeta {
     make_message(actor_zeta::pmr::memory_resource* resource,
                  base::address_t sender,
                  Name&& name,
-                 Args&&... args) {
+                 Args... args) {
         assert(resource);
         return mailbox::pmr_make_message(resource, resource, std::move(sender),
                                          detail::to_message_id(std::forward<Name>(name)),
-                                         detail::rtt(resource, std::forward<Args>(args)...));
+                                         detail::rtt(resource, std::move(args)...));
     }
 
 } // namespace actor_zeta

@@ -21,12 +21,16 @@ namespace actor_zeta { namespace mailbox {
         message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;
-        message(message&& other) = default;
-        message& operator=(message&&) = default;
-        ~message() noexcept = default;
+        message(message&& other) noexcept = default;
+        message& operator=(message&& other) noexcept;
         explicit message(actor_zeta::pmr::memory_resource* /* resource */);
         message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/);
-        message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt /*body*/);
+        message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt&& /*body*/);
+
+        // Allocator-extended move constructor (PMR migration)
+        message(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, message&& other) noexcept;
+
+        ~message() noexcept;
         message* prev;
         auto command() const noexcept -> message_id;
         auto sender() & noexcept -> base::address_t&;
@@ -44,7 +48,7 @@ namespace actor_zeta { namespace mailbox {
         actor_zeta::detail::rtt body_;
     };
 
-    // static_assert(std::is_move_constructible<message>::value, "");
+    static_assert(std::is_move_constructible<message>::value, "");
     static_assert(not std::is_copy_constructible<message>::value, "");
 
     namespace detail {
@@ -76,31 +80,38 @@ namespace actor_zeta { namespace mailbox {
 
     }
 
+    // Custom deleter for heap-allocated messages
     struct message_deleter {
         void operator()(message* p) const noexcept {
             if (!p) return;
             detail::BlockHdr* hdr = detail::hdr_from_message(p);
-            p->~message(); // обязательно, т.к. message создан placement-new
+            p->~message();
             hdr->r->deallocate(detail::base_from_message(p), hdr->total, detail::kAllocAlign);
         }
     };
 
     static_assert(std::is_empty<message_deleter>::value, "EBO expected");
 
-    using message_ptr =  std::unique_ptr<message, message_deleter> ;
+    using message_ptr = std::unique_ptr<message, message_deleter>;
 
+    // Factory function for heap-allocated messages with PMR
     template<class... Args>
     message_ptr pmr_make_message(actor_zeta::pmr::memory_resource* resource, Args&&... args) {
-        using namespace detail;
-        const std::size_t total = kFront + sizeof(message);
+        constexpr std::size_t front = detail::kFront;
+        constexpr std::size_t msg_size = sizeof(message);
+        const std::size_t total = front + msg_size;
 
-        void* base = nullptr;
-        base = resource->allocate(total, kAllocAlign);
-        (void)new (base) BlockHdr{ resource, total };
-        unsigned char* msg_mem = static_cast<unsigned char*>(base) + kFront;
-        message* m = new (msg_mem) message(std::forward<Args>(args)...);
-        return message_ptr(m, message_deleter());
+        void* raw = resource->allocate(total, detail::kAllocAlign);
+        unsigned char* base = static_cast<unsigned char*>(raw);
 
+        detail::BlockHdr* hdr = reinterpret_cast<detail::BlockHdr*>(base);
+        hdr->r = resource;
+        hdr->total = total;
+
+        void* msg_place = base + front;
+        message* msg = new (msg_place) message(std::forward<Args>(args)...);
+
+        return message_ptr(msg, message_deleter{});
     }
 
 }} // namespace actor_zeta::mailbox

@@ -101,7 +101,7 @@ public:
     }
 
     template<class Id = uint64_t, class... Args>
-    void broadcast_on_worker(Id id, Args&&... args) {
+    void broadcast_on_worker(Id id, Args... args) {
         auto size = size_actor();
         std::vector<actor_zeta::message_ptr> tmp;
         tmp.reserve(size);
@@ -110,7 +110,7 @@ public:
                 resource(),
                 address(),
                 id,
-                std::forward<const Args&>(args)...);
+                args...);
             tmp.push_back(std::move(ptr));
         }
 

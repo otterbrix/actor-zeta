@@ -25,6 +25,36 @@ actor-zeta is a C++11/14/17 **header-only** virtual actor model implementation w
 
 ## Quick Start Commands
 
+### Using CLion (Recommended for Development)
+
+CLion automatically handles CMake configuration. Just:
+
+1. **Open project in CLion** - it will detect `CMakeLists.txt`
+2. **Configure Conan dependencies:**
+   ```bash
+   # Run once in terminal (inside CLion or external):
+   conan profile detect --force
+   conan install . -of cmake-build-debug/conan -s build_type=Debug --build=missing
+   ```
+3. **Reload CMake** in CLion (`Tools → CMake → Reload CMake Project`)
+4. **Set CMake options** in `Settings → Build → CMake`:
+   - Build type: `Debug` or `Release`
+   - CMake options:
+     ```
+     -DALLOW_EXAMPLES=ON
+     -DALLOW_TESTS=ON
+     -DRTTI_DISABLE=ON
+     -DEXCEPTIONS_DISABLE=ON
+     -DCMAKE_TOOLCHAIN_FILE=cmake-build-debug/conan/Debug/generators/conan_toolchain.cmake
+     ```
+5. **Build** using CLion's build button or `Ctrl+F9` / `Cmd+F9`
+6. **Run tests** from `Run → Edit Configurations → Add CTest`
+7. **Run examples** - CLion auto-creates run configurations from executables
+
+**CLion Build Directory:** CLion uses `cmake-build-debug/` or `cmake-build-release/` by default.
+
+### Command Line (Alternative)
+
 ```bash
 # Full build cycle (development)
 conan profile detect --force
@@ -354,12 +384,61 @@ Build with `-DALLOW_EXAMPLES=ON`, run from `build/bin/`.
 - None (header-only library)
 - Requires Threads library (pthread on Unix)
 
+## CLion-Specific Workflows
+
+### Debugging in CLion
+
+1. **Set breakpoints** in header files or test files
+2. **Run test in debug mode** - Right-click on test executable → `Debug 'tests_message'`
+3. **Debug specific example** - CLion auto-creates run configurations for executables in `bin/`
+
+### Running Single Test
+
+In CLion:
+- Open test file (e.g., `test/message/main.cpp`)
+- Click green arrow next to test case
+- Or use CTest run configuration
+
+From command line:
+```bash
+./cmake-build-debug/bin/tests_message --success  # Verbose output
+./cmake-build-debug/bin/tests_message "[tag_name]"  # Run specific test tag
+```
+
+### Troubleshooting CLion Build
+
+**Problem:** CLion can't find Conan dependencies
+
+**Solution:**
+```bash
+# Re-run Conan install for CLion's build directory:
+conan install . -of cmake-build-debug/conan -s build_type=Debug --build=missing
+
+# Then in CLion: Tools → CMake → Reset Cache and Reload Project
+```
+
+**Problem:** "Cannot find conan_toolchain.cmake"
+
+**Solution:** Update CMake options in CLion settings to point to correct toolchain file:
+```
+-DCMAKE_TOOLCHAIN_FILE=cmake-build-debug/conan/Debug/generators/conan_toolchain.cmake
+```
+
+### Using CLion with Different C++ Standards
+
+Create multiple CMake profiles in CLion (`Settings → Build → CMake → +`):
+- **Debug-C++11**: `-DCMAKE_CXX_STANDARD=11 -DALLOW_TESTS=ON`
+- **Debug-C++17**: `-DCMAKE_CXX_STANDARD=17 -DALLOW_TESTS=ON -DALLOW_EXAMPLES=ON`
+- **Release-C++20**: `-DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20`
+
+Switch between profiles using the dropdown in CLion's toolbar.
+
 ## When Making Changes
 
 1. ✅ **Read the full file first** (not just the function you're changing)
 2. ✅ **Follow existing patterns** (PMR allocation, no RTTI/exceptions, intrusive_ptr)
-3. ✅ **Build after every change:** `cmake --build build`
-4. ✅ **Run tests:** `cd build && ctest --output-on-failure`
+3. ✅ **Build after every change:** CLion auto-builds, or `cmake --build build`
+4. ✅ **Run tests:** In CLion or `cd build && ctest --output-on-failure`
 5. ✅ **Check examples still work** if you changed core headers
 
 ## Common Mistakes to Avoid
