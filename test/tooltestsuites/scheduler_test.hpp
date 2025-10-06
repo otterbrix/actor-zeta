@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <limits>
+
 #include <deque>
 
 #include "actor-zeta/scheduler/scheduler.hpp"
