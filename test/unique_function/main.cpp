@@ -23,7 +23,15 @@ private:
         #if defined(_MSC_VER)
             ptr = _aligned_malloc(bytes, alignment);
         #else
-            if (posix_memalign(&ptr, alignment, bytes) != 0) {
+            // posix_memalign requires alignment to be:
+            // - a power of 2
+            // - a multiple of sizeof(void*)
+            // Ensure minimum alignment of sizeof(void*)
+            size_t actual_alignment = alignment;
+            if (actual_alignment < sizeof(void*)) {
+                actual_alignment = sizeof(void*);
+            }
+            if (posix_memalign(&ptr, actual_alignment, bytes) != 0) {
                 assert(0 && "bad_alloc");
             }
         #endif
