@@ -80,11 +80,18 @@ jobs:
           conan install . --output-folder=build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
 
           echo "=== Checking generated files ==="
-          ls -la build/${BUILD_TYPE}/generators/ || echo "Generators directory not found"
-          ls -la build/${BUILD_TYPE}/generators/conan_toolchain.cmake || echo "Toolchain not found"
+          echo "Contents of current directory:"
+          ls -la
+          echo "Contents of build directory:"
+          ls -la build/ || echo "build/ not found"
+          echo "Contents of build/${BUILD_TYPE}:"
+          ls -la build/${BUILD_TYPE}/ || echo "build/${BUILD_TYPE}/ not found"
+          echo "Looking for all .cmake files:"
+          find . -name "*.cmake" -type f | grep -i conan | head -20
 
-          TOOLCHAIN_PATH="$(pwd)/build/${BUILD_TYPE}/generators/conan_toolchain.cmake"
-          echo "Toolchain path: ${TOOLCHAIN_PATH}"
+          TOOLCHAIN_PATH="$(pwd)/build/${BUILD_TYPE}/conan_toolchain.cmake"
+          echo "Using toolchain path: ${TOOLCHAIN_PATH}"
+          ls -la "${TOOLCHAIN_PATH}"
 
           cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \

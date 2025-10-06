@@ -5,6 +5,3 @@
 [generators]
 CMakeDeps
 CMakeToolchain
-
-[layout]
-cmake_layout
