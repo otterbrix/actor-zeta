@@ -27,6 +27,9 @@ namespace actor_zeta { namespace test {
 
     } // namespace
 
+    scheduler_test_t::scheduler_test_t(std::size_t , std::size_t ) {
+
+    }
 
     void scheduler_test_t::start() {}
 

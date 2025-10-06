@@ -27,8 +27,8 @@ public:
 
     dummy_supervisor(actor_zeta::pmr::memory_resource* resource, uint64_t threads, uint64_t throughput)
         : actor_abstract_t(resource)
-        , create_storage_(actor_zeta::make_behavior(resource, dummy_supervisor_command::create_storage, this, &dummy_supervisor::create_storage))
-        , create_test_handlers_(actor_zeta::make_behavior(resource, dummy_supervisor_command::create_test_handlers, this, &dummy_supervisor::create_test_handlers))
+        , create_storage_(actor_zeta::make_behavior(resource, this, &dummy_supervisor::create_storage))
+        , create_test_handlers_(actor_zeta::make_behavior(resource, this, &dummy_supervisor::create_test_handlers))
         , executor_(new actor_zeta::test::scheduler_test_t(threads, throughput)) {
         scheduler_test()->start();
         constructor_counter++;
@@ -72,10 +72,11 @@ public:
         return storages_.size()+test_handlers_.size();
     }
 
-    void enqueue_impl(actor_zeta::message_ptr msg) override  {
+    bool enqueue_impl(actor_zeta::message_ptr msg) override  {
         enqueue_base_counter++;
         auto tmp_msg =  (std::move(msg));
         behavior()(tmp_msg.get());
+        return true;
     }
 
 private:
@@ -120,26 +121,22 @@ public:
         : actor_zeta::basic_actor<storage_t>(resource_)
         , init_(actor_zeta::make_behavior(
               resource(),
-              storage_names::init, this,
+              this,
               &storage_t::init))
         , search_(actor_zeta::make_behavior(
               resource(),
-              storage_names::search,
               this,
               &storage_t::search))
         , add_(actor_zeta::make_behavior(
               resource(),
-              storage_names::add,
               this,
               &storage_t::add))
         , delete_table_(actor_zeta::make_behavior(
               resource(),
-              storage_names::delete_table,
               this,
               &storage_t::delete_table))
         , create_table_(actor_zeta::make_behavior(
               resource(),
-              storage_names::create_table,
               this,
               &storage_t::create_table)) {
         constructor_counter++;
@@ -257,28 +254,24 @@ public:
         : actor_zeta::basic_actor<test_handlers>(ptr)
         , ptr_0_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_0,
               []() {
                   TRACE("+++");
                   ptr_0_counter++;
               }))
         , ptr_1_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_1,
               []() {
                   TRACE("+++");
                   ptr_1_counter++;
               }))
         , ptr_2_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_2,
               [](int&) {
                   TRACE("+++");
                   ptr_2_counter++;
               }))
         , ptr_3_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_3,
               [](int data_1, int& data_2) {
                   TRACE("+++");
                   std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
@@ -286,7 +279,6 @@ public:
               }))
         , ptr_4_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_4,
               [](int data_1, int& data_2, const std::string& data_3) {
                   TRACE("+++");
                   std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
