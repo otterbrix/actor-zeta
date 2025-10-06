@@ -21,7 +21,7 @@ jobs:
       - name: Install system dependencies
         run: |
             brew install ninja cmake
-            python3 -m pip install --no-cache-dir conan==1.63 --break-system-packages
+            python3 -m pip install --no-cache-dir "conan==2.*" --break-system-packages
 
       - name: Configure CMake
         env:
@@ -31,7 +31,7 @@ jobs:
           mkdir -p build
           
           conan profile detect --force
-          conan install .  -of build  --build=missing   
+          conan install .  -of build/${{matrix.build_type}} -s build_type=${{matrix.build_type}} --build=missing   
           
           cmake -B build -GNinja \
             -DCMAKE_BUILD_TYPE=${{matrix.build_type}} \
@@ -40,7 +40,7 @@ jobs:
             -DALLOW_TESTS=ON \
             -DENABLE_TESTS_MEASUREMENTS=ON \
             -DALLOW_BENCHMARK=ON \ 
-            -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE=./build/${{matrix.build_type}}/generators/conan_toolchain.cmake
 
       - name: Build
         run: cmake --build build

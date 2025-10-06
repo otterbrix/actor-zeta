@@ -79,7 +79,7 @@ jobs:
           mkdir -p build
           
           conan profile detect --force
-          conan install .  -of build -s build_type=${BUILD_TYPE}  --build=missing   
+          conan install .  -of build/${BUILD_TYPE} -s build_type=${BUILD_TYPE}  --build=missing   
           
           cmake -B build -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
@@ -92,7 +92,7 @@ jobs:
             -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
             -DRTTI_DISABLE=ON \
-            -DCMAKE_TOOLCHAIN_FILE=./build/generators/conan_toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE=./build/${BUILD_TYPE}/generators/conan_toolchain.cmake
 
       - name: Build
         run: cmake --build build
