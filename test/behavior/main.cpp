@@ -145,7 +145,7 @@ TEST_CASE("behavior") {
     SECTION("lambda arg 0") {
         actor_zeta::pmr::memory_resource* resource = actor_zeta::pmr::get_default_resource();
         int args_checker = 0;
-        actor_zeta::behavior_t free_function = actor_zeta::make_behavior(resource,resource,  [&args_checker]() {
+        actor_zeta::behavior_t free_function = actor_zeta::make_behavior(resource,  [&args_checker]() {
             args_checker = 1;
         });
         auto msg = actor_zeta::make_message(resource,actor_zeta::address_t::empty_address(), size_args::args_0);
@@ -156,7 +156,7 @@ TEST_CASE("behavior") {
     SECTION("lambda arg 1") {
         actor_zeta::pmr::memory_resource* resource = actor_zeta::pmr::get_default_resource();
         int args_checker = 0;
-        actor_zeta::behavior_t free_function = actor_zeta::make_behavior(resource,resource,  [&args_checker]() {
+        actor_zeta::behavior_t free_function = actor_zeta::make_behavior(resource,  [&args_checker]() {
             args_checker = 1;
         });
         auto msg = actor_zeta::make_message(resource,actor_zeta::address_t::empty_address(), size_args::args_1, 42);

@@ -25,7 +25,7 @@ class dummy_supervisor final {
 public:
     dummy_supervisor(memory_resource* resource_ptr)
         : resource_(resource_ptr)
-        , create_(actor_zeta::make_behavior(resource_, command_t::create, this, &dummy_supervisor::create))
+        , create_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create))
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
     }
@@ -40,25 +40,18 @@ public:
 
     void create();
 
-protected:
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource_,
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(command_t::create): {
-                        create_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(command_t::create): {
+                create_(msg);
+                break;
+            }
+        }
     }
 
-    auto enqueue_impl(actor_zeta::message_ptr msg) -> void {
-        {
-            auto tmp = std::move(msg);
-            behavior()(tmp.get());
-        }
+    void enqueue_impl(actor_zeta::message_ptr msg) {
+        auto tmp = std::move(msg);
+        behavior(tmp.get());
     }
 
 private:
@@ -71,16 +64,12 @@ private:
 
 class storage_t final : public actor_zeta::basic_actor<storage_t> {
 public:
-    explicit storage_t(dummy_supervisor* ptr)
-        : actor_zeta::basic_actor<storage_t>(ptr->resource()) {
+    explicit storage_t(actor_zeta::pmr::memory_resource* resource_ptr, dummy_supervisor* )
+        : actor_zeta::basic_actor<storage_t>(resource_ptr) {
     }
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [](actor_zeta::message*) -> void {
+    void behavior(actor_zeta::mailbox::message*) {
 
-            });
     }
 
     ~storage_t() override = default;

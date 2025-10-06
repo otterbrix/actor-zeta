@@ -96,7 +96,7 @@ namespace actor_zeta { namespace base {
 
             auto handler = [this, &handled, max_throughput](mailbox::message& m) noexcept -> detail::task_result {
                 current_msg_guard guard(this, &m);
-                self()->behavior()(current_message_);
+                self()->behavior(current_message_);
                 ++handled;
                 return (handled < max_throughput)
                        ? detail::task_result::resume

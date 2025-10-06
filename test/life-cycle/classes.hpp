@@ -41,21 +41,17 @@ public:
         destructor_counter++;
     }
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(dummy_supervisor_command::create_storage): {
-                        create_storage_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(dummy_supervisor_command::create_test_handlers): {
-                        create_test_handlers_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(dummy_supervisor_command::create_storage): {
+                create_storage_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(dummy_supervisor_command::create_test_handlers): {
+                create_test_handlers_(msg);
+                break;
+            }
+        }
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
@@ -75,7 +71,7 @@ public:
     bool enqueue_impl(actor_zeta::message_ptr msg) override  {
         enqueue_base_counter++;
         auto tmp_msg =  (std::move(msg));
-        behavior()(tmp_msg.get());
+        behavior(tmp_msg.get());
         return true;
     }
 
@@ -142,33 +138,29 @@ public:
         constructor_counter++;
     }
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command().integer_value()) {
-                    case actor_zeta::make_message_id(storage_names::init): {
-                        init_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::search): {
-                        search_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::add): {
-                        add_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::delete_table): {
-                        delete_table_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::create_table): {
-                        create_table_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command().integer_value()) {
+            case actor_zeta::make_message_id(storage_names::init): {
+                init_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::search): {
+                search_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::add): {
+                add_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::delete_table): {
+                delete_table_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::create_table): {
+                create_table_(msg);
+                break;
+            }
+        }
     }
 
     ~storage_t() override {
@@ -288,37 +280,33 @@ public:
     }
 
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command().integer_value()) {
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_0): {
-                        ptr_0_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_1): {
-                        ptr_1_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_2): {
-                        ptr_2_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_3): {
-                        ptr_3_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_4): {
-                        ptr_4_(msg);
-                        break;
-                    }
-                    default: {
-                        TRACE("+++");
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command().integer_value()) {
+            case actor_zeta::make_message_id(test_handlers_names::ptr_0): {
+                ptr_0_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_1): {
+                ptr_1_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_2): {
+                ptr_2_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_3): {
+                ptr_3_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_4): {
+                ptr_4_(msg);
+                break;
+            }
+            default: {
+                TRACE("+++");
+                break;
+            }
+        }
     }
 
     ~test_handlers() override = default;
