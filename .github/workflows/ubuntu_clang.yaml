@@ -79,6 +79,10 @@ jobs:
           conan profile detect --force
           conan install . --output-folder=. -s build_type=${BUILD_TYPE} --build=missing
 
+          echo "Checking generated files:"
+          ls -la build/${BUILD_TYPE}/generators/ || echo "Directory not found"
+          find build -name "conan_toolchain.cmake" || echo "File not found"
+
           cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DCMAKE_CXX_STANDARD=${CXX_STANDARD} \
