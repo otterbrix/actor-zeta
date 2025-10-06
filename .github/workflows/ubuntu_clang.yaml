@@ -28,7 +28,7 @@ jobs:
 #          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"13"},
 #          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"14"},
 #          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"15"},
-#          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"16"}
+          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"16"}
         ]
 
     runs-on: ubuntu-latest
@@ -83,6 +83,12 @@ jobs:
           ls -la build/${BUILD_TYPE}/generators/ || echo "Directory not found"
           find build -name "conan_toolchain.cmake" || echo "File not found"
 
+          echo "Current directory: $(pwd)"
+          echo "GitHub workspace: ${{ github.workspace }}"
+          TOOLCHAIN_PATH="$(pwd)/build/${BUILD_TYPE}/generators/conan_toolchain.cmake"
+          echo "Toolchain path: ${TOOLCHAIN_PATH}"
+          ls -la "${TOOLCHAIN_PATH}" || echo "Toolchain file not found at ${TOOLCHAIN_PATH}"
+
           cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DCMAKE_CXX_STANDARD=${CXX_STANDARD} \
@@ -94,7 +100,7 @@ jobs:
             -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
             -DRTTI_DISABLE=ON \
-            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/build/${BUILD_TYPE}/generators/conan_toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_PATH}
 
       - name: Build
         run: cmake --build build/${{ matrix.build_type }}

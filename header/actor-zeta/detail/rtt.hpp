@@ -166,39 +166,26 @@ namespace actor_zeta { namespace detail {
             , objects_(nullptr)
             , objects_idx_(0) {
 
-            if (resource == other.memory_resource_) {
-                // Same arena - cheap move (just steal pointers)
-                capacity_ = other.capacity_;
-                volume_ = other.volume_;
-                allocation = other.allocation;
-                data_ = other.data_;
-                objects_ = other.objects_;
-                objects_idx_ = other.objects_idx_;
+            // Only same-arena move is supported for type-erased container
+            // Cross-arena migration would require copying non-trivial types which is not possible
+            // without knowing their actual types at runtime
+            assert(resource == other.memory_resource_ && "Cross-arena RTT migration is not supported");
 
-                other.memory_resource_ = nullptr;
-                other.capacity_ = 0;
-                other.volume_ = 0;
-                other.allocation = nullptr;
-                other.data_ = nullptr;
-                other.objects_ = nullptr;
-                other.objects_idx_ = 0;
-            } else {
-                // Different arena - must migrate (reallocate in new arena)
-                if (other.capacity_ > 0) {
-                    capacity_ = other.capacity_;
-                    allocation = memory_resource_->allocate(capacity_ + capacity_ * sizeof(objects_t));
-                    assert(allocation);
-                    data_ = static_cast<char*>(allocation);
-                    objects_ = static_cast<objects_t*>(static_cast<void*>(data_ + capacity_));
+            // Same arena - cheap move (just steal pointers)
+            capacity_ = other.capacity_;
+            volume_ = other.volume_;
+            allocation = other.allocation;
+            data_ = other.data_;
+            objects_ = other.objects_;
+            objects_idx_ = other.objects_idx_;
 
-                    // Copy raw data and metadata
-                    std::memcpy(data_, other.data_, other.volume_);
-                    std::memcpy(objects_, other.objects_, other.objects_idx_ * sizeof(objects_t));
-                    volume_ = other.volume_;
-                    objects_idx_ = other.objects_idx_;
-                }
-                // Note: other will be destroyed by its destructor
-            }
+            other.memory_resource_ = nullptr;
+            other.capacity_ = 0;
+            other.volume_ = 0;
+            other.allocation = nullptr;
+            other.data_ = nullptr;
+            other.objects_ = nullptr;
+            other.objects_idx_ = 0;
 
 #ifdef __ENABLE_TESTS_MEASUREMENTS__
             rtt_test::move_ctor_++;
@@ -213,32 +200,28 @@ namespace actor_zeta { namespace detail {
         rtt& operator=(rtt&& other) noexcept {
             if (this == &other) return *this;
 
-            if (memory_resource_ == other.memory_resource_) {
-                // Same arena - cheap path
-                clear();
+            // Only same-arena move assignment is supported
+            // If different arenas, we require explicit handling by the user
+            assert((memory_resource_ == other.memory_resource_ || memory_resource_ == nullptr)
+                   && "Cross-arena RTT move assignment is not supported");
 
-                memory_resource_ = other.memory_resource_;
-                capacity_ = other.capacity_;
-                volume_ = other.volume_;
-                allocation = other.allocation;
-                data_ = other.data_;
-                objects_ = other.objects_;
-                objects_idx_ = other.objects_idx_;
+            clear();
 
-                other.memory_resource_ = nullptr;
-                other.capacity_ = 0;
-                other.volume_ = 0;
-                other.allocation = nullptr;
-                other.data_ = nullptr;
-                other.objects_ = nullptr;
-                other.objects_idx_ = 0;
-            } else {
-                // Different arena - migrate through allocator-extended move constructor
-                // Use other's resource if this was moved-from (memory_resource_ == nullptr)
-                auto* target_resource = memory_resource_ ? memory_resource_ : other.memory_resource_;
-                rtt tmp(std::allocator_arg, target_resource, std::move(other));
-                swap(tmp);
-            }
+            memory_resource_ = other.memory_resource_;
+            capacity_ = other.capacity_;
+            volume_ = other.volume_;
+            allocation = other.allocation;
+            data_ = other.data_;
+            objects_ = other.objects_;
+            objects_idx_ = other.objects_idx_;
+
+            other.memory_resource_ = nullptr;
+            other.capacity_ = 0;
+            other.volume_ = 0;
+            other.allocation = nullptr;
+            other.data_ = nullptr;
+            other.objects_ = nullptr;
+            other.objects_idx_ = 0;
 
 #ifdef __ENABLE_TESTS_MEASUREMENTS__
             rtt_test::move_operator_++;
