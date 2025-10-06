@@ -76,12 +76,11 @@ jobs:
           BUILD_TYPE: ${{matrix.build_type}}
           CXX_STANDARD: ${{matrix.cxx_standard}}
         run: |
-          mkdir -p build
-          
+          mkdir -p build/${BUILD_TYPE}
           conan profile detect --force
-          conan install .  -of build/${BUILD_TYPE} -s build_type=${BUILD_TYPE}  --build=missing   
+          conan install . -of ${{ github.workspace }}/build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
           
-          cmake -B build -GNinja \
+          cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DCMAKE_CXX_STANDARD=${CXX_STANDARD} \
             -DCMAKE_C_COMPILER=${CC} \
@@ -92,15 +91,15 @@ jobs:
             -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
             -DRTTI_DISABLE=ON \
-            -DCMAKE_TOOLCHAIN_FILE=./build/${BUILD_TYPE}/generators/conan_toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/build/${BUILD_TYPE}/generators/conan_toolchain.cmake
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build/${{ matrix.build_type }}
 
       - name: Test
-        working-directory: build
+        working-directory: build/${{ matrix.build_type }}
         run: ctest --rerun-failed --output-on-failure
 
       - name: Analyze dependencies
-        working-directory: build
+        working-directory: build/${{ matrix.build_type }}
         run: ldd bin/dataflow

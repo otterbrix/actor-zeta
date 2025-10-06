@@ -40,15 +40,15 @@ jobs:
         run: |
           apt update && apt-get install -y \
             software-properties-common ca-certificates \
-            ninja-build make \
-            zlib1g-dev wget
+            ninja-build make zlib1g-dev wget \
+            python3-pip python3 python3-dev python3-setuptools
 
           add-apt-repository ppa:ubuntu-toolchain-r/test
 
           bash ./docker/gcc/pyinstall.sh $(cat /etc/os-release | grep -a UBUNTU_CODENAME | sed -e 's/UBUNTU_CODENAME=//g')
 
           python3 -m pip install --upgrade pip
-          python3 -m pip install --no-cache-dir conan==2.15.0 cmake==3.25
+          python3 -m pip install --no-cache-dir "conan==2.*" cmake==3.25.0
 
       - name: Install compiler
         run: |
@@ -57,7 +57,6 @@ jobs:
             --install /usr/bin/gcc gcc /usr/bin/gcc-${{matrix.configuration.TOOLCHAIN_VERSION}} 90 \
             --slave /usr/bin/g++ g++ /usr/bin/g++-${{matrix.configuration.TOOLCHAIN_VERSION}} \
             --slave /usr/bin/gcov gcov /usr/bin/gcov-${{matrix.configuration.TOOLCHAIN_VERSION}}
-
           update-alternatives --config gcc
 
       - name: Configure CMake
@@ -67,12 +66,11 @@ jobs:
           BUILD_TYPE: ${{matrix.build_type}}
           CXX_STANDARD: ${{matrix.cxx_standard}}
         run: |
-          mkdir -p build
-          
+          mkdir -p build/${BUILD_TYPE}
           conan profile detect --force
-          conan install .  -of build/${BUILD_TYPE}  -s build_type=${BUILD_TYPE} --build=missing   
+          conan install . -of ${{ github.workspace }}/build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
           
-          cmake -B build -GNinja \
+          cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DCMAKE_CXX_STANDARD=${CXX_STANDARD} \
             -DCMAKE_C_COMPILER=${CC} \
@@ -83,15 +81,15 @@ jobs:
             -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
             -DRTTI_DISABLE=ON \
-            -DCMAKE_TOOLCHAIN_FILE=./build/${BUILD_TYPE}/generators/conan_toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/build/${BUILD_TYPE}/generators/conan_toolchain.cmake
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build/${{ matrix.build_type }}
 
       - name: Test
-        working-directory: build
+        working-directory: build/${{ matrix.build_type }}
         run: ctest --rerun-failed --output-on-failure
 
       - name: Analyze dependencies
-        working-directory: build
-        run: ldd bin/dataflow || true
+        working-directory: build/${{ matrix.build_type }}
+        run: ldd bin/dataflow
