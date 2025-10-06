@@ -121,4 +121,6 @@ jobs:
 
       - name: Analyze dependencies
         working-directory: build/${{ matrix.build_type }}
-        run: ldd bin/broadcast
+        run: |
+          ls bin
+          ldd bin/broadcast
