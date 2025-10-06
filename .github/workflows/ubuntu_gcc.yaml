@@ -16,14 +16,14 @@ jobs:
         cxx_standard: [17, 20]
         build_type: ["Release", "Debug"]
         configuration: [
-          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"7"},
-          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"8"},
-          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"},
-          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"},
+          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"7"},
+          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"8"},
+          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"},
+          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"},
 
-          #{"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"9"},
-          #{"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"},
-          #{"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
+          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"9"},
+          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"},
+          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"}
         ]
 
