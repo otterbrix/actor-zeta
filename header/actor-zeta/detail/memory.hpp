@@ -64,26 +64,4 @@ namespace actor_zeta { namespace pmr {
     private:
         actor_zeta::pmr::memory_resource* resource_;
     };
-} // namespace actor_zeta::pmr
-
-    template<typename T, typename... Args>
-    typename std::enable_if<!std::is_array<T>::value, std::unique_ptr<T>>::type
-    make_unique(Args&&... args) {
-        return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
-    }
-
-    // ----- Динамический массив -----
-    template<typename T>
-    typename std::enable_if<std::is_array<T>::value && std::extent<T>::value == 0,
-                            std::unique_ptr<T>>::type
-    make_unique(std::size_t n) {
-        using U = typename std::remove_extent<T>::type;
-        return std::unique_ptr<T>(new U[n]());
-    }
-
-    // ----- Статические массивы запрещены -----
-    template<typename T, typename... Args>
-    typename std::enable_if<std::extent<T>::value != 0, void>::type
-    make_unique(Args&&...) = delete;
-
-} // namespace actor_zeta
+}} // namespace actor_zeta::pmr

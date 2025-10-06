@@ -21,7 +21,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-actor-zeta is a C++11/14/17 **header-only** virtual actor model implementation with cooperative scheduling, custom memory management, and no dependencies on RTTI or exceptions.
+actor-zeta is a C++17/20 **header-only** virtual actor model implementation with cooperative scheduling, custom memory management, and no dependencies on RTTI or exceptions.
+
+**Minimum C++ standard: C++17**
 
 ## Quick Start Commands
 
@@ -169,7 +171,7 @@ Actors run until they yield control (no timeslicing).
 
 ### Memory Management (`header/actor-zeta/detail/pmr/`)
 
-**CRITICAL:** This is a custom PMR implementation, not std::pmr (C++11 compatibility).
+**CRITICAL:** This is a custom PMR implementation, not std::pmr.
 
 - **memory_resource** - Abstract allocator base class
 - **polymorphic_allocator** - Type-erased allocator
@@ -317,15 +319,15 @@ cmake -B build -GNinja \
 ```bash
 cmake -B build -GNinja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_STANDARD=11 \
+  -DCMAKE_CXX_STANDARD=17 \
   -DRTTI_DISABLE=ON \
   -DEXCEPTIONS_DISABLE=ON
 ```
 
 ### CI Testing (multiple standards)
 ```bash
-# Test with C++11, 14, 17, 20
-for std in 11 14 17 20; do
+# Test with C++17, 20
+for std in 17 20; do
   cmake -B build-cpp$std -DCMAKE_CXX_STANDARD=$std -DALLOW_TESTS=ON
   cmake --build build-cpp$std
   (cd build-cpp$std && ctest)
@@ -342,7 +344,7 @@ done
 | `ALLOW_BENCHMARK` | OFF | Build benchmark suite |
 | `RTTI_DISABLE` | ON | Disable RTTI (`-fno-rtti`) |
 | `EXCEPTIONS_DISABLE` | ON | Disable exceptions (`-fno-exceptions`) |
-| `CMAKE_CXX_STANDARD` | 11 | C++ standard (11, 14, 17, 20) |
+| `CMAKE_CXX_STANDARD` | 17 | C++ standard (17, 20) |
 
 ## Testing
 
@@ -443,10 +445,62 @@ Switch between profiles using the dropdown in CLion's toolbar.
 
 ## Common Mistakes to Avoid
 
+### Memory Management
 ❌ Using `new`/`delete` instead of `spawn()`
-❌ Using `std::function` instead of `unique_function` (copies may not work)
-❌ Using `throw` or `try/catch` (exceptions disabled)
-❌ Using `typeid` or `dynamic_cast` (RTTI disabled)
-❌ Adding `std::shared_ptr` for actors (use `intrusive_ptr`)
-❌ Reading only part of a header file (miss template specializations, friend functions)
+❌ Using `std::shared_ptr` for actors (use `intrusive_ptr` instead)
 ❌ Assuming `std::pmr` exists (this is a C++11 library with custom PMR)
+❌ Using `std::memcpy` for non-trivial types (breaks `std::string`, etc.)
+❌ Cross-arena migration for type-erased containers (RTT, message) - only same-arena supported
+❌ Using alignment < `sizeof(void*)` with `posix_memalign` (adjust to minimum valid alignment)
+
+### Standard Library Replacements (MUST NOT USE)
+❌ **`std::function`** → Use `actor_zeta::detail::unique_function` instead (move-only, PMR-aware)
+❌ **`std::shared_ptr`** → Use `actor_zeta::detail::intrusive_ptr` instead (intrusive ref counting)
+❌ **`std::optional`** → Use custom optional or raw pointers with null checks (C++11 compatibility)
+
+### RTTI and Exceptions (DISABLED)
+❌ Using `throw` or `try/catch` (exceptions disabled with `-fno-exceptions`)
+❌ Using `typeid` or `dynamic_cast` (RTTI disabled with `-fno-rtti`)
+❌ Any code relying on exception handling or runtime type information
+
+### Code Reading
+❌ Reading only part of a header file (miss template specializations, friend functions)
+❌ Skipping implementation files (.ipp) when modifying headers
+
+## Recent Important Fixes (Session Memory)
+
+### RTT (Runtime Type Container) - Same-Arena Only Migration
+- **Issue:** Cross-arena migration used `std::memcpy` which broke non-trivial types like `std::string`
+- **Solution:** RTT allocator-extended move constructor now **only supports same-arena migration**
+- **Implementation:** Added `assert(resource == other.memory_resource_)` to prevent cross-arena usage
+- **Reason:** Type-erased containers can't properly copy non-trivial types without runtime type info
+- **Files affected:**
+  - `header/actor-zeta/detail/rtt.hpp` - allocator-extended constructor and move assignment
+  - `test/message/main.cpp` - removed cross-arena migration tests
+
+### Message Cross-Arena Migration
+- **Behavior:** Messages inherit RTT's same-arena-only limitation
+- **Move semantics:** Safe within same arena (pointer stealing), prohibited across arenas
+
+### Test Memory Resource - `posix_memalign` Requirements
+- **Issue:** `posix_memalign` requires alignment ≥ `sizeof(void*)` and power of 2
+- **Solution:** Adjust alignment to minimum `sizeof(void*)` if smaller
+- **Files affected:** `test/unique_function/main.cpp`
+
+### Conan 2.x + CMake Integration
+- **Issue:** `cmake_layout` in `conanfile.txt` created nested directory structures
+- **Solution:** Removed `[layout]` section from `conanfile.txt`
+- **Toolchain path:** `build/${BUILD_TYPE}/conan_toolchain.cmake` (NOT in `generators/` subdirectory)
+- **Files affected:**
+  - `conanfile.txt` - removed cmake_layout
+  - `.github/workflows/ubuntu_clang.yaml` - fixed toolchain path
+  - `.github/workflows/ubuntu_gcc.yaml` - fixed toolchain path
+  - `.github/workflows/macos.yml` - fixed toolchain path
+
+### CI/CD - Compiler C++20 Support
+- **Issue:** Old GCC/Clang versions don't support C++20
+- **Solution:** Added matrix exclusions for C++20 builds with older compilers
+- **Excluded from C++20:**
+  - GCC 7, 8, 9, 10
+  - Clang 9, 10
+- **Files affected:** Both Ubuntu workflow files
