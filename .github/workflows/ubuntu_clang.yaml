@@ -1,3 +1,5 @@
+name: Ubuntu Clang CI
+
 on:
   pull_request:
   push:
@@ -90,7 +92,7 @@ jobs:
             -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
             -DRTTI_DISABLE=ON \
-            -DCMAKE_TOOLCHAIN_FILE=./build/Release/generators/conan_toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE=./build/generators/conan_toolchain.cmake
 
       - name: Build
         run: cmake --build build
