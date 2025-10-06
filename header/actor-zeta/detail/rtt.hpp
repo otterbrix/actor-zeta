@@ -234,7 +234,9 @@ namespace actor_zeta { namespace detail {
                 other.objects_idx_ = 0;
             } else {
                 // Different arena - migrate through allocator-extended move constructor
-                rtt tmp(std::allocator_arg, memory_resource_, std::move(other));
+                // Use other's resource if this was moved-from (memory_resource_ == nullptr)
+                auto* target_resource = memory_resource_ ? memory_resource_ : other.memory_resource_;
+                rtt tmp(std::allocator_arg, target_resource, std::move(other));
                 swap(tmp);
             }
 
