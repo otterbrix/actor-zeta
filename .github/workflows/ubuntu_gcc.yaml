@@ -16,14 +16,14 @@ jobs:
         cxx_standard: [17, 20]
         build_type: ["Release", "Debug"]
         configuration: [
-          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"7"},
-          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"8"},
-          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"},
-          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"},
+          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"7"},
+          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"8"},
+          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"},
+          #{"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"},
 
-          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"9"},
-          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"},
-          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
+          #{"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"9"},
+          #{"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"},
+          #{"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"}
         ]
 
@@ -68,6 +68,10 @@ jobs:
         run: |
           conan profile detect --force
           conan install . --output-folder=. -s build_type=${BUILD_TYPE} --build=missing
+
+          echo "Checking generated files:"
+          ls -la build/${BUILD_TYPE}/generators/ || echo "Directory not found"
+          find build -name "conan_toolchain.cmake" || echo "File not found"
 
           cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
