@@ -28,23 +28,28 @@ jobs:
           BUILD_TYPE: ${{matrix.build_type}}
           CXX_STANDARD: ${{matrix.cxx_standard}}
         run: |
-          mkdir -p build
-          
           conan profile detect --force
-          conan install .  -of build/${{matrix.build_type}} -s build_type=${{matrix.build_type}} --build=missing   
-          
-          cmake -B build -GNinja \
-            -DCMAKE_BUILD_TYPE=${{matrix.build_type}} \
-            -DCMAKE_CXX_STANDARD=${{matrix.cxx_standard}} \
+          conan install . --output-folder=build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
+
+          echo "=== Checking generated files ==="
+          ls -la build/${BUILD_TYPE}/generators/ || echo "Generators directory not found"
+          ls -la build/${BUILD_TYPE}/generators/conan_toolchain.cmake || echo "Toolchain not found"
+
+          TOOLCHAIN_PATH="$(pwd)/build/${BUILD_TYPE}/generators/conan_toolchain.cmake"
+          echo "Toolchain path: ${TOOLCHAIN_PATH}"
+
+          cmake -S . -B build/${BUILD_TYPE} -GNinja \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DCMAKE_CXX_STANDARD=${CXX_STANDARD} \
             -DALLOW_EXAMPLES=ON \
             -DALLOW_TESTS=ON \
             -DENABLE_TESTS_MEASUREMENTS=ON \
-            -DALLOW_BENCHMARK=ON \ 
-            -DCMAKE_TOOLCHAIN_FILE=./build/${{matrix.build_type}}/generators/conan_toolchain.cmake
+            -DALLOW_BENCHMARK=ON \
+            -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_PATH}
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build/${{ matrix.build_type }}
 
       - name: Test
-        working-directory: build
+        working-directory: build/${{ matrix.build_type }}
         run: ctest --rerun-failed --output-on-failure

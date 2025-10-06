@@ -77,17 +77,14 @@ jobs:
           CXX_STANDARD: ${{matrix.cxx_standard}}
         run: |
           conan profile detect --force
-          conan install . --output-folder=. -s build_type=${BUILD_TYPE} --build=missing
+          conan install . --output-folder=build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
 
-          echo "Checking generated files:"
-          ls -la build/${BUILD_TYPE}/generators/ || echo "Directory not found"
-          find build -name "conan_toolchain.cmake" || echo "File not found"
+          echo "=== Checking generated files ==="
+          ls -la build/${BUILD_TYPE}/generators/ || echo "Generators directory not found"
+          ls -la build/${BUILD_TYPE}/generators/conan_toolchain.cmake || echo "Toolchain not found"
 
-          echo "Current directory: $(pwd)"
-          echo "GitHub workspace: ${{ github.workspace }}"
           TOOLCHAIN_PATH="$(pwd)/build/${BUILD_TYPE}/generators/conan_toolchain.cmake"
           echo "Toolchain path: ${TOOLCHAIN_PATH}"
-          ls -la "${TOOLCHAIN_PATH}" || echo "Toolchain file not found at ${TOOLCHAIN_PATH}"
 
           cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
@@ -109,6 +106,6 @@ jobs:
         working-directory: build/${{ matrix.build_type }}
         run: ctest --rerun-failed --output-on-failure
 
-      - name: Analyze dependencies
-        working-directory: build/${{ matrix.build_type }}
-        run: ldd bin/dataflow
+#     - name: Analyze dependencies
+#      working-directory: build/${{ matrix.build_type }}
+#      run: ldd bin/dataflow
