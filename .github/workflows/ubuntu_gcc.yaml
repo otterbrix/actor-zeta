@@ -26,6 +26,20 @@ jobs:
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"}
         ]
+        exclude:
+          # GCC 7, 8, 9, 10 don't support C++20
+          - configuration: {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"7"}
+            cxx_standard: 20
+          - configuration: {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"8"}
+            cxx_standard: 20
+          - configuration: {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"}
+            cxx_standard: 20
+          - configuration: {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"}
+            cxx_standard: 20
+          - configuration: {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"9"}
+            cxx_standard: 20
+          - configuration: {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"}
+            cxx_standard: 20
 
     runs-on: ubuntu-latest
     container:

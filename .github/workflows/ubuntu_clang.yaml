@@ -30,6 +30,12 @@ jobs:
           {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"15"},
           {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"16"}
         ]
+        exclude:
+          # Clang 9 and 10 have incomplete C++20 support
+          - configuration: {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"9"}
+            cxx_standard: 20
+          - configuration: {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"10"}
+            cxx_standard: 20
 
     runs-on: ubuntu-latest
     container:
