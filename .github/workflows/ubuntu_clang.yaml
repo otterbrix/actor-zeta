@@ -77,7 +77,7 @@ jobs:
           CXX_STANDARD: ${{matrix.cxx_standard}}
         run: |
           conan profile detect --force
-          conan install . --output-folder=build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
+          conan install . --output-folder=. -s build_type=${BUILD_TYPE} --build=missing
 
           cmake -S . -B build/${BUILD_TYPE} -GNinja \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
@@ -90,7 +90,7 @@ jobs:
             -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
             -DRTTI_DISABLE=ON \
-            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/build/${BUILD_TYPE}/conan_toolchain.cmake
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/build/${BUILD_TYPE}/generators/conan_toolchain.cmake
 
       - name: Build
         run: cmake --build build/${{ matrix.build_type }}
