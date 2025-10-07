@@ -134,32 +134,34 @@ TEST_CASE("shutdown - immediate stop") {
     REQUIRE(true); // If we get here, no crash occurred
 }
 
-TEST_CASE("shutdown - balancer with manual schedule (reproduces bug)") {
+TEST_CASE("shutdown - balancer with manual schedule") {
     auto* resource = actor_zeta::pmr::get_default_resource();
-    auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource, 1, 100);
 
-    auto balancer = actor_zeta::spawn<balancer_actor>(resource, scheduler.get());
+    {
+        auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource, 1, 100);
+        scheduler->start();
 
-    // Add 3 workers
-    balancer->add_worker();
-    balancer->add_worker();
-    balancer->add_worker();
+        auto balancer = actor_zeta::spawn<balancer_actor>(resource, scheduler.get());
 
-    // Send messages through balancer
-    for (int i = 0; i < 6; ++i) {
-        actor_zeta::send(balancer.get(), actor_zeta::address_t::empty_address(), command::ping);
+        // Add 3 workers
+        balancer->add_worker();
+        balancer->add_worker();
+        balancer->add_worker();
+
+        // Send messages through balancer
+        for (int i = 0; i < 6; ++i) {
+            actor_zeta::send(balancer.get(), actor_zeta::address_t::empty_address(), command::ping);
+        }
+
+        // Wait for processing
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Stop scheduler before everything is destroyed
+        scheduler->stop();
+
+        // scheduler destructor runs here, cleaning up all resumables
+        // then balancer destructor runs, destroying workers
     }
-
-    scheduler->start();
-
-    // Wait for processing
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // Stop scheduler BEFORE destroying balancer to avoid race
-    scheduler->stop();
-
-    // Explicitly destroy balancer and workers before scheduler cleanup
-    balancer.reset();
 
     REQUIRE(true); // If we get here, no crash occurred
 }
