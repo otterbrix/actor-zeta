@@ -17,6 +17,8 @@ std::atomic_int count_collection_part{0};
 std::atomic_int count_collection{0};
 std::atomic_int count_balancer{0};
 std::atomic_int count_insert{0};
+std::atomic_int count_remove{0};
+std::atomic_int count_update{0};
 std::atomic_int count_find{0};
 
 class collection_t;
@@ -39,9 +41,13 @@ public:
         }))
         , remove_(actor_zeta::make_behavior(resource(),  [this](std::string& key) -> void {
             data_.erase(key);
+            std::cerr << id() << " remove " << key << std::endl;
+            ++count_remove;
         }))
         , update_(actor_zeta::make_behavior(resource(),  [this](std::string& key, std::string& value) -> void {
             data_[key] = value;
+            std::cerr << id() << " update " << key << " = " << value << std::endl;
+            ++count_update;
         }))
         , find_(actor_zeta::make_behavior(resource(), [this](std::string& key) -> std::string {
             return data_[key];
@@ -125,7 +131,7 @@ private:
 
 
 
-static constexpr auto sleep_time = std::chrono::milliseconds(60);
+static constexpr auto sleep_time = std::chrono::milliseconds(100);
 
 
 
@@ -133,21 +139,41 @@ int main() {
     auto* resource = actor_zeta::pmr::get_default_resource();
     auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource,1, 100);
     auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());
+
+    std::cerr << "=== Creating 3 collection_part actors ===" << std::endl;
     collection->create();
     collection->create();
     collection->create();
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("1"), std::string("5"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("1"), std::string("5"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("1"), std::string("5"));
+
+    std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key1"), std::string("value1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key2"), std::string("value2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key3"), std::string("value3"));
+
+    std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::update, std::string("key1"), std::string("updated1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::update, std::string("key2"), std::string("updated2"));
+
+    std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::remove, std::string("key3"));
 
     scheduler->start();
 
     std::this_thread::sleep_for(sleep_time);
 
+    std::cerr << "\n=== Final Statistics ===" << std::endl;
     std::cerr << "Count Collection : " << count_collection << std::endl;
     std::cerr << "Count Collection Part : " << count_collection_part << std::endl;
     std::cerr << "Count Balancer : " << count_balancer << std::endl;
-    std::cerr << "Count Insert : " << count_balancer << std::endl;
+    std::cerr << "Count Insert : " << count_insert << std::endl;
+    std::cerr << "Count Update : " << count_update << std::endl;
+    std::cerr << "Count Remove : " << count_remove << std::endl;
+    std::cerr << "\nExpected: 6 messages balanced across 3 actors (round-robin)" << std::endl;
+
+    // Verify round-robin distribution
+    bool success = (count_balancer == 6) && (count_insert == 3) && (count_update == 2) && (count_remove == 1);
+    std::cerr << "\nTest result: " << (success ? "PASSED ✓" : "FAILED ✗") << std::endl;
+
     scheduler->stop();
-    return 0;
+    return success ? 0 : 1;
 }

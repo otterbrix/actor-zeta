@@ -467,6 +467,21 @@ Switch between profiles using the dropdown in CLion's toolbar.
 ❌ Reading only part of a header file (miss template specializations, friend functions)
 ❌ Skipping implementation files (.ipp) when modifying headers
 
+### API Usage (IMPORTANT)
+✅ **`make_behavior()` and `message*` are LEGITIMATE APIs** - do not "fix" them
+✅ **`behavior(message*)` method signature is CORRECT** - used by base class `cooperative_actor`
+✅ **`behavior_t` with `make_behavior()`** - provides compile-time message unpacking
+
+**These are NOT old/deprecated APIs:**
+- `make_behavior(resource, this, &Class::method)` - creates behavior with automatic argument unpacking
+- `behavior_t` - type-erased behavior object that unpacks message arguments
+- `void behavior(message*)` - virtual method called by base class, must use pointer
+- Direct `message*` usage in low-level code (tests, custom actors)
+
+**When to use each approach:**
+- **High-level actors (`basic_actor<T>`)**: Use `add_handler()` in constructor
+- **Low-level/test code**: Can use `make_behavior()` + `behavior(message*)` for fine control
+
 ## Recent Important Fixes (Session Memory)
 
 ### RTT (Runtime Type Container) - Same-Arena Only Migration
