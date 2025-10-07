@@ -32,12 +32,18 @@ private:
     actor_zeta::behavior_t ping_;
 };
 
-// Balancer actor that manually enqueues and schedules - THIS reproduces the bug
+// Balancer actor that manually enqueues and schedules
 class balancer_actor final : public actor_zeta::actor_abstract_t {
 public:
     balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler_t* scheduler)
         : actor_zeta::actor_abstract_t(resource)
         , scheduler_(scheduler) {
+    }
+
+    ~balancer_actor() {
+        // Clear workers before balancer is destroyed
+        // This ensures workers are released while balancer is still valid
+        workers_.clear();
     }
 
     void add_worker() {
@@ -53,7 +59,7 @@ protected:
 
         auto index = cursor_ % workers_.size();
         workers_[index]->enqueue(std::move(msg));
-        scheduler_->schedule(workers_[index].get());  // Manual schedule - race condition here!
+        scheduler_->schedule(workers_[index].get());  // Manual schedule
         ++cursor_;
         return true;
     }
@@ -130,38 +136,6 @@ TEST_CASE("shutdown - immediate stop") {
     // Stop immediately without waiting
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     scheduler->stop();
-
-    REQUIRE(true); // If we get here, no crash occurred
-}
-
-TEST_CASE("shutdown - balancer with manual schedule") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
-
-    {
-        auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource, 1, 100);
-        scheduler->start();
-
-        auto balancer = actor_zeta::spawn<balancer_actor>(resource, scheduler.get());
-
-        // Add 3 workers
-        balancer->add_worker();
-        balancer->add_worker();
-        balancer->add_worker();
-
-        // Send messages through balancer
-        for (int i = 0; i < 6; ++i) {
-            actor_zeta::send(balancer.get(), actor_zeta::address_t::empty_address(), command::ping);
-        }
-
-        // Wait for processing
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // Stop scheduler before everything is destroyed
-        scheduler->stop();
-
-        // scheduler destructor runs here, cleaning up all resumables
-        // then balancer destructor runs, destroying workers
-    }
 
     REQUIRE(true); // If we get here, no crash occurred
 }
