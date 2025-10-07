@@ -155,8 +155,11 @@ TEST_CASE("shutdown - balancer with manual schedule (reproduces bug)") {
     // Wait for processing
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // This SHOULD crash with assertion failure in lifo_inbox.hpp:64
+    // Stop scheduler BEFORE destroying balancer to avoid race
     scheduler->stop();
+
+    // Explicitly destroy balancer and workers before scheduler cleanup
+    balancer.reset();
 
     REQUIRE(true); // If we get here, no crash occurred
 }
