@@ -36,6 +36,8 @@ jobs:
             cxx_standard: 20
           - configuration: {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"10"}
             cxx_standard: 20
+          - configuration: {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"15"},
+            cxx_standard: 17
 
     runs-on: ubuntu-latest
     container:
