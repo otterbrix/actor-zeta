@@ -139,12 +139,12 @@ namespace {
                 : public actor_zeta::scheduler::resumable_t
                 , public actor_zeta::ref_counted {
             public:
-                actor_zeta::scheduler::resume_result resume(scheduler_t* ptr, size_t) override {
+                actor_zeta::scheduler::resume_info resume(scheduler_t* ptr, size_t) override {
                     assert(ptr != nullptr);
                     std::unique_lock<std::mutex> guard(mtx);
                     last_worker = ptr;
                     cv.notify_all();
-                    return actor_zeta::scheduler::resume_result::shutdown;
+                    return actor_zeta::scheduler::resume_info(actor_zeta::scheduler::resume_result::shutdown, 0);
                 }
 
                 void intrusive_ptr_add_ref_impl() override final {

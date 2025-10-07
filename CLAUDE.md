@@ -549,3 +549,52 @@ Switch between profiles using the dropdown in CLion's toolbar.
   - GCC 7, 8, 9, 10
   - Clang 9, 10
 - **Files affected:** Both Ubuntu workflow files
+
+### Manual Scheduling - Removed Auto-Scheduling from Actors
+- **Change:** Actors no longer self-schedule when messages are enqueued
+- **Reason:** Transitioning to fully manual scheduling for better control (load balancing, custom schedulers)
+- **Implementation:** Removed `intrusive_ptr_add_ref(this)` from `enqueue_impl()` when `unblocked_reader` occurs
+- **Behavior:**
+  - **Before:** Actor automatically scheduled itself when transitioning from blocked to unblocked
+  - **After:** Caller must explicitly call `scheduler->schedule(actor)` after `enqueue()`
+- **Usage pattern (balancer example):**
+  ```cpp
+  bool enqueue_impl(message_ptr msg) override {
+      auto& worker = workers_[cursor_++ % workers_.size()];
+      worker->enqueue(std::move(msg));        // Enqueue message
+      scheduler_->schedule(worker.get());      // Manual schedule - caller responsibility
+      return true;
+  }
+  ```
+- **Files affected:**
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:56-59` - removed auto-scheduling
+  - `test/shutdown/main.cpp` - balancer_actor example demonstrates manual scheduling pattern
+
+### Resume Info - Extended Actor Resume Result
+- **Feature:** `resume()` now returns `resume_info` struct with execution statistics
+- **Motivation:** Enable graceful shutdown monitoring and scheduler observability
+- **Implementation:**
+  ```cpp
+  struct resume_info {
+      resume_result result;           // Execution status (resume/awaiting/done/shutdown)
+      size_t messages_processed;      // Number of messages processed in this resume call
+
+      // Implicit conversion to resume_result for backward compatibility
+      operator resume_result() const noexcept { return result; }
+  };
+  ```
+- **Key design decisions:**
+  - **Implicit conversion:** Scheduler code doesn't need changes, can still switch on `resume_info` as `resume_result`
+  - **Messages processed:** Actual count of messages handled (not remaining - can't be reliably counted in lock-free inbox)
+  - **Simple API:** No conditions, modes, or extra fields - just result + count
+- **Use cases:**
+  - **Graceful shutdown:** Monitor `messages_processed` to know when actor has drained all messages
+  - **Scheduler telemetry:** Track actor execution statistics (throughput, fairness)
+  - **Load balancing:** Make scheduling decisions based on processing counts
+- **Files affected:**
+  - `header/actor-zeta/scheduler/resumable.hpp:21-40` - added `resume_info` struct
+  - `header/actor-zeta/scheduler/resumable.hpp:45` - changed virtual `resume()` signature to return `resume_info`
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:27-34` - updated `resume()` methods
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:86-150` - `resume_core_()` now returns `resume_info` with message count
+  - `header/actor-zeta/impl/scheduler/sharing_scheduler.ipp:142-148` - shutdown_helper returns `resume_info`
+- **Backward compatibility:** Existing scheduler code works unchanged via implicit conversion
