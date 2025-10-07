@@ -54,7 +54,7 @@ namespace actor_zeta { namespace base {
             assert(msg.get() != nullptr);
             switch (inbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
-                    intrusive_ptr_add_ref(this);
+>                    // Manual scheduling - caller must call scheduler->schedule(actor)
                     return true;
                 }
                 case detail::enqueue_result::success: {
@@ -88,6 +88,17 @@ namespace actor_zeta { namespace base {
             const size_t hq = nq * 3u;
             size_t handled = 0;
 
+            // Check if inbox is closed first (shutdown scenario)
+            if (inbox().closed()) {
+                return scheduler::resume_result::done;
+            }
+
+            // Check if inbox is blocked to avoid assertion in empty()
+            if (inbox().blocked()) {
+                // Inbox is blocked, try to resume (another thread may have enqueued)
+                return scheduler::resume_result::resume;
+            }
+
             if (inbox().empty()) {
                 return inbox().try_block()
                        ? scheduler::resume_result::awaiting
@@ -104,6 +115,11 @@ namespace actor_zeta { namespace base {
             };
 
             while (handled < max_throughput) {
+                // Check if inbox closed during processing
+                if (inbox().closed()) {
+                    return scheduler::resume_result::done;
+                }
+
                 inbox().fetch_more();
                 const size_t before = handled;
 
@@ -111,12 +127,20 @@ namespace actor_zeta { namespace base {
                 normal(inbox()).new_round(nq, handler);
 
                 if (handled == before) {
+                    // Check again before try_block
+                    if (inbox().closed()) {
+                        return scheduler::resume_result::done;
+                    }
                     return inbox().try_block()
                            ? scheduler::resume_result::awaiting
                            : scheduler::resume_result::resume;
                 }
             }
 
+            // Check before final try_block
+            if (inbox().closed()) {
+                return scheduler::resume_result::done;
+            }
             return inbox().try_block()
                    ? scheduler::resume_result::awaiting
                    : scheduler::resume_result::resume;

@@ -512,6 +512,36 @@ Switch between profiles using the dropdown in CLion's toolbar.
   - `.github/workflows/ubuntu_gcc.yaml` - fixed toolchain path
   - `.github/workflows/macos.yml` - fixed toolchain path
 
+### Shutdown Race Condition Fix (lifo_inbox blocked state)
+- **Issue:** Assertion failure `assert(!blocked())` in `lifo_inbox.hpp:64` during scheduler shutdown
+- **Root cause:** Race condition when `resume_core_()` calls `inbox().empty()` while inbox is in `blocked` state
+  - Thread 1 (actor): Processes messages, inbox becomes empty, tries to call `empty()` to check if should block
+  - Thread 2 (balancer): Calls `enqueue()` + `schedule()` manually, may set inbox to blocked state
+  - Thread 1: Resumes but inbox is now blocked, calling `empty()` triggers assertion
+- **Solution:** Check `inbox().blocked()` BEFORE calling `inbox().empty()` in `resume_core_()`
+- **Implementation:**
+  ```cpp
+  // Check if inbox is blocked first to avoid assertion in empty()
+  if (inbox().blocked()) {
+      // Inbox is blocked, try to resume (another thread may have enqueued)
+      return scheduler::resume_result::resume;
+  }
+
+  if (inbox().empty()) {
+      return inbox().try_block()
+             ? scheduler::resume_result::awaiting
+             : scheduler::resume_result::resume;
+  }
+  ```
+- **Why this works:**
+  - `blocked()` has no preconditions, safe to call anytime
+  - `empty()` requires `!blocked()` precondition per API contract
+  - If blocked, we should resume anyway to check for new messages
+- **Reproduces in:** Balancer pattern with manual `enqueue()` + `schedule()` calls
+- **Files affected:**
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:91-95` - added blocked() check
+  - `test/shutdown/main.cpp` - new test case reproduces the bug with balancer pattern
+
 ### CI/CD - Compiler C++20 Support
 - **Issue:** Old GCC/Clang versions don't support C++20
 - **Solution:** Added matrix exclusions for C++20 builds with older compilers
