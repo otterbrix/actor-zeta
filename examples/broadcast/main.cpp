@@ -112,7 +112,7 @@ public:
             return;
         }
 
-        // Direct broadcast - create and enqueue messages for each actor
+        // Direct broadcast - first enqueue to all actors
         for (std::size_t i = 0; i < end; ++i) {
             auto msg = actor_zeta::make_message(
                 resource(),
@@ -122,7 +122,7 @@ public:
             actors_[i]->enqueue(std::move(msg));
         }
 
-        // Schedule all actors
+        // Then schedule all actors once
         for (std::size_t i = 0; i < end; ++i) {
             e_->schedule(actors_[i].get());
         }
@@ -187,38 +187,27 @@ int main() {
 
     std::cerr << "=== Created " << actors << " worker actors ===" << std::endl;
 
-    int const task = 3;
+    // Broadcast download task - one message to all actors
+    std::cerr << "=== Broadcasting download task to all " << actors << " actors ===" << std::endl;
+    supervisor->broadcast_on_worker(worker_t::command_t::download, std::string("url"), std::string("user"), std::string("pass"));
 
-    std::cerr << "=== Broadcasting " << task << " download tasks ===" << std::endl;
-    for (auto i = 0; i < task; ++i) {
-        supervisor->broadcast_on_worker(worker_t::command_t::download, std::string("url"), std::string("user"), std::string("pass"));
-    }
-
-    std::cerr << "=== Broadcasting " << task << " work_data tasks ===" << std::endl;
-    for (auto i = 0; i < task; ++i) {
-        supervisor->broadcast_on_worker(worker_t::command_t::work_data, std::string("data"), std::string("operator"));
-    }
+    // Broadcast work_data task - one message to all actors
+    std::cerr << "=== Broadcasting work_data task to all " << actors << " actors ===" << std::endl;
+    supervisor->broadcast_on_worker(worker_t::command_t::work_data, std::string("data"), std::string("operator"));
 
     std::cerr << "=== Waiting for processing ===" << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::cerr << "\n=== Results ===" << std::endl;
     std::cerr << "Download messages processed: " << counter_download_data.load() << std::endl;
     std::cerr << "Work_data messages processed: " << counter_work_data.load() << std::endl;
 
-    auto expected = task * actors;
+    auto expected = actors; // One broadcast per type, all actors should process
     std::cerr << "Expected per counter: " << expected << std::endl;
 
-    // NOTE: This example has limitations with manual scheduling.
-    // The supervisor processes broadcast messages synchronously, but workers
-    // use the scheduler. After processing messages, workers may not be
-    // re-scheduled for subsequent broadcasts. This demonstrates the need for
-    // proper re-scheduling logic in broadcast patterns.
-
-    // Success if at least first broadcast reached all actors
-    bool passed = counter_download_data.load() >= actors;
-    std::cerr << "\nTest result (partial): " << (passed ? "PASSED ✓" : "FAILED ✗") << std::endl;
-    std::cerr << "(Note: This example demonstrates broadcast pattern limitations with manual scheduling)" << std::endl;
+    // Success if all broadcasts reached all actors
+    bool passed = counter_download_data.load() == expected && counter_work_data.load() == expected;
+    std::cerr << "\nTest result: " << (passed ? "PASSED ✓" : "FAILED ✗") << std::endl;
 
     return passed ? 0 : 1;
 }
