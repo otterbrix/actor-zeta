@@ -123,4 +123,4 @@ jobs:
         working-directory: build/${{ matrix.build_type }}
         run: |
           ls -alh -R
-          ldd bin/broadcast
+          ldd ./examples/balancer/balancer
