@@ -31,6 +31,6 @@ namespace actor_zeta {
                 std::forward<Args>(args)...));
     }
 
-    void enqueue(actor_zeta::scheduler_t* scheduler, actor_zeta::scheduler::resumable_t* ptr) ;
+    //void enqueue(actor_zeta::scheduler::scheduler_abstract_t* scheduler, actor_zeta::scheduler::resumable_t* ptr) ;
 
 } // namespace actor_zeta

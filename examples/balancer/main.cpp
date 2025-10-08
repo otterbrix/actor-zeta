@@ -88,7 +88,7 @@ private:
 
 class collection_t final : public actor_zeta::actor_abstract_t {
 public:
-    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler_t* scheduler)
+    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
         : actor_zeta::actor_abstract_t(resource)
         , e_(scheduler) {
         ++count_collection;
@@ -110,7 +110,7 @@ protected:
                 case actor_zeta::make_message_id(collection_method::find): {
                     auto index = cursor_ % actors_.size();
                     actors_[index]->enqueue(std::move(tmp));
-                    e_->schedule(actors_[index].get());
+                    e_->enqueue(actors_[index].get());
                     ++cursor_;
                     ++count_balancer;
                     return true;
@@ -124,7 +124,7 @@ protected:
     }
 
 private:
-    actor_zeta::scheduler_t* e_;
+    actor_zeta::scheduler::scheduler_abstract_t* e_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
 };
@@ -138,7 +138,7 @@ static constexpr auto sleep_time = std::chrono::milliseconds(100);
 int main() {
     auto* resource = actor_zeta::pmr::get_default_resource();
     auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource,1, 100);
-    auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());
+    auto collection = actor_zeta::spawn<collection_t>(resource, scheduler);
 
     std::cerr << "=== Creating 3 collection_part actors ===" << std::endl;
     collection->create();

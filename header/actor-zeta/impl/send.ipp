@@ -7,8 +7,4 @@ namespace actor_zeta {
         actor->enqueue(std::move(ptr));
     }
 
-    void enqueue(actor_zeta::scheduler_t* scheduler, actor_zeta::scheduler::resumable_t* ptr) {
-        scheduler->schedule(ptr);
-    }
-
 } // namespace actor_zeta

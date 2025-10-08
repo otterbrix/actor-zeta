@@ -24,7 +24,7 @@ namespace actor_zeta { namespace base {
     public:
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, Traits, actor_type::classic>, pmr::deleter_t>;
 
-        scheduler::resume_info resume(actor_zeta::scheduler::scheduler_t* sched, size_t max_throughput) noexcept final {
+        scheduler::resume_info resume(actor_zeta::scheduler::scheduler_abstract_t* sched, size_t max_throughput) noexcept final {
             detail::ignore_unused(sched);
             return resume_core_(max_throughput);
         }

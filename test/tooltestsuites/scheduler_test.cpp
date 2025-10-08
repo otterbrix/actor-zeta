@@ -27,8 +27,8 @@ namespace actor_zeta { namespace test {
 
     } // namespace
 
-    scheduler_test_t::scheduler_test_t(std::size_t , std::size_t ) {
-
+    scheduler_test_t::scheduler_test_t(std::size_t num_worker_threads, std::size_t max_throughput)
+        : scheduler_abstract_t(num_worker_threads, max_throughput) {
     }
 
     void scheduler_test_t::start() {}
@@ -37,7 +37,7 @@ namespace actor_zeta { namespace test {
         while (run() > 0) {}
     }
 
-    void scheduler_test_t::schedule(scheduler::resumable_t* ptr) {
+    void scheduler_test_t::enqueue(scheduler::resumable_t* ptr) {
         jobs.push_back(ptr);
     }
 

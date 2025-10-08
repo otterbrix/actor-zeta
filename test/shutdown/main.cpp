@@ -35,7 +35,7 @@ private:
 // Balancer actor that manually enqueues and schedules
 class balancer_actor final : public actor_zeta::actor_abstract_t {
 public:
-    balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler_t* scheduler)
+    balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
         : actor_zeta::actor_abstract_t(resource)
         , scheduler_(scheduler) {
     }
@@ -59,13 +59,13 @@ protected:
 
         auto index = cursor_ % workers_.size();
         workers_[index]->enqueue(std::move(msg));
-        scheduler_->schedule(workers_[index].get());  // Manual schedule
+        scheduler_->enqueue(workers_[index].get());  // Manual schedule
         ++cursor_;
         return true;
     }
 
 private:
-    actor_zeta::scheduler_t* scheduler_;
+    actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
     size_t cursor_ = 0;
     std::vector<worker_actor::unique_actor> workers_;
 };

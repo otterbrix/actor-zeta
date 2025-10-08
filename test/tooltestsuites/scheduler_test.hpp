@@ -5,11 +5,11 @@
 
 #include <deque>
 
-#include "actor-zeta/scheduler/scheduler.hpp"
+#include "actor-zeta/scheduler/scheduler_abstract.hpp"
 
 namespace actor_zeta { namespace test {
 
-    class scheduler_test_t final : public scheduler::scheduler_t {
+    class scheduler_test_t final : public scheduler::scheduler_abstract_t {
     public:
         scheduler_test_t(std::size_t num_worker_threads, std::size_t max_throughput);
 
@@ -21,7 +21,7 @@ namespace actor_zeta { namespace test {
     ///protected:
         void start() override;
         void stop() override;
-        void schedule(scheduler::resumable_t* ptr) override;
+        void enqueue(scheduler::resumable_t* ptr) override;
 
     private:
     };

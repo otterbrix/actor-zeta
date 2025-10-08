@@ -12,7 +12,7 @@
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
-auto thread_pool_deleter = [](actor_zeta::scheduler_t* ptr) {
+auto thread_pool_deleter = [](actor_zeta::scheduler::scheduler_abstract_t* ptr) {
     ptr->stop();
     delete ptr;
 };
@@ -83,6 +83,7 @@ public:
 
     ~supervisor_lite() {
         e_->stop();
+        delete e_;
     }
 
     void create() {
@@ -124,7 +125,7 @@ public:
 
         // Then schedule all actors once
         for (std::size_t i = 0; i < end; ++i) {
-            e_->schedule(actors_[i].get());
+            e_->enqueue(actors_[i].get());
         }
     }
 
@@ -158,13 +159,13 @@ private:
         }
         // Then schedule all actors once
         for (std::size_t i = 0; i != end; ++i) {
-            e_->schedule(actors_[i].get());
+            e_->enqueue(actors_[i].get());
         }
     }
 
     actor_zeta::behavior_t create_;
     actor_zeta::behavior_t broadcast_;
-    std::unique_ptr<actor_zeta::scheduler_t, actor_zeta::pmr::deleter_t> e_;
+    actor_zeta::scheduler::scheduler_abstract_t* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};
     std::mutex mutex_;

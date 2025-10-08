@@ -39,22 +39,24 @@ namespace actor_zeta {
         }
     };
 
-    struct resumable_t {
-        resumable_t();
-        virtual ~resumable_t();
-        virtual resume_info resume(scheduler_t*,max_throughput_t) = 0;
+    struct resumable {
+        resumable();
+        virtual ~resumable();
+        virtual resume_info resume(scheduler_abstract_t*, max_throughput_t) = 0;
         virtual void intrusive_ptr_add_ref_impl() = 0;
         virtual void intrusive_ptr_release_impl() = 0;
     };
 
+    using resumable_t = resumable;
+
     template<class T>
-    typename std::enable_if<std::is_same<T*, resumable_t*>::value>::type
+    typename std::enable_if<std::is_same<T*, resumable*>::value>::type
     intrusive_ptr_add_ref(T* ptr) {
         ptr->intrusive_ptr_add_ref_impl();
     }
 
     template<class T>
-    typename std::enable_if<std::is_same<T*, resumable_t*>::value>::type
+    typename std::enable_if<std::is_same<T*, resumable*>::value>::type
     intrusive_ptr_release(T* ptr) {
         ptr->intrusive_ptr_release_impl();
     }

@@ -64,7 +64,7 @@ public:
         check_status
     };
 
-    supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler_t* scheduler)
+    supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
         : actor_zeta::actor_abstract_t(ptr)
         , scheduler_(scheduler)
         , create_worker_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::create_worker))
@@ -128,7 +128,7 @@ private:
         worker->enqueue(std::move(msg));
 
         // Manual scheduling - IMPORTANT!
-        scheduler_->schedule(worker.get());
+        scheduler_->enqueue(worker.get());
     }
 
     void stop_workers() {
@@ -145,11 +145,11 @@ private:
                 address(),
                 worker_actor::command::get_status);
             worker->enqueue(std::move(msg));
-            scheduler_->schedule(worker.get());
+            scheduler_->enqueue(worker.get());
         }
     }
 
-    actor_zeta::scheduler_t* scheduler_;
+    actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> workers_;
     size_t next_worker_ = 0;
     std::mutex mutex_;
@@ -168,7 +168,7 @@ int main() {
     scheduler->start();
 
     // Create supervisor
-    auto supervisor = actor_zeta::spawn<supervisor_actor>(resource, scheduler.get());
+    auto supervisor = actor_zeta::spawn<supervisor_actor>(resource, scheduler);
 
     std::cerr << "=== Supervisor Example: Manual Scheduling ===" << std::endl;
     std::cerr << std::endl;
