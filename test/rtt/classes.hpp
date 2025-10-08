@@ -111,7 +111,7 @@ struct kamikaze {
 
     kamikaze(kamikaze&&) {
         if (instances_count > 4) {
-            throw std::runtime_error(u8"Привет!");
+            throw std::runtime_error(u8"Hello!");
         }
         ++instances_count;
     }
@@ -130,7 +130,7 @@ struct throw_on_move {
     throw_on_move(const throw_on_move&) = default;
     throw_on_move& operator=(const throw_on_move&) = default;
     throw_on_move(throw_on_move&&) {
-        throw std::runtime_error(u8"Пока!");
+        throw std::runtime_error(u8"Goodbye!");
     }
     throw_on_move& operator=(throw_on_move&&) = default;
     ~throw_on_move() = default;

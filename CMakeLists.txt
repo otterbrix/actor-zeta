@@ -27,7 +27,7 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (default Debug)" FORCE)
 endif()
 
-# Флаги RTTI/Exceptions
+# RTTI/Exceptions flags
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     if (EXCEPTIONS_DISABLE)
         message(STATUS "Disable C++ exceptions (MSVC).")

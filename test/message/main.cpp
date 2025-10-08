@@ -43,7 +43,7 @@ void check_seq_insert_at_end(Seq& v, actor_zeta::pmr::memory_resource* res) {
     v.clear();
 }
 
-// Для queue<message>
+// For queue<message>
 inline void check_queue_push(std::queue<message>& q,
                              actor_zeta::pmr::memory_resource* res) {
     q.emplace(res, address_t::empty_address(), one);
@@ -53,7 +53,7 @@ inline void check_queue_push(std::queue<message>& q,
     while (!q.empty()) q.pop();
 }
 
-// --- Для map<size_t, message> ---
+// --- For map<size_t, message> ---
 
 inline void check_map_basic(std::map<size_t, message>& m,
                             actor_zeta::pmr::memory_resource* res) {
@@ -136,12 +136,12 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("simple") {
-        // 1) простое сообщение через make_message
+        // 1) simple message via make_message
         auto msg = actor_zeta::make_message(resource, address_t::empty_address(), one);
-        REQUIRE( static_cast<bool>(msg) ); // оператор bool у message_ptr
+        REQUIRE( static_cast<bool>(msg) ); // message_ptr has operator bool
         REQUIRE( msg->command() == actor_zeta::make_message_id(1) );
 
-        // 2) отдельный payload - используем специализированный move constructor rtt
+        // 2) separate payload - use specialized rtt move constructor
         rtt body(resource, int(1));
         message msg2(resource, address_t::empty_address(), one, std::move(body));
         REQUIRE(msg2.body().get<int>(0) == 1);
@@ -161,7 +161,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         message msg1(resource, address_t::empty_address(), three);
         REQUIRE( msg1.command() == actor_zeta::make_message_id(3) );
 
-        // Используем allocator-extended move constructor (PMR migration)
+        // Use allocator-extended move constructor (PMR migration)
         message msg2(std::allocator_arg, resource, std::move(msg1));
         REQUIRE( msg2.command() == actor_zeta::make_message_id(3) );
     }
@@ -180,7 +180,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
 
         REQUIRE( msg.sender() == addr );
 
-        // Проверка различных перегрузок sender()
+        // Check different sender() overloads
         const message& const_msg = msg;
         REQUIRE( const_msg.sender() == addr );
     }
@@ -194,17 +194,17 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     // containing non-trivial types, as it would require proper copy construction
     // which is impossible without runtime type information
     SECTION("rtt same-arena migration") {
-        // Создаем rtt в arena
+        // Create rtt in arena
         auto* arena = actor_zeta::pmr::get_default_resource();
         rtt rtt1(arena, int(42), std::string("test"), double(3.14));
         REQUIRE( rtt1.get<int>(0) == 42 );
         REQUIRE( rtt1.get<std::string>(1) == "test" );
         REQUIRE( rtt1.get<double>(2) == 3.14 );
 
-        // Same-arena миграция через allocator-extended move constructor
+        // Same-arena migration via allocator-extended move constructor
         rtt rtt2(std::allocator_arg, arena, std::move(rtt1));
 
-        // Проверяем что данные сохранились после миграции
+        // Verify data is preserved after migration
         REQUIRE( rtt2.get<int>(0) == 42 );
         REQUIRE( rtt2.get<std::string>(1) == "test" );
         REQUIRE( rtt2.get<double>(2) == 3.14 );

@@ -186,7 +186,7 @@ TEST_CASE("Different Resources", "[unique_function]") {
         actor_zeta::detail::unique_function<int(int)> small_func1(&resource1, small_functor(10));
         actor_zeta::detail::unique_function<int(int)> small_func2(&resource2, small_functor(20));
 
-        // Малые функторы всегда успешно перемещаются, так как не используют ресурс
+        // Small functors always move successfully since they don't use the resource
         REQUIRE(small_func1(5) == 15);
         REQUIRE(small_func2(5) == 25);
 
@@ -200,23 +200,23 @@ TEST_CASE("Different Resources", "[unique_function]") {
         actor_zeta::detail::unique_function<std::string(int)> large_func1(&resource1, large_functor("One"));
         actor_zeta::detail::unique_function<std::string(int)> large_func2(&resource2, large_functor("Two"));
 
-        // Проверка функциональности до перемещения
+        // Verify functionality before move
         REQUIRE(large_func1(42) == "One: 42");
         REQUIRE(large_func2(42) == "Two: 42");
 
-        // При перемещении между разными ресурсами оба объекта становятся пустыми
+        // When moving between different resources both objects become empty
         large_func2 = std::move(large_func1);
 
-        // Проверка, что оба объекта стали пустыми
+        // Verify both objects became empty
         REQUIRE(large_func1.empty());
         REQUIRE(large_func2.empty());
 
-        // Проверка, что память не утекает
+        // Verify no memory leaks
         REQUIRE(resource1.allocations() == 1);
         REQUIRE(resource2.allocations() == 1);
 
-        // Нельзя проверить вызов пустой функции, так как это вызовет assert
-        // Вместо этого просто проверяем, что функция пуста
+        // Cannot test calling empty function as it would trigger assert
+        // Instead just verify the function is empty
         REQUIRE_FALSE(large_func2);
     }
 
@@ -227,14 +227,14 @@ TEST_CASE("Different Resources", "[unique_function]") {
         REQUIRE(large_func1(42) == "One: 42");
         REQUIRE(large_func2(42) == "Two: 42");
 
-        // При совместимых ресурсах перемещение работает нормально
+        // With compatible resources move works normally
         large_func2 = std::move(large_func1);
 
         REQUIRE(large_func1.empty());
         REQUIRE_FALSE(large_func2.empty());
         REQUIRE(large_func2(42) == "One: 42");
 
-        // Проверка, что память не утекает
+        // Verify no memory leaks
         REQUIRE(resource1.allocations() == 2);
     }
 }
@@ -271,7 +271,7 @@ TEST_CASE("Swap Operations", "[unique_function]") {
     }
 }
 
-// 1. Тест на различные сигнатуры функций
+// 1. Test for different function signatures
 TEST_CASE("Function Signatures", "[unique_function]") {
     test_memory_resource resource;
 
@@ -303,7 +303,7 @@ TEST_CASE("Function Signatures", "[unique_function]") {
     }
 }
 
-// 2. Тест на проверку reset() и проверки пустоты
+// 2. Test for reset() and empty checks
 TEST_CASE("Reset and Empty Checks", "[unique_function]") {
     test_memory_resource resource;
 
@@ -347,7 +347,7 @@ TEST_CASE("Reset and Empty Checks", "[unique_function]") {
     }
 }
 
-// 3. Тест на граничные случаи размера буфера
+// 3. Test for buffer size edge cases
 TEST_CASE("Buffer Size Edge Cases", "[unique_function]") {
     test_memory_resource resource;
 
@@ -380,23 +380,23 @@ TEST_CASE("Buffer Size Edge Cases", "[unique_function]") {
     }
 }
 
-// 4. Тест на самоприсваивание и повторное присваивание
+// 4. Test for self-assignment and multiple reassignments
 TEST_CASE("Self-Assignment and Multiple Assignments", "[unique_function]") {
     test_memory_resource resource;
 
     SECTION("Self-assignment") {
         actor_zeta::detail::unique_function<int(int)> func(&resource, [](int x) { return x * 2; });
 
-        // Сохраняем адрес для проверки, что объект тот же самый
+        // Save address to verify object remains the same
         const void* func_address = &func;
 
-        // Самоприсваивание должно быть безопасным
+        // Self-assignment should be safe
         func = std::move(func);
 
-        // Проверяем, что адрес не изменился
+        // Verify address hasn't changed
         REQUIRE(&func == func_address);
 
-        // Функция должна сохранить свою функциональность
+        // Function should retain its functionality
         REQUIRE_FALSE(func.empty());
         REQUIRE(func(5) == 10);
     }
@@ -406,19 +406,19 @@ TEST_CASE("Self-Assignment and Multiple Assignments", "[unique_function]") {
 
         actor_zeta::detail::unique_function<int(int)> func(&resource, [](int x) { return x; });
 
-        // Последовательное переприсваивание
+        // Sequential reassignment
         for (int i = 1; i <= 10; ++i) {
             func = actor_zeta::detail::unique_function<int(int)>(&resource, [i](int x) { return x * i; });
             REQUIRE(func(2) == 2 * i);
         }
 
-        // Проверка на утечки памяти
+        // Check for memory leaks
         func.reset();
         REQUIRE(resource.all_deallocated());
     }
 }
 
-// 5. Тест на совместимость с std::function и различными функторами
+// 5. Test for compatibility with std::function and various functors
 TEST_CASE("Compatibility with Standard Functors", "[unique_function]") {
     test_memory_resource resource;
 
@@ -451,7 +451,7 @@ TEST_CASE("Compatibility with Standard Functors", "[unique_function]") {
     }
 }
 
-// 6. Тест на различные типы результатов
+// 6. Test for different return types
 TEST_CASE("Different Return Types", "[unique_function]") {
     test_memory_resource resource;
 
@@ -480,7 +480,7 @@ TEST_CASE("Different Return Types", "[unique_function]") {
                 return value;
             });
 
-        func() = 100; // Изменяем значение через ссылку
+        func() = 100; // Change value via reference
         REQUIRE(value == 100);
     }
 }

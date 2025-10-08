@@ -137,37 +137,37 @@ namespace actor_zeta { namespace detail {
 
             if (other.destroy_) {
                 if (other.uses_small_buffer_) {
-                    // Малые объекты всегда перемещаются успешно
+                    // Small objects always move successfully
                     uses_small_buffer_ = true;
                     invoke_ = other.invoke_;
                     destroy_ = other.destroy_;
                     std::memcpy(small_buffer_, other.small_buffer_, buffer_size);
 
-                    // Источник становится пустым
+                    // Source becomes empty
                     other.invoke_ = nullptr;
                     other.destroy_ = nullptr;
                 } else {
-                    // Большие объекты требуют совместимые ресурсы
+                    // Large objects require compatible resources
                     if (other.large_obj_.res_ != resource) {
-                        // При разных ресурсах - явно освобождаем память источника
-                        // и делаем оба объекта пустыми
+                        // With different resources - explicitly free source memory
+                        // and make both objects empty
 
-                        // Сохраняем указатели для освобождения
+                        // Save pointers for deallocation
                         void* ptr = other.large_obj_.ptr_;
                         pmr::memory_resource* res = other.large_obj_.res_;
                         destroy_fn_t destroy_fn = other.destroy_;
 
-                        // Делаем источник пустым
+                        // Make source empty
                         other.invoke_ = nullptr;
                         other.destroy_ = nullptr;
                         other.large_obj_.ptr_ = nullptr;
 
-                        // Освобождаем память источника через его функцию destroy
+                        // Free source memory via its destroy function
                         destroy_fn(ptr, res);
 
-                        // Целевой объект остается пустым
+                        // Target object remains empty
                     } else {
-                        // При совместимых ресурсах - стандартное перемещение
+                        // With compatible resources - standard move
                         uses_small_buffer_ = false;
                         invoke_ = other.invoke_;
                         destroy_ = other.destroy_;
@@ -221,36 +221,36 @@ namespace actor_zeta { namespace detail {
 
                 if (other.destroy_) {
                     if (other.uses_small_buffer_) {
-                        // Малые объекты всегда перемещаются успешно
+                        // Small objects always move successfully
                         uses_small_buffer_ = true;
                         invoke_ = other.invoke_;
                         destroy_ = other.destroy_;
                         std::memcpy(small_buffer_, other.small_buffer_, buffer_size);
 
-                        // Источник становится пустым
+                        // Source becomes empty
                         other.invoke_ = nullptr;
                         other.destroy_ = nullptr;
                     } else {
-                        // Большие объекты требуют совместимые ресурсы
+                        // Large objects require compatible resources
                         if (!uses_small_buffer_ && large_obj_.res_ != other.large_obj_.res_) {
-                            // При разных ресурсах - явно освобождаем память источника
+                            // With different resources - explicitly free source memory
 
-                            // Сохраняем указатели для освобождения
+                            // Save pointers for deallocation
                             void* ptr = other.large_obj_.ptr_;
                             pmr::memory_resource* res = other.large_obj_.res_;
                             destroy_fn_t destroy_fn = other.destroy_;
 
-                            // Делаем источник пустым
+                            // Make source empty
                             other.invoke_ = nullptr;
                             other.destroy_ = nullptr;
                             other.large_obj_.ptr_ = nullptr;
 
-                            // Освобождаем память источника через его функцию destroy
+                            // Free source memory via its destroy function
                             destroy_fn(ptr, res);
 
-                            // Целевой объект остается пустым после destroy()
+                            // Target object remains empty after destroy()
                         } else {
-                            // При совместимых ресурсах - стандартное перемещение
+                            // With compatible resources - standard move
                             uses_small_buffer_ = false;
                             invoke_ = other.invoke_;
                             destroy_ = other.destroy_;
