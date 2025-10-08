@@ -68,7 +68,7 @@ public:
         e_->stop();
     }
 
-    auto make_type() const noexcept -> const char* const {
+    const char* make_type() const noexcept {
         return "collection";
     }
 
@@ -105,7 +105,7 @@ public:
     actor_zeta::behavior_t behavior() {
         return actor_zeta::make_behavior(
             base_t::resource(),
-            [this](actor_zeta::message* msg) -> void {
+            [](actor_zeta::message* msg) -> void {
                 switch (msg->command()) {
                     /*case actor_zeta::make_message_id(command_t::prepare): {
                         prepare();

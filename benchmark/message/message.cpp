@@ -28,7 +28,6 @@ namespace benchmark_messages {
                     actor_zeta::base::address_t::empty_address(),
                     name_);
                 auto tmp = sizeof(*message);
-                delete message;
                 if (static_cast<int64_t>(tmp) > static_cast<int64_t>(benchmark_messages::message_sz))
                     benchmark_messages::message_sz = static_cast<int64_t>(tmp);
             }
@@ -65,7 +64,6 @@ namespace benchmark_messages {
                     name_,
                     std::forward<Args>(args)...);
                 auto tmp = sizeof(*message);
-                delete message;
                 if (static_cast<int64_t>(tmp) > static_cast<int64_t>(benchmark_messages::message_sz))
                     benchmark_messages::message_sz = static_cast<int64_t>(tmp);
             }

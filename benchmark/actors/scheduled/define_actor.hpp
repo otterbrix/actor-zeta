@@ -18,7 +18,7 @@ struct counter_args_t {
 };
 
 template<class Sup>
-auto set_done(Sup* sup_ptr_)->void {
+auto set_done(Sup* sup_ptr_) -> void {
 #ifdef BM_TRACE
     std::cout << std::this_thread::get_id() << " :: Going to sem done ... .. . " << reinterpret_cast<void*>(sup_ptr_) << std::endl;
 #endif
@@ -39,8 +39,8 @@ class actor_t final : public actor_zeta::basic_actor<actor_t> {
     }
 
 public:
-    template<class Supervisor, class ...Args>
-    actor_t(Supervisor* ptr, Args ...args)
+    template<class Supervisor, class... Args>
+    actor_t(Supervisor* ptr, Args...)
         : actor_zeta::basic_actor<actor_t>(ptr)
         , add_address_(
             actor_zeta::make_behavior(
@@ -59,7 +59,7 @@ public:
         , ping_(
             actor_zeta::make_behavior(
                 resource(),
-                command_t::ping, [this](Args... args) -> void {
+                command_t::ping, [this](Args... ) -> void {
                     counter_g++;
 #ifdef BM_TRACE
                     std::cout << std::this_thread::get_id() << " :: PING " << reinterpret_cast<void*>(this) << std::endl;
@@ -69,7 +69,7 @@ public:
         , pong_(
             actor_zeta::make_behavior(
                 resource(),
-                command_t::pong, [this, ptr](Args... args) -> void {
+                command_t::pong, [ptr](Args... ) -> void {
                     counter_g++;
 #ifdef BM_TRACE
                     std::cout << std::this_thread::get_id() << " :: PONG " << reinterpret_cast<void*>(this) << std::endl;
@@ -78,7 +78,7 @@ public:
                 }))
     {}
 
-    auto make_type() const noexcept -> const char* const {
+    const char* make_type() const noexcept {
         return "actor";
     }
 

@@ -17,11 +17,11 @@
 template<class... Params_local>
 class fixture_t : public ::benchmark::Fixture {
 protected:
-    std::unique_ptr<supervisor_t<Params_local...>, actor_zeta::deleter> sup_;
+    std::unique_ptr<supervisor_t<Params_local...>, actor_zeta::pmr::deleter_t> sup_;
 
 public:
     fixture_t()
-        : sup_(nullptr, actor_zeta::deleter(nullptr)) {}
+        : sup_(nullptr, actor_zeta::pmr::deleter_t(nullptr)) {}
 
     virtual void SetUp(__attribute__((unused)) const ::benchmark::State& state) final {     
         auto* resource = actor_zeta::pmr::get_default_resource();
@@ -49,10 +49,10 @@ public:
             assert(counter_g == 2);                             \
         }                                                       \
     }                                                           \
-    BENCHMARK_REGISTER_F(fixture, bm_name)->DenseRange(0, 8, 9);
+    BENCHMARK_REGISTER_F(fixture, bm_name)->DenseRange(0, 32, 8);
 
 #define REGISTER_BENCHMARKS__(name, ...) \
-    REGISTER_TEMPLATE_BENCHMARK(fixture_t, ping_pong_single_threaded##name, __VA_ARGS__);
+    REGISTER_TEMPLATE_BENCHMARK(fixture_t, ping_pong_single_threaded_##name, __VA_ARGS__);
 
 #define REGISTER_BENCHMARKS(type) \
     REGISTER_BENCHMARKS__(_1_##type,  type) \

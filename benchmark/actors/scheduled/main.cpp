@@ -3,14 +3,14 @@
 #include "fixtures.hpp"
 
 REGISTER_BENCHMARKS(int8_t);
-/*REGISTER_BENCHMARKS(int16_t);
+REGISTER_BENCHMARKS(int16_t);
 REGISTER_BENCHMARKS(int32_t);
 REGISTER_BENCHMARKS(int64_t);
 
 REGISTER_BENCHMARKS(uint8_t);
 REGISTER_BENCHMARKS(uint16_t);
 REGISTER_BENCHMARKS(uint32_t);
-REGISTER_BENCHMARKS(uint64_t);*/
+REGISTER_BENCHMARKS(uint64_t);
 
 ///class memory_manager_t : public benchmark::MemoryManager {
 ///    void Start() BENCHMARK_OVERRIDE {}
