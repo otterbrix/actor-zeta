@@ -55,12 +55,12 @@ namespace actor_zeta { namespace scheduler {
                 : public resumable
                 , public ref_counted {
             public:
-                resume_result resume(execution_unit* ptr, size_t) override {
+                resume_info resume(scheduler_abstract_t* ptr, size_t) override {
                     assert(ptr != nullptr);
                     std::unique_lock<std::mutex> guard(mtx);
                     last_worker = ptr;
                     cv.notify_all();
-                    return resume_result::shutdown;
+                    return resume_info(resume_result::shutdown, 0);
                 }
 
                 void intrusive_ptr_add_ref_impl() override {
@@ -75,7 +75,7 @@ namespace actor_zeta { namespace scheduler {
 
                 std::mutex mtx;
                 std::condition_variable cv;
-                execution_unit* last_worker;
+                scheduler_abstract_t* last_worker;
             };
             // Use a set to keep track of remaining workers.
             shutdown_helper sh;
@@ -86,12 +86,13 @@ namespace actor_zeta { namespace scheduler {
                 sh.ref(); // Make sure reference count is high enough.
             }
             while (!alive_workers.empty()) {
-                (*alive_workers.begin())->external_enqueue(&sh);
+                auto it = alive_workers.begin();
+                (*it)->external_enqueue(&sh);
                 { // lifetime scope of guard
                     std::unique_lock<std::mutex> guard(sh.mtx);
                     sh.cv.wait(guard, [&] { return sh.last_worker != nullptr; });
                 }
-                alive_workers.erase(static_cast<worker_type*>(sh.last_worker));
+                alive_workers.erase(it);
                 sh.last_worker = nullptr;
             }
 

@@ -1,3 +1,5 @@
+#include "actor-zeta/scheduler/scheduler.hpp"
+
 #include <cassert>
 
 #include <chrono>
@@ -6,21 +8,20 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <thread>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 std::atomic_int count_collection_part{0};
 std::atomic_int count_collection{0};
 std::atomic_int count_balancer{0};
 std::atomic_int count_insert{0};
+std::atomic_int count_remove{0};
+std::atomic_int count_update{0};
 std::atomic_int count_find{0};
 
-auto thread_pool_deleter = [](actor_zeta::scheduler_abstract_t* ptr) {
-    ptr->stop();
-    delete ptr;
-};
-
-class collection_part_t;
+class collection_t;
 
 enum class collection_method : uint64_t {
     insert = 0x00,
@@ -29,110 +30,50 @@ enum class collection_method : uint64_t {
     find
 };
 
-class collection_t final : public actor_zeta::cooperative_supervisor<collection_t> {
-public:
-    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler_abstract_t* scheduler)
-        : actor_zeta::cooperative_supervisor<collection_t>(resource)
-        , e_(scheduler) {
-        ++count_collection;
-    }
-
-    void create() {
-        spawn_actor([this](collection_part_t* ptr) {
-            actors_.emplace_back(ptr);
-        });
-    }
-
-    const char* make_type() const noexcept {
-        return "collection";
-    }
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(collection_method::insert):
-                    case actor_zeta::make_message_id(collection_method::remove):
-                    case actor_zeta::make_message_id(collection_method::update):
-                    case actor_zeta::make_message_id(collection_method::find): {
-                        auto index = cursor_ % actors_.size();
-                        actors_[index]->enqueue(current_message_own());
-                        ++cursor_;
-                        ++count_balancer;
-                        break;
-                    }
-                    default: {
-                        std::cerr << "unknown command" << std::endl;
-                    }
-                }
-            });
-    }
-
-    auto make_scheduler() noexcept -> actor_zeta::scheduler_abstract_t* {
-        return e_;
-    }
-
-protected:
-    auto enqueue_impl(actor_zeta::message_ptr msg, actor_zeta::execution_unit*) -> void final {
-        set_current_message(std::move(msg));
-        behavior()(current_message());
-    }
-
-private:
-    actor_zeta::scheduler_abstract_t* e_;
-    uint32_t cursor_ = 0;
-    std::vector<actor_zeta::actor_t> actors_;
-};
-
 class collection_part_t final : public actor_zeta::basic_actor<collection_part_t> {
 public:
-    collection_part_t(collection_t* ptr)
+    collection_part_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<collection_part_t>(ptr)
-        , insert_(actor_zeta::make_behavior(resource(), collection_method::insert, [this](std::string& key, std::string& value) -> void {
+        , insert_(actor_zeta::make_behavior(resource(), [this](std::string& key, std::string& value) -> void {
             data_.emplace(key, value);
             std::cerr << id() << " " << key << " " << value << std::endl;
             ++count_insert;
         }))
-        , remove_(actor_zeta::make_behavior(resource(), collection_method::remove, [this](std::string& key) -> void {
+        , remove_(actor_zeta::make_behavior(resource(),  [this](std::string& key) -> void {
             data_.erase(key);
+            std::cerr << id() << " remove " << key << std::endl;
+            ++count_remove;
         }))
-        , update_(actor_zeta::make_behavior(resource(), collection_method::update, [this](std::string& key, std::string& value) -> void {
+        , update_(actor_zeta::make_behavior(resource(),  [this](std::string& key, std::string& value) -> void {
             data_[key] = value;
+            std::cerr << id() << " update " << key << " = " << value << std::endl;
+            ++count_update;
         }))
-        , find_(actor_zeta::make_behavior(resource(), collection_method::find, [this](std::string& key) -> std::string {
+        , find_(actor_zeta::make_behavior(resource(), [this](std::string& key) -> std::string {
             return data_[key];
         })) {
         ++count_collection_part;
     }
 
-    const char* make_type() const noexcept {
-        return "collection";
-    }
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(collection_method::insert): {
-                        insert_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(collection_method::remove): {
-                        remove_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(collection_method::update): {
-                        update_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(collection_method::find): {
-                        find_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(collection_method::insert): {
+                insert_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(collection_method::remove): {
+                remove_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(collection_method::update): {
+                update_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(collection_method::find): {
+                find_(msg);
+                break;
+            }
+        }
     }
 
 private:
@@ -143,29 +84,96 @@ private:
     std::unordered_map<std::string, std::string> data_;
 };
 
-static constexpr auto sleep_time = std::chrono::milliseconds(60);
 
-auto main() -> int {
+
+class collection_t final : public actor_zeta::actor_abstract_t {
+public:
+    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
+        : actor_zeta::actor_abstract_t(resource)
+        , e_(scheduler) {
+        ++count_collection;
+    }
+
+    void create() {
+        auto ptr = actor_zeta::spawn<collection_part_t> (resource());
+        actors_.emplace_back(std::move(ptr));
+
+    }
+
+protected:
+    bool enqueue_impl(actor_zeta::message_ptr msg) {
+        auto tmp = std::move(msg);
+            switch (tmp->command()) {
+                case actor_zeta::make_message_id(collection_method::insert):
+                case actor_zeta::make_message_id(collection_method::remove):
+                case actor_zeta::make_message_id(collection_method::update):
+                case actor_zeta::make_message_id(collection_method::find): {
+                    auto index = cursor_ % actors_.size();
+                    actors_[index]->enqueue(std::move(tmp));
+                    e_->enqueue(actors_[index].get());
+                    ++cursor_;
+                    ++count_balancer;
+                    return true;
+                }
+                default: {
+                    std::cerr << "unknown command" << std::endl;
+                    return false;
+                }
+            }
+
+    }
+
+private:
+    actor_zeta::scheduler::scheduler_abstract_t* e_;
+    uint32_t cursor_ = 0;
+    std::vector<collection_part_t::unique_actor> actors_;
+};
+
+
+
+static constexpr auto sleep_time = std::chrono::milliseconds(100);
+
+
+
+int main() {
     auto* resource = actor_zeta::pmr::get_default_resource();
-    std::unique_ptr<actor_zeta::scheduler_abstract_t, decltype(thread_pool_deleter)> scheduler(
-        new actor_zeta::scheduler_t<actor_zeta::work_sharing>(1, 100),
-        thread_pool_deleter);
-    auto collection = actor_zeta::spawn_supervisor<collection_t>(resource, scheduler.get());
+    auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource,1, 100);
+    auto collection = actor_zeta::spawn<collection_t>(resource, scheduler);
+
+    std::cerr << "=== Creating 3 collection_part actors ===" << std::endl;
     collection->create();
     collection->create();
     collection->create();
-    actor_zeta::send(collection, actor_zeta::address_t::empty_address(), collection_method::insert, std::string("1"), std::string("5"));
-    actor_zeta::send(collection, actor_zeta::address_t::empty_address(), collection_method::insert, std::string("1"), std::string("5"));
-    actor_zeta::send(collection, actor_zeta::address_t::empty_address(), collection_method::insert, std::string("1"), std::string("5"));
+
+    std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key1"), std::string("value1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key2"), std::string("value2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key3"), std::string("value3"));
+
+    std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::update, std::string("key1"), std::string("updated1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::update, std::string("key2"), std::string("updated2"));
+
+    std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::remove, std::string("key3"));
 
     scheduler->start();
 
     std::this_thread::sleep_for(sleep_time);
 
+    std::cerr << "\n=== Final Statistics ===" << std::endl;
     std::cerr << "Count Collection : " << count_collection << std::endl;
     std::cerr << "Count Collection Part : " << count_collection_part << std::endl;
     std::cerr << "Count Balancer : " << count_balancer << std::endl;
-    std::cerr << "Count Insert : " << count_balancer << std::endl;
+    std::cerr << "Count Insert : " << count_insert << std::endl;
+    std::cerr << "Count Update : " << count_update << std::endl;
+    std::cerr << "Count Remove : " << count_remove << std::endl;
+    std::cerr << "\nExpected: 6 messages balanced across 3 actors (round-robin)" << std::endl;
 
-    return 0;
+    // Verify round-robin distribution
+    bool success = (count_balancer == 6) && (count_insert == 3) && (count_update == 2) && (count_remove == 1);
+    std::cerr << "\nTest result: " << (success ? "PASSED ✓" : "FAILED ✗") << std::endl;
+
+    scheduler->stop();
+    return success ? 0 : 1;
 }

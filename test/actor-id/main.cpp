@@ -6,9 +6,12 @@
 #include <map>
 #include <set>
 #include <string>
+#include <list>
 
-#include <actor-zeta.hpp>
+#include "actor-zeta/detail/memory.hpp"
 #include "test/tooltestsuites/scheduler_test.hpp"
+#include <actor-zeta.hpp>
+#include <actor-zeta/spawn.hpp>
 
 using actor_zeta::pmr::memory_resource;
 class dummy_supervisor;
@@ -18,13 +21,17 @@ enum class command_t {
     create = 0x00
 };
 
-class dummy_supervisor final : public actor_zeta::cooperative_supervisor<dummy_supervisor> {
+class dummy_supervisor final {
 public:
-    dummy_supervisor(memory_resource* ptr)
-        : actor_zeta::cooperative_supervisor<dummy_supervisor>(ptr)
-        , create_(actor_zeta::make_behavior(resource(), command_t::create, this, &dummy_supervisor::create))
+    dummy_supervisor(memory_resource* resource_ptr)
+        : resource_(resource_ptr)
+        , create_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create))
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
-        scheduler()->start();
+        executor_->start();
+    }
+
+    actor_zeta::pmr::memory_resource* resource() const noexcept {
+        return resource_;
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
@@ -33,77 +40,53 @@ public:
 
     void create();
 
-    const char* make_type() const noexcept {
-        return "dummy_supervisor";
-    }
-
-    auto make_scheduler() noexcept -> actor_zeta::scheduler_abstract_t* {
-        return executor_.get();
-    }
-
-
-protected:
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(command_t::create): {
-                        create_(msg);
-                        break;
-                    }
-                }
-            });
-    }
-    auto enqueue_impl(actor_zeta::message_ptr msg, actor_zeta::execution_unit*) -> void final {
-        {
-            set_current_message(std::move(msg));
-            behavior()(current_message());
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(command_t::create): {
+                create_(msg);
+                break;
+            }
         }
     }
 
+    void enqueue_impl(actor_zeta::message_ptr msg) {
+        auto tmp = std::move(msg);
+        behavior(tmp.get());
+    }
+
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::behavior_t create_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
+    std::list<std::unique_ptr<storage_t, actor_zeta::pmr::deleter_t>> storage_;
     std::set<int64_t> ids_;
 };
 
-
 class storage_t final : public actor_zeta::basic_actor<storage_t> {
 public:
-    storage_t(dummy_supervisor* ptr)
-        : actor_zeta::basic_actor<storage_t>(ptr) {
+    explicit storage_t(actor_zeta::pmr::memory_resource* resource_ptr, dummy_supervisor* )
+        : actor_zeta::basic_actor<storage_t>(resource_ptr) {
     }
 
-    const char* make_type() const noexcept {
-        return "storage";
-    }
+    void behavior(actor_zeta::mailbox::message*) {
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [](actor_zeta::message* ) -> void {
-
-            });
     }
 
     ~storage_t() override = default;
 };
 
 void dummy_supervisor::create() {
-    spawn_actor([this](storage_t* ptr) {
-        REQUIRE(actor_zeta::base::actor_abstract::id_t(static_cast<actor_zeta::base::actor_abstract*>(ptr)) == ptr->id());
-        REQUIRE(ids_.find(reinterpret_cast<int64_t>(ptr)) == ids_.end());
-        ids_.insert(reinterpret_cast<int64_t>(ptr));
-    });
+    auto uptr = actor_zeta::spawn<storage_t>(resource_, reinterpret_cast<dummy_supervisor*>(this));
+    REQUIRE(ids_.find(reinterpret_cast<int64_t>(uptr.get())) == ids_.end());
+    ids_.insert(reinterpret_cast<int64_t>(uptr.get()));
+    ///scheduler_test()->enqueue(uptr.get());
+    storage_.emplace_back(std::move(uptr));
 }
 
 TEST_CASE("actor id match") {
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
-    auto supervisor = actor_zeta::spawn_supervisor<dummy_supervisor>(mr_ptr);
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto supervisor = std::unique_ptr<dummy_supervisor>(new dummy_supervisor(resource));
     for (auto i = 0; i < 1000; ++i) { //todo: 10000000
-        actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), command_t::create);
-        supervisor->scheduler_test()->run_once();
+        supervisor->create();
     }
 }

@@ -4,6 +4,6 @@
 
 namespace actor_zeta { namespace scheduler {
 
-    unprofiled::~unprofiled() {}
+    unprofiled::~unprofiled() = default;
 
 }} // namespace actor_zeta::scheduler

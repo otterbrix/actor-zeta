@@ -8,6 +8,7 @@ file(GLOB ${PROJECT_NAME}_HEADERS
 file(GLOB ${PROJECT_NAME}_SOURCES
     ./*.cpp
 )
+find_package(Catch2 2.13 REQUIRED)
 
 message(STATUS "PROJECT_NAME = ${PROJECT_NAME}")
 
@@ -16,9 +17,9 @@ add_executable(${PROJECT_NAME}
     ${${PROJECT_NAME}_HEADERS})
 
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC actor-zeta
-    PUBLIC tooltestsuites
-    PUBLIC CONAN_PKG::catch2
+        PRIVATE actor-zeta
+        PRIVATE Catch2::Catch2
+        PRIVATE tooltestsuites
 )
 
 include(CTest)

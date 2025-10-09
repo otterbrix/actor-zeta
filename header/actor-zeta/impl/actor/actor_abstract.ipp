@@ -12,27 +12,29 @@
 
 namespace actor_zeta { namespace base {
 
-    actor_abstract::~actor_abstract() {
-    }
+    actor_abstract_t::actor_abstract_t(pmr::memory_resource* resource)
+        : resource_([](pmr::memory_resource* resource) {assert(resource);return resource; }(resource)) {}
 
-    auto actor_abstract::address() noexcept -> address_t {
+    actor_abstract_t::~actor_abstract_t() {}
+
+    address_t actor_abstract_t::address() noexcept {
         return address_t(this);
     }
 
-    void actor_abstract::enqueue(mailbox::message_ptr msg) {
-        enqueue(std::move(msg), nullptr);
+    bool actor_abstract_t::enqueue(mailbox::message_ptr msg) {
+        return enqueue_impl(std::move(msg));
     }
 
-    auto actor_abstract::type() const noexcept -> const char* {
-        return type_impl();
+    void actor_abstract_t::operator delete(void*) noexcept{
+
     }
 
-    void actor_abstract::enqueue(mailbox::message_ptr msg, scheduler::execution_unit* e) {
-        enqueue_impl(std::move(msg), e);
+    auto actor_abstract_t::id() const -> id_t {
+        return id_t{const_cast<actor_abstract_t*>(this)};
     }
 
-    auto actor_abstract::id() const -> id_t {
-        return id_t{const_cast<actor_abstract*>(this)};
+    actor_zeta::pmr::memory_resource* actor_abstract_t::resource() const noexcept {
+        return resource_;
     }
 
 }} // namespace actor_zeta::base

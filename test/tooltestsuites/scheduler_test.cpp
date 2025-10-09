@@ -3,20 +3,21 @@
 #include "scheduler_test.hpp"
 // clang-format on
 
-#include <actor-zeta/scheduler/execution_unit.hpp>
+#include "actor-zeta/scheduler/resumable.hpp"
+
 #include <limits>
 
 namespace actor_zeta { namespace test {
 
     namespace {
 
-        class dummy_worker : public scheduler::execution_unit {
+        class dummy_worker {
         public:
             dummy_worker(scheduler_test_t* parent)
                 : parent_(parent) {
             }
 
-            void execute_later(scheduler::resumable* ptr) override {
+            void execute_later(scheduler::resumable_t* ptr) {
                 parent_->jobs.push_back(ptr);
             }
 
@@ -26,24 +27,17 @@ namespace actor_zeta { namespace test {
 
     } // namespace
 
-    scheduler_test_t::scheduler_test_t(std::size_t num_worker_threads,
-                                       std::size_t max_throughput)
-        : super(num_worker_threads, max_throughput) {
-    }
-
-    clock_test& scheduler_test_t::clock() noexcept {
-        return clock_;
+    scheduler_test_t::scheduler_test_t(std::size_t num_worker_threads, std::size_t max_throughput)
+        : scheduler_abstract_t(num_worker_threads, max_throughput) {
     }
 
     void scheduler_test_t::start() {}
 
     void scheduler_test_t::stop() {
-        while (run() > 0) {
-            clock_.trigger_timeouts();
-        }
+        while (run() > 0) {}
     }
 
-    void scheduler_test_t::enqueue(scheduler::resumable* ptr) {
+    void scheduler_test_t::enqueue(scheduler::resumable_t* ptr) {
         jobs.push_back(ptr);
     }
 
@@ -54,7 +48,7 @@ namespace actor_zeta { namespace test {
         auto job = jobs.front();
         jobs.pop_front();
         dummy_worker worker{this};
-        switch (job->resume(&worker, 1)) {
+        switch (job->resume(this, 1)) {
             case scheduler::resume_result::resume:
                 jobs.push_front(job);
                 break;
@@ -76,7 +70,5 @@ namespace actor_zeta { namespace test {
         return res;
     }
 
-    size_t scheduler_test_t::advance_time(clock::clock_t::duration_type time) {
-        return clock_.advance_time(time);
-    }
+
 }} // namespace actor_zeta::test

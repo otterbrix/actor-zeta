@@ -1,51 +1,37 @@
 #pragma once
 
-#include "hfsm.hpp"
 #include "traits_actor.hpp"
 #include <actor-zeta/base/actor_abstract.hpp>
 #include <actor-zeta/base/behavior.hpp>
 #include <actor-zeta/base/forwards.hpp>
-#include <actor-zeta/scheduler/resumable.hpp>
+#include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
+#include <actor-zeta/scheduler/resumable.hpp>
+#include <actor-zeta/detail/ignore_unused.hpp>
 
 namespace actor_zeta { namespace base {
 
+    template<class Target>
+    Target* check_ptr(Target* ptr) {
+        assert(ptr);
+        return ptr;
+    }
+
     template<class Actor, class Traits>
     class cooperative_actor<Actor, Traits, actor_type::classic>
-        : public actor_abstract
-        , private scheduler::resumable {
+         : public actor_abstract_t
+         , public scheduler::resumable_t {
     public:
-        scheduler::resume_result resume(scheduler::execution_unit* e, size_t max_throughput) final {
-            if (!activate(e)) {
-                return scheduler::resume_result::done;
-            }
-            static constexpr size_t quantum = 3;
-            size_t handled_msgs = 0;
-            mailbox::message_ptr ptr;
+        using unique_actor = std::unique_ptr<cooperative_actor<Actor, Traits, actor_type::classic>, pmr::deleter_t>;
 
-            auto handle_async = [this, max_throughput, &handled_msgs](mailbox::message& x) -> detail::task_result {
-                reactivate(x);
-                return ++handled_msgs < max_throughput
-                           ? detail::task_result::resume
-                           : detail::task_result::stop_all;
-            };
-
-            while (handled_msgs < max_throughput) {
-                inbox().fetch_more();
-                auto prev_handled_msgs = handled_msgs;
-                high(inbox()).new_round(quantum * 3, handle_async);
-                normal(inbox()).new_round(quantum, handle_async);
-                if (handled_msgs == prev_handled_msgs && inbox().try_block()) {
-                    return scheduler::resume_result::awaiting;
-                }
-            }
-            if (inbox().try_block()) {
-                return scheduler::resume_result::awaiting;
-            }
-            return scheduler::resume_result::resume;
+        scheduler::resume_info resume(actor_zeta::scheduler::scheduler_abstract_t* sched, size_t max_throughput) noexcept final {
+            detail::ignore_unused(sched);
+            return resume_core_(max_throughput);
         }
 
-        ~cooperative_actor() override {}
+        scheduler::resume_info resume(size_t max_throughput) noexcept {
+            return resume_core_(max_throughput);
+        }
 
         void intrusive_ptr_add_ref_impl() final {
             ref();
@@ -56,105 +42,120 @@ namespace actor_zeta { namespace base {
         }
 
     protected:
-        template<
-            class Supervisor,
-            class = type_traits::enable_if_t<std::is_base_of<supervisor_abstract, Supervisor>::value>>// todo: check Supervisoar is a pointer
-        cooperative_actor(Supervisor* ptr)
-            : actor_abstract()
-            , supervisor_([](supervisor_abstract*ptr) { assert(ptr);return ptr; }(static_cast<supervisor_abstract*>(ptr)))
-            , stack_(resource())
+        cooperative_actor(pmr::memory_resource* in_resource)
+            : actor_abstract_t(check_ptr(in_resource))
             , inbox_(mailbox::priority_message(),
                      high_priority_queue(mailbox::high_priority_message()),
                      normal_priority_queue(mailbox::normal_priority_message())) {
             inbox().try_block(); //todo: bug
         }
 
-        auto type_impl() const noexcept -> const char* final {
-            auto const *ptr = static_cast<const Actor*>(this);
-            return ptr->make_type();
-        }
-
-        template<class T>
-        typename Traits::template allocator_type<T> allocator() const noexcept {
-            return Traits::template allocator_type<T>(supervisor().resource());
-        }
-
-        pmr::memory_resource* resource() const noexcept {
-            return supervisor()->resource();
-        }
-
-        void enqueue_impl(mailbox::message_ptr msg, scheduler::execution_unit* e) final {
-            assert(msg);
+        bool enqueue_impl(mailbox::message_ptr msg) final {
+            assert(msg.get() != nullptr);
             switch (inbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
-                    intrusive_ptr_add_ref(this);
-                    if (e != nullptr) {
-                        context(e);
-                        context()->execute_later(this);
-                    } else {
-                        supervisor()->scheduler()->enqueue(this);
-                    }
-                    break;
+                    return true;
                 }
-                case detail::enqueue_result::success:
-                    break;
-                case detail::enqueue_result::queue_closed:
-                    break;
+                case detail::enqueue_result::success: {
+                    return true;
+                }
+                case detail::enqueue_result::queue_closed: {
+                    return false;
+                }
+                default: {
+                    assert(false && "enqueue_result: unreachable");
+                    return false;
+                }
             }
-        }
-
-        auto current_message() -> mailbox::message* {
-            return current_message_;
-        }
-
-        auto set_current_message(mailbox::message_ptr msg) -> void {
-            current_message_ = msg.release();
-        }
-
-        void become(behavior_t behavior) {
-            become_impl(std::move(behavior), true);
-        }
-
-        void become(const keep_behavior_t&, behavior_t behavior) {
-            become_impl(std::move(behavior), false);
-        }
-
-        void unbecome() {
-            stack_.pop_back();
         }
 
     private:
-        void become_impl(behavior_t behavior, bool discard_old) {
-            if (discard_old && !stack_.empty()) {
-                stack_.pop_back();
+        class current_msg_guard final {
+        public:
+            current_msg_guard(cooperative_actor* s, mailbox::message* m) noexcept
+                : self(s), prev(s->current_message_) { self->current_message_ = m; }
+            ~current_msg_guard() noexcept { self->current_message_ = nullptr; }
+        private:
+            cooperative_actor* self;
+            mailbox::message*  prev;
+            current_msg_guard(const current_msg_guard&);
+            current_msg_guard& operator=(const current_msg_guard&);
+        };
+
+        scheduler::resume_info resume_core_(size_t max_throughput) noexcept {
+            const size_t nq = 3u;
+            const size_t hq = nq * 3u;
+            size_t handled = 0;
+
+            // Check if inbox is closed first (shutdown scenario)
+            if (inbox().closed()) {
+                return scheduler::resume_info(scheduler::resume_result::done, 0);
             }
 
-            if (behavior) {
-                stack_.push_back(std::move(behavior));
+            // Check if inbox is blocked to avoid assertion in empty()
+            if (inbox().blocked()) {
+                // Inbox is blocked, try to resume (another thread may have enqueued)
+                return scheduler::resume_info(scheduler::resume_result::resume, 0);
             }
+
+            if (inbox().empty()) {
+                auto result = inbox().try_block()
+                              ? scheduler::resume_result::awaiting
+                              : scheduler::resume_result::resume;
+                return scheduler::resume_info(result, 0);
+            }
+
+            auto handler = [this, &handled, max_throughput](mailbox::message& m) noexcept -> detail::task_result {
+                current_msg_guard guard(this, &m);
+                self()->behavior(current_message_);
+                ++handled;
+                return (handled < max_throughput)
+                       ? detail::task_result::resume
+                       : detail::task_result::stop_all;
+            };
+
+            while (handled < max_throughput) {
+                // Check if inbox closed during processing
+                if (inbox().closed()) {
+                    return scheduler::resume_info(scheduler::resume_result::done, handled);
+                }
+
+                inbox().fetch_more();
+                const size_t before = handled;
+
+                high(inbox()).new_round(hq, handler);
+                normal(inbox()).new_round(nq, handler);
+
+                if (handled == before) {
+                    // Check again before try_block
+                    if (inbox().closed()) {
+                        return scheduler::resume_info(scheduler::resume_result::done, handled);
+                    }
+                    auto result = inbox().try_block()
+                                  ? scheduler::resume_result::awaiting
+                                  : scheduler::resume_result::resume;
+                    return scheduler::resume_info(result, handled);
+                }
+            }
+
+            // Check before final try_block
+            if (inbox().closed()) {
+                return scheduler::resume_info(scheduler::resume_result::done, handled);
+            }
+            auto result = inbox().try_block()
+                          ? scheduler::resume_result::awaiting
+                          : scheduler::resume_result::resume;
+            return scheduler::resume_info(result, handled);
         }
 
-        bool has_behavior() const noexcept {
-            return !stack_.empty();
+
+        mailbox::message* current_message() noexcept { return current_message_; }
+
+        inline const Actor* self() const noexcept {
+            return static_cast<const Actor*>(this);
         }
 
-        behavior_t& current_behavior() {
-            return stack_.back();
-        }
-
-        detail::hfsm& stack() {
-            return stack_;
-        }
-
-        bool is_live() const noexcept {
-            return !stack_.empty();
-        }
-
-        auto self() noexcept -> Actor* {
-            return static_cast<Actor*>(this);
-        }
-
-        auto self() const noexcept -> Actor* {
+        inline Actor* self() noexcept {
             return static_cast<Actor*>(this);
         }
 
@@ -162,47 +163,6 @@ namespace actor_zeta { namespace base {
             return inbox_;
         }
 
-        bool activate(scheduler::execution_unit* ctx) {
-            assert(ctx != nullptr);
-            if (ctx) {
-                context(ctx);
-            }
-            return true;
-        }
-
-        auto reactivate(mailbox::message& x) -> void {
-            current_message_ = &x;
-            if (stack_.empty()) {
-                stack_.emplace_back(std::move(self()->behavior()));
-            } else {
-                ///todo: coroutine support
-            }
-
-            auto& behavior = stack_.back();
-            invoke(behavior,self(), current_message_);
-        }
-
-        auto context(scheduler::execution_unit* e) -> void {
-            if (e != nullptr) {
-                executor_ = e;
-            }
-        }
-
-        auto context() const noexcept -> scheduler::execution_unit* {
-            return executor_;
-        }
-
-        auto supervisor() noexcept -> supervisor_abstract* {
-            return supervisor_;
-        }
-
-        auto supervisor() const noexcept -> const supervisor_abstract* {
-            return supervisor_;
-        }
-
-        supervisor_abstract* supervisor_;
-        detail::hfsm stack_;
-        scheduler::execution_unit* executor_;
         mailbox::message* current_message_;
         typename Traits::inbox_t inbox_;
     };

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <actor-zeta/detail/pmr/aligned_allocate.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
+#include <actor-zeta/detail/pmr/aligned_allocate.hpp>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -96,8 +97,8 @@ namespace actor_zeta { namespace detail {
 
     public:
         template<typename... Args>
-        explicit rtt(actor_zeta::pmr::memory_resource* memory_resource, Args&&... args)
-            : memory_resource_(nullptr)
+        explicit rtt(actor_zeta::pmr::memory_resource* resource, Args&&... args)
+            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(0)
             , volume_(0)
             , allocation(nullptr)
@@ -105,8 +106,6 @@ namespace actor_zeta { namespace detail {
             , objects_(nullptr)
             , objects_idx_(0) {
             constexpr std::size_t sz = getSize<0, Args...>();
-            memory_resource_ = memory_resource ? memory_resource : actor_zeta::pmr::get_default_resource();
-            assert(memory_resource_);
             capacity_ = sz;
             allocation = memory_resource_->allocate(capacity_ + capacity_ * sizeof(objects_t));
             assert(allocation);
@@ -121,10 +120,9 @@ namespace actor_zeta { namespace detail {
             rtt_test::templated_ctor_++;
 #endif
         }
-        // https://github.com/duckstax/actor-zeta/issues/118
-        // @TODO Remove default ctors for actor_zeta::base::message and actor_zeta::detail::rtt (message body) #118
-        rtt()
-            : memory_resource_(actor_zeta::pmr::get_default_resource())
+
+        rtt(actor_zeta::pmr::memory_resource* resource)
+            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(0)
             , volume_(0)
             , allocation(nullptr)
@@ -135,7 +133,10 @@ namespace actor_zeta { namespace detail {
             rtt_test::default_ctor_++;
 #endif
         }
-        rtt(rtt&& other)
+
+        rtt() = delete;
+
+        rtt(rtt&& other) noexcept
             : memory_resource_(other.memory_resource_)
             , capacity_(other.capacity_)
             , volume_(other.volume_)
@@ -154,6 +155,42 @@ namespace actor_zeta { namespace detail {
             rtt_test::move_ctor_++;
 #endif
         }
+
+
+        rtt(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, rtt&& other) noexcept
+            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+            , capacity_(0)
+            , volume_(0)
+            , allocation(nullptr)
+            , data_(nullptr)
+            , objects_(nullptr)
+            , objects_idx_(0) {
+
+            // Only same-arena move is supported for type-erased container
+            // Cross-arena migration would require copying non-trivial types which is not possible
+            // without knowing their actual types at runtime
+            assert(resource == other.memory_resource_ && "Cross-arena RTT migration is not supported");
+
+            // Same arena - cheap move (just steal pointers)
+            capacity_ = other.capacity_;
+            volume_ = other.volume_;
+            allocation = other.allocation;
+            data_ = other.data_;
+            objects_ = other.objects_;
+            objects_idx_ = other.objects_idx_;
+
+            other.memory_resource_ = nullptr;
+            other.capacity_ = 0;
+            other.volume_ = 0;
+            other.allocation = nullptr;
+            other.data_ = nullptr;
+            other.objects_ = nullptr;
+            other.objects_idx_ = 0;
+
+#ifdef __ENABLE_TESTS_MEASUREMENTS__
+            rtt_test::move_ctor_++;
+#endif
+        }
         rtt(const rtt& other) = delete;
         rtt(rtt& other) = delete;
         ~rtt() {
@@ -161,6 +198,13 @@ namespace actor_zeta { namespace detail {
         }
 
         rtt& operator=(rtt&& other) noexcept {
+            if (this == &other) return *this;
+
+            // Only same-arena move assignment is supported
+            // If different arenas, we require explicit handling by the user
+            assert((memory_resource_ == other.memory_resource_ || memory_resource_ == nullptr)
+                   && "Cross-arena RTT move assignment is not supported");
+
             clear();
 
             memory_resource_ = other.memory_resource_;
@@ -185,6 +229,7 @@ namespace actor_zeta { namespace detail {
 
             return *this;
         }
+
         rtt& operator=(const rtt& other) = delete;
         rtt& operator=(rtt& other) = delete;
 

@@ -1,12 +1,21 @@
 #pragma once
 
+#include <cassert>
+
 #include "forwards.hpp"
 #include <type_traits>
 
 namespace actor_zeta { namespace base {
     ///
-    /// @brief A compact location expressor
+    /// @brief
     ///
+
+    template<class Target>
+    actor_abstract_t* safe_cast_ptr(Target* ptr) {
+        assert(ptr != nullptr);
+        return ptr;
+    }
+
     class address_t final {
     public:
         address_t(address_t&& other) noexcept;
@@ -15,22 +24,23 @@ namespace actor_zeta { namespace base {
         address_t& operator=(const address_t& other);
         bool operator==(const address_t& rhs) noexcept;
         ~address_t() noexcept;
-        explicit address_t(actor_abstract*);
-        explicit address_t(supervisor_abstract*);
+
+        template<class Target>
+        explicit address_t(Target*ptr):ptr_(safe_cast_ptr(ptr)) {}
+
         static auto empty_address() -> address_t;
 
-        inline actor_abstract* operator->() const noexcept {
+        inline actor_abstract_t* operator->() const noexcept {
             return ptr_;
         }
 
         operator bool() const noexcept;
         auto operator!() const noexcept -> bool;
         void swap(address_t& other);
-        actor_abstract* get() const;
 
     private:
         address_t() noexcept;
-        actor_abstract* ptr_;
+        actor_abstract_t* ptr_;
     };
 
     static_assert(!std::is_default_constructible<address_t>::value, "");

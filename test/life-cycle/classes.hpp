@@ -16,8 +16,7 @@ enum class dummy_supervisor_command : uint64_t {
     create_test_handlers = 2
 };
 
-class dummy_supervisor final
-    : public actor_zeta::cooperative_supervisor<dummy_supervisor> {
+class dummy_supervisor final : public actor_zeta::actor_abstract_t {
 public:
     static uint64_t constructor_counter;
     static uint64_t destructor_counter;
@@ -26,88 +25,62 @@ public:
     static uint64_t add_supervisor_impl_counter;
     static uint64_t enqueue_base_counter;
 
-    explicit dummy_supervisor(actor_zeta::pmr::memory_resource* mr, uint64_t threads, uint64_t throughput)
-        : actor_zeta::cooperative_supervisor<dummy_supervisor>(mr)
-        , create_storage_(actor_zeta::make_behavior(resource(), dummy_supervisor_command::create_storage, this, &dummy_supervisor::create_storage))
-        , create_test_handlers_(actor_zeta::make_behavior(resource(), dummy_supervisor_command::create_test_handlers, this, &dummy_supervisor::create_test_handlers))
+    dummy_supervisor(actor_zeta::pmr::memory_resource* resource, uint64_t threads, uint64_t throughput)
+        : actor_abstract_t(resource)
+        , create_storage_(actor_zeta::make_behavior(resource, this, &dummy_supervisor::create_storage))
+        , create_test_handlers_(actor_zeta::make_behavior(resource, this, &dummy_supervisor::create_test_handlers))
         , executor_(new actor_zeta::test::scheduler_test_t(threads, throughput)) {
-        scheduler()->start();
+        scheduler_test()->start();
         constructor_counter++;
     }
+
+    dummy_supervisor(const dummy_supervisor&) = delete;
+    dummy_supervisor& operator=(const dummy_supervisor&) = delete;
 
     ~dummy_supervisor() {
         destructor_counter++;
     }
 
-
-    const char* make_type() const noexcept {
-        return "dummy_supervisor";
-    }
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(dummy_supervisor_command::create_storage): {
-                        create_storage_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(dummy_supervisor_command::create_test_handlers): {
-                        create_test_handlers_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(dummy_supervisor_command::create_storage): {
+                create_storage_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(dummy_supervisor_command::create_test_handlers): {
+                create_test_handlers_(msg);
+                break;
+            }
+        }
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
-        return executor_.get();
-    }
-
-    void create_storage();
-    void create_test_handlers();
-
-    void start() {}
-    void stop() {}
-
-    auto make_scheduler() noexcept -> actor_zeta::scheduler_abstract_t* {
         TRACE("+++");
         executor_impl_counter++;
         return executor_.get();
     }
 
+
+    void create_storage();
+    void create_test_handlers();
+
     auto actors_count() const -> size_t {
-        return actors_.size();
+        return storages_.size()+test_handlers_.size();
     }
 
-    auto supervisors_count() const -> size_t {
-        return supervisor_.size();
-    }
-
-    auto last_actor() -> actor_zeta::actor_t& {
-        assert(actors_count() > 0);
-        TRACE("+++");
-        return actors_.back();
-    }
-
-    auto last_supervisor() -> actor_zeta::supervisor_t& {
-        assert(supervisors_count() > 0);
-        return supervisor_.back();
-    }
-
-    void enqueue_impl(actor_zeta::message_ptr msg, actor_zeta::execution_unit*) override {
+    bool enqueue_impl(actor_zeta::message_ptr msg) override  {
         enqueue_base_counter++;
-        set_current_message(std::move(msg));
-        behavior()(current_message());
+        auto tmp_msg =  (std::move(msg));
+        behavior(tmp_msg.get());
+        return true;
     }
 
 private:
     actor_zeta::behavior_t create_storage_;
     actor_zeta::behavior_t create_test_handlers_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
-    std::list<actor_zeta::actor_t> actors_;
-    std::list<actor_zeta::supervisor_t> supervisor_;
+    std::list<std::unique_ptr<storage_t,actor_zeta::pmr::deleter_t>> storages_;
+    std::list<std::unique_ptr<test_handlers,actor_zeta::pmr::deleter_t>> test_handlers_;
 };
 
 uint64_t dummy_supervisor::constructor_counter = 0;
@@ -140,66 +113,54 @@ public:
     static uint64_t create_table_counter;
 
 public:
-    explicit storage_t(dummy_supervisor* ptr)
-        : actor_zeta::basic_actor<storage_t>(ptr)
+    explicit storage_t(actor_zeta::pmr::memory_resource* resource_)
+        : actor_zeta::basic_actor<storage_t>(resource_)
         , init_(actor_zeta::make_behavior(
               resource(),
-              storage_names::init, this,
+              this,
               &storage_t::init))
         , search_(actor_zeta::make_behavior(
               resource(),
-              storage_names::search,
               this,
               &storage_t::search))
         , add_(actor_zeta::make_behavior(
               resource(),
-              storage_names::add,
               this,
               &storage_t::add))
         , delete_table_(actor_zeta::make_behavior(
               resource(),
-              storage_names::delete_table,
               this,
               &storage_t::delete_table))
         , create_table_(actor_zeta::make_behavior(
               resource(),
-              storage_names::create_table,
               this,
               &storage_t::create_table)) {
         constructor_counter++;
     }
 
-    const char* make_type() const noexcept {
-        return "storage";
-    }
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command().integer_value()) {
-                    case actor_zeta::make_message_id(storage_names::init): {
-                        init_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::search): {
-                        search_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::add): {
-                        add_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::delete_table): {
-                        delete_table_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(storage_names::create_table): {
-                        create_table_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command().integer_value()) {
+            case actor_zeta::make_message_id(storage_names::init): {
+                init_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::search): {
+                search_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::add): {
+                add_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::delete_table): {
+                delete_table_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(storage_names::create_table): {
+                create_table_(msg);
+                break;
+            }
+        }
     }
 
     ~storage_t() override {
@@ -281,32 +242,28 @@ public:
     static uint64_t ptr_4_counter;
 
 public:
-    test_handlers(dummy_supervisor* ptr)
+    test_handlers(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_handlers>(ptr)
         , ptr_0_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_0,
               []() {
                   TRACE("+++");
                   ptr_0_counter++;
               }))
         , ptr_1_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_1,
               []() {
                   TRACE("+++");
                   ptr_1_counter++;
               }))
         , ptr_2_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_2,
               [](int&) {
                   TRACE("+++");
                   ptr_2_counter++;
               }))
         , ptr_3_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_3,
               [](int data_1, int& data_2) {
                   TRACE("+++");
                   std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
@@ -314,7 +271,6 @@ public:
               }))
         , ptr_4_(actor_zeta::make_behavior(
               resource(),
-              test_handlers_names::ptr_4,
               [](int data_1, int& data_2, const std::string& data_3) {
                   TRACE("+++");
                   std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
@@ -323,41 +279,34 @@ public:
         init();
     }
 
-    const char* make_type() const noexcept {
-        return "test_handlers";
-    }
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command().integer_value()) {
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_0): {
-                        ptr_0_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_1): {
-                        ptr_1_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_2): {
-                        ptr_2_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_3): {
-                        ptr_3_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(test_handlers_names::ptr_4): {
-                        ptr_4_(msg);
-                        break;
-                    }
-                    default: {
-                        TRACE("+++");
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command().integer_value()) {
+            case actor_zeta::make_message_id(test_handlers_names::ptr_0): {
+                ptr_0_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_1): {
+                ptr_1_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_2): {
+                ptr_2_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_3): {
+                ptr_3_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(test_handlers_names::ptr_4): {
+                ptr_4_(msg);
+                break;
+            }
+            default: {
+                TRACE("+++");
+                break;
+            }
+        }
     }
 
     ~test_handlers() override = default;
@@ -383,18 +332,18 @@ uint64_t test_handlers::ptr_2_counter = 0;
 uint64_t test_handlers::ptr_3_counter = 0;
 uint64_t test_handlers::ptr_4_counter = 0;
 
+
 void dummy_supervisor::create_storage() {
-    spawn_actor([this](storage_t* ptr) {
-        TRACE("+++");
-        actors_.emplace_back(ptr);
-        add_actor_impl_counter++;
-    });
+    TRACE("+++");
+    auto uptr = actor_zeta::spawn<storage_t>(resource());
+    storages_.emplace_back(std::move(uptr));
+    add_actor_impl_counter++;
 }
 
 void dummy_supervisor::create_test_handlers() {
-    spawn_actor([this](test_handlers* ptr) {
-        TRACE("+++");
-        actors_.emplace_back(ptr);
-        add_actor_impl_counter++;
-    });
+    TRACE("+++");
+    auto uptr = actor_zeta::spawn<test_handlers>(resource());
+    test_handlers_.emplace_back(std::move(uptr));
+    add_actor_impl_counter++;
+
 }

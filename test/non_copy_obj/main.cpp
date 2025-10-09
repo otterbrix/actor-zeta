@@ -24,13 +24,13 @@ struct dummy_data {
     std::string name{"default_name"};
 };
 
-class dummy_supervisor final : public actor_zeta::cooperative_supervisor<dummy_supervisor> {
+class dummy_supervisor final : public actor_zeta::actor_abstract_t {
 public:
     dummy_supervisor(memory_resource* ptr)
-        : actor_zeta::cooperative_supervisor<dummy_supervisor>(ptr)
-        , check_(actor_zeta::make_behavior(resource(), command_t::check, this, &dummy_supervisor::check))
+        : actor_abstract_t(ptr)
+        , check_(actor_zeta::make_behavior(resource(), this, &dummy_supervisor::check))
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
-        scheduler()->start();
+        executor_->start();
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
@@ -39,32 +39,19 @@ public:
 
     void check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
 
-    const char* make_type() const noexcept {
-        return "dummy_supervisor";
-    }
-
-    auto make_scheduler() noexcept -> actor_zeta::scheduler_abstract_t* {
-        return executor_.get();
-    }
-
-protected:
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(command_t::check): {
-                        check_(msg);
-                        break;
-                    }
-                }
-            });
-    }
-    auto enqueue_impl(actor_zeta::message_ptr msg, actor_zeta::execution_unit*) -> void final {
-        {
-            set_current_message(std::move(msg));
-            behavior()(current_message());
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(command_t::check): {
+                check_(msg);
+                break;
+            }
         }
+    }
+
+    bool enqueue_impl(actor_zeta::message_ptr msg) override {
+        auto tmp_msg = std::move(msg);
+        behavior(tmp_msg.get());
+        return true;
     }
 
 private:
@@ -82,7 +69,7 @@ void dummy_supervisor::check(std::unique_ptr<dummy_data>&& data, dummy_data expe
 
 TEST_CASE("base move test") {
     auto* mr_ptr = actor_zeta::pmr::get_default_resource();
-    auto supervisor = actor_zeta::spawn_supervisor<dummy_supervisor>(mr_ptr);
+    auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
 
     auto ptr_data = std::unique_ptr<dummy_data>(new dummy_data);
     auto data = dummy_data();
@@ -93,7 +80,7 @@ TEST_CASE("base move test") {
 
 TEST_CASE("construct in place") {
     auto* mr_ptr = actor_zeta::pmr::get_default_resource();
-    auto supervisor = actor_zeta::spawn_supervisor<dummy_supervisor>(mr_ptr);
+    auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
 
     auto data = dummy_data();
 

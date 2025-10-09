@@ -6,48 +6,87 @@
 #include <actor-zeta/mailbox/message.hpp>
 // clang-format on
 
+#include <actor-zeta/detail/type_traits.hpp>
+#include <utility>
+
 namespace actor_zeta {
 
-    template<class T>
-    auto make_message_ptr(base::address_t sender_, T name) -> mailbox::message_ptr {
-        return  mailbox::message_ptr(new mailbox::message(std::move(sender_), mailbox::make_message_id(static_cast<uint64_t>(name))));
+    namespace detail {
+
+        template<typename Name>
+        typename std::enable_if<
+            std::is_same<typename std::decay<Name>::type, mailbox::message_id>::value,
+            mailbox::message_id>::type
+        to_message_id(Name&& name) {
+            return std::forward<Name>(name);
+        }
+
+        template<typename Name>
+        typename std::enable_if<
+            !std::is_same<typename std::decay<Name>::type, mailbox::message_id>::value &&
+                (std::is_enum<typename std::decay<Name>::type>::value ||
+                 std::is_integral<typename std::decay<Name>::type>::value),
+            mailbox::message_id>::type
+        to_message_id(Name&& name) {
+            return mailbox::make_message_id(static_cast<uint64_t>(name));
+        }
+
+        template<typename Name>
+        struct is_valid_name_type {
+            typedef typename std::decay<Name>::type decayed_type;
+            static const bool value =
+                std::is_same<decayed_type, mailbox::message_id>::value ||
+                std::is_enum<decayed_type>::value ||
+                std::is_integral<decayed_type>::value;
+        };
+
+        template<typename T>
+        struct is_valid_rtt_type {
+            typedef typename std::decay<T>::type decayed_type;
+
+            static const bool value =
+                !std::is_reference<T>::value &&
+                !std::is_abstract<decayed_type>::value &&
+                (std::is_copy_constructible<decayed_type>::value ||
+                 std::is_move_constructible<decayed_type>::value);
+        };
+
+        template<bool...>
+        struct bool_pack {};
+
+        template<bool... values>
+        using all_true = std::is_same<bool_pack<values..., true>, bool_pack<true, values...>>;
+
+        template<typename... Args>
+        struct all_valid_rtt_types : all_true<is_valid_rtt_type<Args>::value...> {};
+
+    } // namespace detail
+
+    template<typename Name>
+    typename std::enable_if<
+        detail::is_valid_name_type<Name>::value,
+        mailbox::message_ptr>::type
+    make_message(actor_zeta::pmr::memory_resource* resource,
+                 base::address_t sender,
+                 Name&& name) {
+        assert(resource);
+        return mailbox::pmr_make_message(resource, resource, std::move(sender),
+                                         detail::to_message_id(std::forward<Name>(name)));
     }
 
-    template<class T, typename Arg>
-    auto make_message_ptr(base::address_t sender_, T name, Arg&& arg) -> mailbox::message_ptr {
-        return mailbox::message_ptr(new mailbox::message(std::move(sender_), mailbox::make_message_id(static_cast<uint64_t>(name)), detail::rtt(nullptr, std::forward<type_traits::decay_t<Arg>>(arg))));
-    }
-
-    template<class T, typename... Args>
-    auto make_message_ptr(base::address_t sender_, T name, Args&&... args) -> mailbox::message_ptr {
-        return mailbox::message_ptr(new mailbox::message(std::move(sender_), mailbox::make_message_id(static_cast<uint64_t>(name)), detail::rtt(nullptr, std::forward<Args>(args)...)));
-    }
-
-    template<class T>
-    auto make_message(base::address_t sender_, T name) -> mailbox::message_ptr {
-        return mailbox::message_ptr(new mailbox::message(std::move(sender_), mailbox::make_message_id(static_cast<uint64_t>(name))));
-    }
-
-    template<class T, typename Arg>
-    auto make_message(base::address_t sender_, T name, Arg&& arg) -> mailbox::message_ptr {
-        return mailbox::message_ptr(new mailbox::message(std::move(sender_), mailbox::make_message_id(static_cast<uint64_t>(name)), detail::rtt(nullptr, std::forward<type_traits::decay_t<Arg>>(arg))));
-    }
-
-    template<class T, typename... Args>
-    auto make_message(base::address_t sender_, T name, Args&&... args) -> mailbox::message_ptr {
-        return mailbox::message_ptr(new mailbox::message(std::move(sender_), mailbox::make_message_id(static_cast<uint64_t>(name)), detail::rtt(nullptr, std::forward<Args>(args)...)));
-    }
-
-    auto make_message(base::address_t sender_, mailbox::message_id id) -> mailbox::message_ptr;
-
-    template<typename Arg>
-    auto make_message(base::address_t sender_, mailbox::message_id id, Arg&& arg) -> mailbox::message_ptr {
-        return mailbox::message_ptr(new mailbox::message(std::move(sender_), id, detail::rtt(nullptr, std::forward<type_traits::decay_t<Arg>>(arg))));
-    }
-
-    template<typename... Args>
-    auto make_message(base::address_t sender_, mailbox::message_id id, Args&&... args) -> mailbox::message_ptr {
-        return mailbox::message_ptr(new mailbox::message(std::move(sender_), id, detail::rtt(nullptr, std::forward<Args>(args)...)));
+    template<typename Name, typename... Args>
+    typename std::enable_if<
+        detail::is_valid_name_type<Name>::value &&
+            detail::all_valid_rtt_types<Args...>::value,
+        mailbox::message_ptr>::type
+    make_message(actor_zeta::pmr::memory_resource* resource,
+                 base::address_t sender,
+                 Name&& name,
+                 Args... args) {
+        assert(resource);
+        return mailbox::pmr_make_message(resource, resource, std::move(sender),
+                                         detail::to_message_id(std::forward<Name>(name)),
+                                         detail::rtt(resource, std::move(args)...));
     }
 
 } // namespace actor_zeta

@@ -11,7 +11,7 @@ jobs:
   build:
     strategy:
       matrix:
-        cxx_standard: [11, 14, 17]
+        cxx_standard: [17, 20]
         build_type: ["Release", "Debug"]
 
     runs-on: macos-latest
@@ -21,25 +21,42 @@ jobs:
       - name: Install system dependencies
         run: |
             brew install ninja cmake
-            python3 -m pip install --no-cache-dir conan==1.63 --break-system-packages
+            python3 -m pip install --no-cache-dir "conan==2.*" --break-system-packages
 
       - name: Configure CMake
         env:
           BUILD_TYPE: ${{matrix.build_type}}
           CXX_STANDARD: ${{matrix.cxx_standard}}
         run: |
-          mkdir -p build
-          cmake -B build -GNinja \
-            -DCMAKE_BUILD_TYPE=${{matrix.build_type}} \
-            -DCMAKE_CXX_STANDARD=${{matrix.cxx_standard}} \
+          conan profile detect --force
+          conan install . --output-folder=build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
+
+          echo "=== Checking generated files ==="
+          echo "Contents of current directory:"
+          ls -la
+          echo "Contents of build directory:"
+          ls -la build/ || echo "build/ not found"
+          echo "Contents of build/${BUILD_TYPE}:"
+          ls -la build/${BUILD_TYPE}/ || echo "build/${BUILD_TYPE}/ not found"
+          echo "Looking for all .cmake files:"
+          find . -name "*.cmake" -type f | grep -i conan | head -20
+
+          TOOLCHAIN_PATH="$(pwd)/build/${BUILD_TYPE}/conan_toolchain.cmake"
+          echo "Using toolchain path: ${TOOLCHAIN_PATH}"
+          ls -la "${TOOLCHAIN_PATH}"
+
+          cmake -S . -B build/${BUILD_TYPE} -GNinja \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DCMAKE_CXX_STANDARD=${CXX_STANDARD} \
             -DALLOW_EXAMPLES=ON \
             -DALLOW_TESTS=ON \
             -DENABLE_TESTS_MEASUREMENTS=ON \
-            -DALLOW_BENCHMARK=ON 
+            -DALLOW_BENCHMARK=ON \
+            -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_PATH}
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build/${{ matrix.build_type }}
 
       - name: Test
-        working-directory: build
+        working-directory: build/${{ matrix.build_type }}
         run: ctest --rerun-failed --output-on-failure

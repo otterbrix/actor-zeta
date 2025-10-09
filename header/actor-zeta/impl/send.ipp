@@ -3,9 +3,8 @@
 #include <actor-zeta/send.hpp>
 
 namespace actor_zeta {
-
-    void send(base::address_t address, mailbox::message_ptr msg) {
-        address->enqueue(std::move(msg));
+    void send(base::actor_abstract_t* actor, message_ptr ptr) {
+        actor->enqueue(std::move(ptr));
     }
 
 } // namespace actor_zeta

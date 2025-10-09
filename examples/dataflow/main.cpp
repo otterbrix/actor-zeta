@@ -48,14 +48,10 @@ struct data_t {
     }
 };
 
-auto thread_pool_deleter = [](actor_zeta::scheduler_abstract_t* ptr) {
-    ptr->stop();
-    delete ptr;
-};
 
 class actor_test_t;
 
-class supervisor_test_t final : public actor_zeta::cooperative_supervisor<supervisor_test_t> {
+class supervisor_test_t final : public actor_zeta::actor_abstract_t {
 public:
     size_t count_actors_;
     size_t count_producers_;
@@ -156,11 +152,8 @@ public:
         memchecker_thread_.join();
     }
 
-    const char* make_type() const noexcept {
-        return name_.c_str();
-    }
 
-    auto make_scheduler() noexcept -> actor_zeta::scheduler_abstract_t* {
+    auto make_scheduler() noexcept -> actor_zeta::scheduler_t* {
         return e_.get();
     }
 
@@ -173,18 +166,17 @@ protected:
             });
     }
 
-    auto enqueue_impl(actor_zeta::message_ptr msg, actor_zeta::execution_unit*) -> void final {
+    auto enqueue_impl(actor_zeta::message_ptr msg) -> void  {
         {
-            auto ptr = msg.get();
-            set_current_message(std::move(msg));
-            behavior()(current_message());
+            auto ptr = std::move(msg);
+            behavior()(ptr.get());
             delete ptr;
         }
     }
 
 private:
     const std::string name_;
-    std::unique_ptr<actor_zeta::scheduler_abstract_t, decltype(thread_pool_deleter)> e_;
+    std::unique_ptr<actor_zeta::scheduler_t, decltype(thread_pool_deleter)> e_;
     std::map<int, actor_zeta::address_t> address_book_;
     std::map<int, actor_test_t*> actors_;
     std::thread memchecker_thread_;
@@ -213,10 +205,6 @@ public:
         , name_(names::actor)
         , add_address_(actor_zeta::make_behavior(resource(), command_t::add_address, this, &actor_test_t::add_address))
         , process_data_(actor_zeta::make_behavior(resource(), command_t::process_data, this, &actor_test_t::process_data)) {
-    }
-
-    const char* make_type() const noexcept {
-        return name_.c_str();
     }
 
     actor_zeta::behavior_t behavior() {

@@ -11,7 +11,7 @@ if (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"  AND UNIX AND NOT APPLE ) #--------
     list(APPEND CMAKE_MODULE_PATH "${LLVM_DIR}")
 endif() #--------------------------------------------------------------------------- Clang
 
-set(CMAKE_CXX_STANDARD 11 CACHE STRING "The C++ standard whose features are requested.")
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "The C++ standard whose features are requested.")
 set(CMAKE_CXX_STANDARD_REQUIRED     ON)
 set(CMAKE_CXX_EXTENSIONS            OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS   ON)
@@ -24,38 +24,35 @@ option(RTTI_DISABLE                 "RTTI DISABLE"              ON)
 option(EXCEPTIONS_DISABLE           "EXCEPTIONS DISABLE"        ON)
 
 if (NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (default Debug):" FORCE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (default Debug)" FORCE)
 endif()
 
+# RTTI/Exceptions flags
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-
     if (EXCEPTIONS_DISABLE)
-        message("Disable C++ exceptions.")
+        message(STATUS "Disable C++ exceptions (MSVC).")
         string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
         add_compile_definitions(__EXCEPTIONS_DISABLE__)
-    endif ()
+    endif()
 
     if (RTTI_DISABLE)
-        message("Disable RTTI.")
+        message(STATUS "Disable RTTI (MSVC).")
         string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
-    endif ()
-
-elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
-
+    endif()
+elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang"))
     if (EXCEPTIONS_DISABLE)
-        message("Disable C++ exceptions.")
+        message(STATUS "Disable C++ exceptions (GNU/Clang).")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions")
         add_compile_definitions(__EXCEPTIONS_DISABLE__)
-    endif ()
+    endif()
 
     if (RTTI_DISABLE)
-        message("Disable RTTI.")
+        message(STATUS "Disable RTTI (GNU/Clang).")
         string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
-    endif ()
-
+    endif()
 endif()
 
 message(STATUS "ALLOW_EXAMPLES = ${ALLOW_EXAMPLES}")
@@ -90,7 +87,7 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
     )
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     add_compile_options(/W4 /WX)
-endif ()
+endif()
 
 ############## FINAL PROJECT CONFIG #################
 
@@ -194,56 +191,36 @@ add_library(
 
 find_package(Threads REQUIRED)
 target_link_libraries(${PROJECT_NAME} PUBLIC
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${CMAKE_DL_LIBS}
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
 )
 
 #################################################################
 
-# without test there is no need for conan
-if (ALLOW_TESTS)
-    # configuration
-    #############################################################################################
-    #conan
-    if (CONAN_EXPERIMENTAL_INCLUDE)
-        set(CONAN_SYSTEM_INCLUDES "On")
-    endif ()
+# configuration
+#############################################################################################
+#conan
 
-    if(NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
-        file(DOWNLOAD "https://raw.githubusercontent.com/conan-io/cmake-conan/master/conan.cmake"
-                "${CMAKE_BINARY_DIR}/conan.cmake")
-    endif()
-
-    include(${CMAKE_BINARY_DIR}/conan.cmake)
-
-    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang"  AND UNIX AND NOT APPLE )
-        # https://docs.conan.io/1/reference/config_files/settings.yml.html#c-standard-libraries-aka-compiler-libcxx
-        #conan_cmake_autodetect(CONAN_SETTINGS)
-        set(CONAN_SETTINGS "build_type=${CMAKE_BUILD_TYPE};compiler.libcxx=${LIBCXX};compiler.cppstd=${CMAKE_CXX_STANDARD}")
-    endif ()
-
-    message(STATUS "CONAN_SETTINGS: ${CONAN_SETTINGS}")
-
-    if(CONAN_EXPORTED)
-        conan_basic_setup(TARGETS)
-    else()
-        conan_cmake_run(REQUIRES
-                catch2/2.13.6
-                benchmark/1.8.0
-                BASIC_SETUP CMAKE_TARGETS
-                SETTINGS ${CONAN_SETTINGS}
-                ENV CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LDFLAGS=${LINKFLAGS}
-                BUILD missing
-        )
-    endif()
-    # configuration
-    #############################################################################################
-    #conan
+if (CONAN_EXPERIMENTAL_INCLUDE)
+    set(CONAN_SYSTEM_INCLUDES "On")
 endif ()
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang"  AND UNIX AND NOT APPLE )
+    # https://docs.conan.io/1/reference/config_files/settings.yml.html#c-standard-libraries-aka-compiler-libcxx
+    #conan_cmake_autodetect(CONAN_SETTINGS)
+    set(CONAN_SETTINGS "build_type=${CMAKE_BUILD_TYPE};compiler.libcxx=${LIBCXX};compiler.cppstd=${CMAKE_CXX_STANDARD}")
+endif ()
+
+message(STATUS "CONAN_SETTINGS: ${CONAN_SETTINGS}")
+
+
+# configuration
+#############################################################################################
+#conan
 
 if (ALLOW_EXAMPLES)
     add_subdirectory(examples)
-endif ()
+endif()
 
 if (ALLOW_TESTS)
     include(CTest)
@@ -252,5 +229,5 @@ if (ALLOW_TESTS)
 endif()
 
 if (ALLOW_BENCHMARK)
-    add_subdirectory(benchmark)
+    # add_subdirectory(benchmark)
 endif()

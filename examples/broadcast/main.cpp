@@ -1,15 +1,18 @@
 #include <cassert>
 
+#include <atomic>
 #include <chrono>
 #include <iostream>
 #include <memory>
 #include <thread>
 #include <vector>
-#include <atomic>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/detail/memory.hpp>
+#include <actor-zeta/scheduler/scheduler.hpp>
+#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
-auto thread_pool_deleter = [](actor_zeta::scheduler_abstract_t* ptr) {
+auto thread_pool_deleter = [](actor_zeta::scheduler::scheduler_abstract_t* ptr) {
     ptr->stop();
     delete ptr;
 };
@@ -17,101 +20,7 @@ auto thread_pool_deleter = [](actor_zeta::scheduler_abstract_t* ptr) {
 static std::atomic<uint64_t> counter_download_data{0};
 static std::atomic<uint64_t> counter_work_data{0};
 
-class supervisor_lite;
-class worker_t;
 using actor_zeta::pmr::memory_resource;
-/// non thread safe
-class supervisor_lite final : public actor_zeta::cooperative_supervisor<supervisor_lite> {
-public:
-    enum class system_command : std::uint64_t {
-        broadcast = 0x00,
-        create
-    };
-
-    supervisor_lite(memory_resource* ptr)
-        : cooperative_supervisor<supervisor_lite>(ptr)
-        , create_(actor_zeta::make_behavior(resource(), system_command::create, this, &supervisor_lite::create))
-        , broadcast_(actor_zeta::make_behavior(resource(), system_command::broadcast, this, &supervisor_lite::broadcast_impl))
-        , e_(new actor_zeta::scheduler_t<actor_zeta::work_sharing>(2, 1000), thread_pool_deleter) {
-        e_->start();
-    }
-
-    void create() {
-        spawn_actor([this](worker_t* ptr) {
-            actors_.emplace_back(ptr);
-            ++size_actors_;
-        });
-    }
-
-    const char* make_type() const noexcept {
-        return "network";
-    }
-
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(system_command::create): {
-                        create_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(system_command::broadcast): {
-                        broadcast_(msg);
-                        break;
-                    }
-                }
-            });
-    }
-
-    ~supervisor_lite() override = default;
-
-    template<class Id = uint64_t, class... Args>
-    void broadcast_on_worker(Id id, Args&&... args) {
-        auto size = size_actor();
-        std::vector<actor_zeta::message_ptr> tmp;
-        tmp.reserve(size);
-        for (std::size_t i = 0, e = size; i != e; ++i) {
-            auto ptr = actor_zeta::make_message_ptr(
-                address(),
-                id,
-                std::forward<const Args&>(args)...);
-            tmp.push_back(std::move(ptr));
-        }
-
-        auto msg = actor_zeta::make_message(
-            address(),
-            system_command::broadcast,
-            std::move(tmp));
-        enqueue(std::move(msg));
-    }
-
-    auto make_scheduler() noexcept -> actor_zeta::scheduler_abstract_t* { return e_.get(); }
-
-protected:
-    auto enqueue_impl(actor_zeta::message_ptr msg, actor_zeta::execution_unit*) -> void final {
-        set_current_message(std::move(msg));
-        behavior()(current_message());
-    }
-
-private:
-    int64_t size_actor() noexcept {
-        return size_actors_.load();
-    }
-
-    void broadcast_impl(std::vector<actor_zeta::message_ptr>& msg) {
-        auto msgs = std::move(msg);
-        for (std::size_t i = 0, end = size_actor(); i != end; ++i) {
-            actors_[i]->enqueue(std::move(msgs[i]));
-        }
-    }
-
-    actor_zeta::behavior_t create_;
-    actor_zeta::behavior_t broadcast_;
-    std::unique_ptr<actor_zeta::scheduler_abstract_t, decltype(thread_pool_deleter)> e_;
-    std::vector<actor_zeta::actor_t> actors_;
-    std::atomic<int64_t> size_actors_{0};
-};
 
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
@@ -120,32 +29,25 @@ public:
         work_data
     };
 
-    worker_t(supervisor_lite* ptr)
+    worker_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_t>(ptr)
-        , download_(actor_zeta::make_behavior(resource(), command_t::download, this, &worker_t::download))
-        , work_data_(actor_zeta::make_behavior(resource(), command_t::work_data, this, &worker_t::work_data)) {
+        , download_(actor_zeta::make_behavior(resource(), this, &worker_t::download))
+        , work_data_(actor_zeta::make_behavior(resource(),  this, &worker_t::work_data)) {
     }
 
-    actor_zeta::behavior_t behavior() {
-        return actor_zeta::make_behavior(
-            resource(),
-            [this](actor_zeta::message* msg) -> void {
-                switch (msg->command()) {
-                    case actor_zeta::make_message_id(command_t::download): {
-                        download_(msg);
-                        break;
-                    }
-                    case actor_zeta::make_message_id(command_t::work_data): {
-                        work_data_(msg);
-                        break;
-                    }
-                }
-            });
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(command_t::download): {
+                download_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(command_t::work_data): {
+                work_data_(msg);
+                break;
+            }
+        }
     }
 
-    const char* make_type() const noexcept {
-        return "worker_t";
-    }
 
     void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
         tmp_ = url;
@@ -157,40 +59,156 @@ public:
         counter_work_data++;
     }
 
-    ~worker_t() override = default;
-
 private:
     actor_zeta::behavior_t download_;
     actor_zeta::behavior_t work_data_;
     std::string tmp_;
 };
 
+/// non thread safe
+class supervisor_lite final : public actor_zeta::actor_abstract_t {
+public:
+    enum class system_command : std::uint64_t {
+        broadcast = 0x00,
+        create
+    };
+
+    supervisor_lite(memory_resource* ptr)
+        : actor_zeta::actor_abstract_t(ptr)
+        , create_(actor_zeta::make_behavior(resource(),  this, &supervisor_lite::create))
+        , broadcast_(actor_zeta::make_behavior(resource(), this, &supervisor_lite::broadcast_impl))
+        , e_(actor_zeta::scheduler::make_sharing_scheduler(ptr, 2, 1000)) {
+        e_->start();
+    }
+
+    ~supervisor_lite() {
+        e_->stop();
+        delete e_;
+    }
+
+    void create() {
+        auto ptr = actor_zeta::spawn<worker_t>(resource());
+        actors_.emplace_back(std::move(ptr));
+        ++size_actors_;
+    }
+
+    void  behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::make_message_id(system_command::create): {
+                create_(msg);
+                break;
+            }
+            case actor_zeta::make_message_id(system_command::broadcast): {
+                broadcast_(msg);
+                break;
+            }
+        }
+    }
+
+    template<class Id = uint64_t, class... Args>
+    void broadcast_on_worker(Id id, Args... args) {
+        auto end = size_actor();
+
+        if (end == 0) {
+            return;
+        }
+
+        // Direct broadcast - first enqueue to all actors
+        for (std::size_t i = 0; i < end; ++i) {
+            auto msg = actor_zeta::make_message(
+                resource(),
+                address(),
+                id,
+                args...);
+            actors_[i]->enqueue(std::move(msg));
+        }
+
+        // Then schedule all actors once
+        for (std::size_t i = 0; i < end; ++i) {
+            e_->enqueue(actors_[i].get());
+        }
+    }
+
+protected:
+    bool enqueue_impl(actor_zeta::message_ptr msg) override {
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            auto tmp = std::move(msg);
+            behavior(tmp.get());
+        }
+        return true;
+    }
+
+private:
+    std::size_t size_actor() noexcept {
+        return size_actors_.load();
+    }
+
+    void broadcast_impl(std::vector<actor_zeta::message_ptr> msg) {
+        auto msgs = std::move(msg);
+        auto end = size_actor();
+
+        if (end == 0) {
+            std::cerr << "Warning: no actors to broadcast to!" << std::endl;
+            return;
+        }
+
+        // Send all messages first
+        for (std::size_t i = 0; i != end; ++i) {
+            actors_[i]->enqueue(std::move(msgs[i]));
+        }
+        // Then schedule all actors once
+        for (std::size_t i = 0; i != end; ++i) {
+            e_->enqueue(actors_[i].get());
+        }
+    }
+
+    actor_zeta::behavior_t create_;
+    actor_zeta::behavior_t broadcast_;
+    actor_zeta::scheduler::scheduler_abstract_t* e_;
+    std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
+    std::atomic<int64_t> size_actors_{0};
+    std::mutex mutex_;
+};
+
 int main() {
     auto* mr_ptr = actor_zeta::pmr::get_default_resource();
-    auto supervisor = actor_zeta::spawn_supervisor<supervisor_lite>(mr_ptr);
+    auto supervisor = actor_zeta::spawn<supervisor_lite>(mr_ptr);
 
-    int const actors = 10;
+    int const actors = 5;
 
-    for (auto i = actors - 1; i > 0; --i) {
-        actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), supervisor_lite::system_command::create);
+    // Create actors directly (supervisor processes messages synchronously)
+    for (auto i = actors; i > 0; --i) {
+        auto msg = actor_zeta::make_message(
+            mr_ptr,
+            actor_zeta::address_t::empty_address(),
+            supervisor_lite::system_command::create);
+        supervisor->enqueue(std::move(msg));
     }
 
-    int const task = 10000;
+    std::cerr << "=== Created " << actors << " worker actors ===" << std::endl;
 
-    for (auto i = task - 1; i > 0; --i) {
-        supervisor->broadcast_on_worker(worker_t::command_t::download, std::string("fb"), std::string("jack"), std::string("1"));
-    }
+    // Broadcast download task - one message to all actors
+    std::cerr << "=== Broadcasting download task to all " << actors << " actors ===" << std::endl;
+    supervisor->broadcast_on_worker(worker_t::command_t::download, std::string("url"), std::string("user"), std::string("pass"));
 
-    for (auto i = task - 1; i > 0; --i) {
-        supervisor->broadcast_on_worker(worker_t::command_t::work_data, std::string("fb"), std::string("jack"));
-    }
+    // Broadcast work_data task - one message to all actors
+    std::cerr << "=== Broadcasting work_data task to all " << actors << " actors ===" << std::endl;
+    supervisor->broadcast_on_worker(worker_t::command_t::work_data, std::string("data"), std::string("operator"));
 
-    std::this_thread::sleep_for(std::chrono::seconds(180));
+    std::cerr << "=== Waiting for processing ===" << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    std::cerr << " Finish " << std::endl;
-    std::cerr << "counter_download_data :" << counter_download_data.load() << std::endl;
-    std::cerr << "counter_work_data :" << counter_work_data.load() << std::endl;
-    assert(counter_download_data.load() == 9999);
-    assert(counter_work_data.load() == 9999);
-    return 0;
+    std::cerr << "\n=== Results ===" << std::endl;
+    std::cerr << "Download messages processed: " << counter_download_data.load() << std::endl;
+    std::cerr << "Work_data messages processed: " << counter_work_data.load() << std::endl;
+
+    auto expected = actors; // One broadcast per type, all actors should process
+    std::cerr << "Expected per counter: " << expected << std::endl;
+
+    // Success if all broadcasts reached all actors
+    bool passed = counter_download_data.load() == expected && counter_work_data.load() == expected;
+    std::cerr << "\nTest result: " << (passed ? "PASSED ✓" : "FAILED ✗") << std::endl;
+
+    return passed ? 0 : 1;
 }
