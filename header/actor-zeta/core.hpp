@@ -9,7 +9,7 @@
 // clang-format on
 
 #include <actor-zeta/base/cooperative_actor.hpp>
-#include <actor-zeta/detail/pmr/memory_resource.hpp>
+#include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 
 namespace actor_zeta {

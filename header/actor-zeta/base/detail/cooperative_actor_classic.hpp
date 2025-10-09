@@ -22,6 +22,7 @@ namespace actor_zeta { namespace base {
          : public actor_abstract_t
          , public scheduler::resumable_t {
     public:
+        using mailbox_t = typename Traits::mailbox_t;
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, Traits, actor_type::classic>, pmr::deleter_t>;
 
         scheduler::resume_info resume(actor_zeta::scheduler::scheduler_abstract_t* sched, size_t max_throughput) noexcept final {
@@ -47,12 +48,12 @@ namespace actor_zeta { namespace base {
             , inbox_(mailbox::priority_message(),
                      high_priority_queue(mailbox::high_priority_message()),
                      normal_priority_queue(mailbox::normal_priority_message())) {
-            inbox().try_block(); //todo: bug
+            mailbox().try_block(); //todo: bug
         }
 
         bool enqueue_impl(mailbox::message_ptr msg) final {
             assert(msg.get() != nullptr);
-            switch (inbox().push_back(std::move(msg))) {
+            switch (mailbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
                     return true;
                 }
@@ -88,18 +89,18 @@ namespace actor_zeta { namespace base {
             size_t handled = 0;
 
             // Check if inbox is closed first (shutdown scenario)
-            if (inbox().closed()) {
+            if (mailbox().closed()) {
                 return scheduler::resume_info(scheduler::resume_result::done, 0);
             }
 
             // Check if inbox is blocked to avoid assertion in empty()
-            if (inbox().blocked()) {
+            if (mailbox().blocked()) {
                 // Inbox is blocked, try to resume (another thread may have enqueued)
                 return scheduler::resume_info(scheduler::resume_result::resume, 0);
             }
 
-            if (inbox().empty()) {
-                auto result = inbox().try_block()
+            if (mailbox().empty()) {
+                auto result = mailbox().try_block()
                               ? scheduler::resume_result::awaiting
                               : scheduler::resume_result::resume;
                 return scheduler::resume_info(result, 0);
@@ -116,11 +117,11 @@ namespace actor_zeta { namespace base {
 
             while (handled < max_throughput) {
                 // Check if inbox closed during processing
-                if (inbox().closed()) {
+                if (mailbox().closed()) {
                     return scheduler::resume_info(scheduler::resume_result::done, handled);
                 }
 
-                inbox().fetch_more();
+                mailbox().fetch_more();
                 const size_t before = handled;
 
                 high(inbox()).new_round(hq, handler);
@@ -128,10 +129,10 @@ namespace actor_zeta { namespace base {
 
                 if (handled == before) {
                     // Check again before try_block
-                    if (inbox().closed()) {
+                    if (mailbox().closed()) {
                         return scheduler::resume_info(scheduler::resume_result::done, handled);
                     }
-                    auto result = inbox().try_block()
+                    auto result = mailbox().try_block()
                                   ? scheduler::resume_result::awaiting
                                   : scheduler::resume_result::resume;
                     return scheduler::resume_info(result, handled);
@@ -139,10 +140,10 @@ namespace actor_zeta { namespace base {
             }
 
             // Check before final try_block
-            if (inbox().closed()) {
+            if (mailbox().closed()) {
                 return scheduler::resume_info(scheduler::resume_result::done, handled);
             }
-            auto result = inbox().try_block()
+            auto result = mailbox().try_block()
                           ? scheduler::resume_result::awaiting
                           : scheduler::resume_result::resume;
             return scheduler::resume_info(result, handled);
@@ -159,12 +160,12 @@ namespace actor_zeta { namespace base {
             return static_cast<Actor*>(this);
         }
 
-        inline traits::inbox_t& inbox() {
-            return inbox_;
+        inline mailbox_t& mailbox() {
+            return mailbox_;
         }
 
         mailbox::message* current_message_;
-        typename Traits::inbox_t inbox_;
+        mailbox_t mailbox_;
     };
 
 }} // namespace actor_zeta::base

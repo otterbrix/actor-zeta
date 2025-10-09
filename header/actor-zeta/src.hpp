@@ -4,7 +4,6 @@
 #include <actor-zeta.hpp>
 
 #include <cstdint>
-#include <actor-zeta/detail/impl/pmr/default_resource.ipp>
 #include <actor-zeta/detail/pmr/polymorphic_allocator.hpp>
 
 #include <actor-zeta/impl/actor/actor_abstract.ipp>
@@ -22,6 +21,7 @@
 #include <actor-zeta/impl/scheduler/policy/unprofiled.ipp>
 #include <actor-zeta/impl/scheduler/policy/work_sharing.ipp>
 
+#include <actor-zeta/impl/mailbox/default_mailbox.ipp>
 #include <actor-zeta/impl/mailbox/id.ipp>
 #include <actor-zeta/impl/mailbox/message.ipp>
 
