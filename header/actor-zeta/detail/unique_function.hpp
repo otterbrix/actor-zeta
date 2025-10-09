@@ -276,7 +276,7 @@ namespace actor_zeta { namespace detail {
         template<typename F>
         unique_function& operator=(F&& f) = delete;
 
-        R operator()(Args... args) const { // todo fix:  R operator()(Args&&... args) const {
+        R operator()(Args... args) const {
             if (!invoke_) {
                 assert(0 && "bad_function_call");
             }

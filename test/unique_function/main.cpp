@@ -537,3 +537,388 @@ TEST_CASE("Resource Management Scenarios", "[unique_function]") {
         INFO("Allocations: " << resource1.allocations() << ", Deallocations: " << resource1.deallocations());
     }
 }
+
+// Helper class to track object lifetime
+struct lifetime_tracker {
+    int* counter_;
+    int value_;
+
+    explicit lifetime_tracker(int* counter, int value = 42)
+        : counter_(counter), value_(value) {
+        if (counter_) (*counter_)++;
+    }
+
+    lifetime_tracker(const lifetime_tracker& other)
+        : counter_(other.counter_), value_(other.value_) {
+        if (counter_) (*counter_)++;
+    }
+
+    lifetime_tracker(lifetime_tracker&& other) noexcept
+        : counter_(other.counter_), value_(other.value_) {
+        other.counter_ = nullptr;
+    }
+
+    ~lifetime_tracker() {
+        if (counter_) (*counter_)--;
+    }
+
+    int get_value() const { return value_; }
+};
+
+// Test 1: Parameter lifetime shorter than unique_function
+TEST_CASE("Parameter Lifetime - Data Dies Before Function", "[unique_function][lifetime]") {
+    test_memory_resource resource;
+    int alive_count = 0;
+
+    SECTION("By value - copy") {
+        actor_zeta::detail::unique_function<int(lifetime_tracker)> func(&resource,
+            [](lifetime_tracker obj) {
+                return obj.get_value() * 2;
+            });
+
+        {
+            lifetime_tracker obj(&alive_count, 100);
+            REQUIRE(alive_count == 1);
+
+            int result = func(obj);
+            REQUIRE(result == 200);
+            // obj is copied into function, so we have 2 instances during call
+        }
+
+        // Original object is destroyed, but function still works
+        REQUIRE(alive_count == 0);
+
+        // Create new object and call again
+        {
+            lifetime_tracker obj2(&alive_count, 50);
+            REQUIRE(alive_count == 1);
+
+            int result = func(obj2);
+            REQUIRE(result == 100);
+        }
+
+        REQUIRE(alive_count == 0);
+    }
+
+    SECTION("By rvalue reference - move") {
+        actor_zeta::detail::unique_function<int(lifetime_tracker)> func(&resource,
+            [](lifetime_tracker obj) {
+                return obj.get_value() + 10;
+            });
+
+        {
+            lifetime_tracker obj(&alive_count, 33);
+            REQUIRE(alive_count == 1);
+
+            int result = func(std::move(obj));
+            REQUIRE(result == 43);
+        }
+
+        // Original object destroyed
+        REQUIRE(alive_count == 0);
+
+        // Function still works with new data
+        {
+            lifetime_tracker obj2(&alive_count, 77);
+            int result = func(std::move(obj2));
+            REQUIRE(result == 87);
+        }
+
+        REQUIRE(alive_count == 0);
+    }
+
+    SECTION("By const reference") {
+        actor_zeta::detail::unique_function<int(const lifetime_tracker&)> func(&resource,
+            [](const lifetime_tracker& obj) {
+                return obj.get_value() * 3;
+            });
+
+        {
+            lifetime_tracker obj(&alive_count, 15);
+            REQUIRE(alive_count == 1);
+
+            int result = func(obj);
+            REQUIRE(result == 45);
+
+            // Object still alive after call
+            REQUIRE(alive_count == 1);
+        }
+
+        // Object destroyed after scope
+        REQUIRE(alive_count == 0);
+
+        // Function still valid but needs live object to call
+        {
+            lifetime_tracker obj2(&alive_count, 20);
+            REQUIRE(alive_count == 1);
+
+            int result = func(obj2);
+            REQUIRE(result == 60);
+        }
+
+        REQUIRE(alive_count == 0);
+    }
+
+    SECTION("By mutable reference") {
+        actor_zeta::detail::unique_function<void(lifetime_tracker&)> func(&resource,
+            [](lifetime_tracker& obj) {
+                // Modify the object through reference
+                obj.value_ *= 2;
+            });
+
+        {
+            lifetime_tracker obj(&alive_count, 10);
+            REQUIRE(alive_count == 1);
+            REQUIRE(obj.get_value() == 10);
+
+            func(obj);
+            REQUIRE(obj.get_value() == 20);
+
+            func(obj);
+            REQUIRE(obj.get_value() == 40);
+
+            REQUIRE(alive_count == 1);
+        }
+
+        // Object destroyed
+        REQUIRE(alive_count == 0);
+
+        // Function still valid with new object
+        {
+            lifetime_tracker obj2(&alive_count, 5);
+            func(obj2);
+            REQUIRE(obj2.get_value() == 10);
+        }
+
+        REQUIRE(alive_count == 0);
+    }
+
+    SECTION("By pointer") {
+        actor_zeta::detail::unique_function<int(const lifetime_tracker*)> func(&resource,
+            [](const lifetime_tracker* obj) {
+                return obj ? obj->get_value() * 5 : -1;
+            });
+
+        {
+            lifetime_tracker obj(&alive_count, 8);
+            REQUIRE(alive_count == 1);
+
+            int result = func(&obj);
+            REQUIRE(result == 40);
+
+            REQUIRE(alive_count == 1);
+        }
+
+        // Object destroyed, pointer becomes dangling
+        REQUIRE(alive_count == 0);
+
+        // Function still valid but needs valid pointer
+        {
+            lifetime_tracker obj2(&alive_count, 12);
+            int result = func(&obj2);
+            REQUIRE(result == 60);
+        }
+
+        REQUIRE(alive_count == 0);
+
+        // Test with nullptr
+        int null_result = func(nullptr);
+        REQUIRE(null_result == -1);
+    }
+
+    SECTION("Multiple parameters with different lifetimes") {
+        actor_zeta::detail::unique_function<int(lifetime_tracker, const lifetime_tracker&, int)> func(
+            &resource,
+            [](lifetime_tracker by_val, const lifetime_tracker& by_ref, int multiplier) {
+                return (by_val.get_value() + by_ref.get_value()) * multiplier;
+            });
+
+        {
+            lifetime_tracker obj1(&alive_count, 10);
+            lifetime_tracker obj2(&alive_count, 20);
+            REQUIRE(alive_count == 2);
+
+            int result = func(obj1, obj2, 2);
+            REQUIRE(result == 60); // (10 + 20) * 2
+
+            REQUIRE(alive_count == 2);
+        }
+
+        // Both objects destroyed
+        REQUIRE(alive_count == 0);
+
+        // Function still works with new objects
+        {
+            lifetime_tracker obj3(&alive_count, 5);
+            lifetime_tracker obj4(&alive_count, 15);
+            REQUIRE(alive_count == 2);
+
+            int result = func(obj3, obj4, 3);
+            REQUIRE(result == 60); // (5 + 15) * 3
+        }
+
+        REQUIRE(alive_count == 0);
+    }
+}
+
+// Test 2: Function lifetime shorter than parameters
+TEST_CASE("Parameter Lifetime - Function Dies Before Data", "[unique_function][lifetime]") {
+    test_memory_resource resource;
+    int alive_count = 0;
+
+    SECTION("By value with long-lived data") {
+        lifetime_tracker long_lived_obj(&alive_count, 100);
+        REQUIRE(alive_count == 1);
+
+        {
+            actor_zeta::detail::unique_function<int(lifetime_tracker)> func(&resource,
+                [](lifetime_tracker obj) {
+                    return obj.get_value() * 2;
+                });
+
+            int result = func(long_lived_obj);
+            REQUIRE(result == 200);
+            REQUIRE(alive_count == 1); // Original still alive
+        }
+
+        // Function destroyed, but original object still alive
+        REQUIRE(alive_count == 1);
+        REQUIRE(long_lived_obj.get_value() == 100);
+    }
+
+    SECTION("By const reference with long-lived data") {
+        lifetime_tracker long_lived_obj(&alive_count, 50);
+        REQUIRE(alive_count == 1);
+
+        {
+            actor_zeta::detail::unique_function<int(const lifetime_tracker&)> func(&resource,
+                [](const lifetime_tracker& obj) {
+                    return obj.get_value() + 25;
+                });
+
+            int result = func(long_lived_obj);
+            REQUIRE(result == 75);
+            REQUIRE(alive_count == 1);
+
+            int result2 = func(long_lived_obj);
+            REQUIRE(result2 == 75);
+        }
+
+        // Function destroyed, object still alive
+        REQUIRE(alive_count == 1);
+        REQUIRE(long_lived_obj.get_value() == 50);
+    }
+
+    SECTION("By mutable reference with long-lived data") {
+        lifetime_tracker long_lived_obj(&alive_count, 10);
+        REQUIRE(alive_count == 1);
+
+        {
+            actor_zeta::detail::unique_function<void(lifetime_tracker&)> func(&resource,
+                [](lifetime_tracker& obj) {
+                    obj.value_ += 5;
+                });
+
+            func(long_lived_obj);
+            REQUIRE(long_lived_obj.get_value() == 15);
+
+            func(long_lived_obj);
+            REQUIRE(long_lived_obj.get_value() == 20);
+
+            REQUIRE(alive_count == 1);
+        }
+
+        // Function destroyed, but modifications persist in object
+        REQUIRE(alive_count == 1);
+        REQUIRE(long_lived_obj.get_value() == 20);
+    }
+
+    SECTION("By pointer with long-lived data") {
+        lifetime_tracker long_lived_obj(&alive_count, 30);
+        REQUIRE(alive_count == 1);
+
+        {
+            actor_zeta::detail::unique_function<int(const lifetime_tracker*)> func(&resource,
+                [](const lifetime_tracker* obj) {
+                    return obj ? obj->get_value() * 3 : 0;
+                });
+
+            int result = func(&long_lived_obj);
+            REQUIRE(result == 90);
+            REQUIRE(alive_count == 1);
+        }
+
+        // Function destroyed, pointer target still valid
+        REQUIRE(alive_count == 1);
+        REQUIRE(long_lived_obj.get_value() == 30);
+    }
+
+    SECTION("Move semantics - ownership transfer") {
+        lifetime_tracker long_lived_obj(&alive_count, 77);
+        REQUIRE(alive_count == 1);
+
+        {
+            actor_zeta::detail::unique_function<int(lifetime_tracker)> func(&resource,
+                [](lifetime_tracker obj) {
+                    return obj.get_value() * 2;
+                });
+
+            // Move object into function call
+            lifetime_tracker moved_obj = std::move(long_lived_obj);
+            REQUIRE(alive_count == 1); // Counter transferred, not duplicated
+
+            int result = func(std::move(moved_obj));
+            REQUIRE(result == 154);
+        }
+
+        // Function destroyed
+        REQUIRE(alive_count == 0); // Object was moved and copied into call, then destroyed
+    }
+
+    SECTION("Capturing lambda with long-lived data") {
+        lifetime_tracker long_lived_obj(&alive_count, 15);
+        REQUIRE(alive_count == 1);
+
+        {
+            // Lambda captures by reference
+            actor_zeta::detail::unique_function<int()> func(&resource,
+                [&long_lived_obj]() {
+                    return long_lived_obj.get_value() * 4;
+                });
+
+            int result = func();
+            REQUIRE(result == 60);
+            REQUIRE(alive_count == 1);
+
+            // Modify captured object
+            long_lived_obj.value_ = 20;
+            result = func();
+            REQUIRE(result == 80);
+        }
+
+        // Function destroyed, captured object still alive
+        REQUIRE(alive_count == 1);
+        REQUIRE(long_lived_obj.get_value() == 20);
+    }
+
+    SECTION("Multiple functions sharing same data") {
+        lifetime_tracker shared_obj(&alive_count, 25);
+        REQUIRE(alive_count == 1);
+
+        {
+            actor_zeta::detail::unique_function<int(const lifetime_tracker&)> func1(&resource,
+                [](const lifetime_tracker& obj) { return obj.get_value() * 2; });
+
+            actor_zeta::detail::unique_function<int(const lifetime_tracker&)> func2(&resource,
+                [](const lifetime_tracker& obj) { return obj.get_value() + 100; });
+
+            REQUIRE(func1(shared_obj) == 50);
+            REQUIRE(func2(shared_obj) == 125);
+            REQUIRE(alive_count == 1);
+        }
+
+        // Both functions destroyed, shared object still alive
+        REQUIRE(alive_count == 1);
+        REQUIRE(shared_obj.get_value() == 25);
+    }
+}

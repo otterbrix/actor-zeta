@@ -54,7 +54,6 @@ namespace actor_zeta { namespace base {
             assert(msg.get() != nullptr);
             switch (inbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
-                    // Manual scheduling - caller must call scheduler->schedule(actor)
                     return true;
                 }
                 case detail::enqueue_result::success: {
