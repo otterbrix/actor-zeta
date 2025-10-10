@@ -16,7 +16,6 @@ jobs:
         cxx_standard: [17, 20]
         build_type: ["Release", "Debug"]
         configuration: [
-          {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"9"},
           {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"10"},
           {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"11"},
           {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"12"},
@@ -31,9 +30,7 @@ jobs:
           {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"16"}
         ]
         exclude:
-          # Clang 9 and 10 have incomplete C++20 support
-          - configuration: {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"9"}
-            cxx_standard: 20
+          # Clang 10 has incomplete C++20 support
           - configuration: {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"10"}
             cxx_standard: 20
 
