@@ -9,6 +9,7 @@ namespace actor_zeta { namespace mailbox {
     class default_mailbox_impl {
     public:
         default_mailbox_impl() = default;
+        ~default_mailbox_impl();
         default_mailbox_impl(const default_mailbox_impl&) = delete;
         default_mailbox_impl& operator=(const default_mailbox_impl&) = delete;
 

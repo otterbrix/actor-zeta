@@ -4,6 +4,12 @@
 
 namespace actor_zeta { namespace mailbox {
 
+    default_mailbox_impl::~default_mailbox_impl() {
+        if (!closed_impl()) {
+            close_impl();
+        }
+    }
+
     actor_zeta::detail::enqueue_result default_mailbox_impl::push_back_impl(message_ptr ptr) {
         return inbox_.push_front(ptr.release());
     }
@@ -19,10 +25,10 @@ namespace actor_zeta { namespace mailbox {
     message_ptr default_mailbox_impl::pop_front_impl() {
         for (;;) {
             if (auto result = urgent_queue_.pop_front()) {
-                return result;
+                return message_ptr(result.release());
             }
             if (auto result = normal_queue_.pop_front()) {
-                return result;
+                return message_ptr(result.release());
             }
             if (!fetch_more()) {
                 return nullptr;
@@ -48,8 +54,9 @@ namespace actor_zeta { namespace mailbox {
 
     size_t default_mailbox_impl::close_impl() {
         size_t result = 0;
-        auto bounce_and_count = [&result](message* ptr) {
-            delete ptr;
+        message_deleter deleter;
+        auto bounce_and_count = [&result, &deleter](message* ptr) {
+            deleter(ptr);
             ++result;
         };
         urgent_queue_.drain(bounce_and_count);
