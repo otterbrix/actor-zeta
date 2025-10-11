@@ -22,54 +22,68 @@ std::atomic_int count_update{0};
 std::atomic_int count_find{0};
 
 class collection_t;
-
-enum class collection_method : uint64_t {
-    insert = 0x00,
-    remove,
-    update,
-    find
-};
+class collection_part_t;
 
 class collection_part_t final : public actor_zeta::basic_actor<collection_part_t> {
 public:
     collection_part_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<collection_part_t>(ptr)
-        , insert_(actor_zeta::make_behavior(resource(), [this](std::string& key, std::string& value) -> void {
-            data_.emplace(key, value);
-            std::cerr << id() << " " << key << " " << value << std::endl;
-            ++count_insert;
-        }))
-        , remove_(actor_zeta::make_behavior(resource(),  [this](std::string& key) -> void {
-            data_.erase(key);
-            std::cerr << id() << " remove " << key << std::endl;
-            ++count_remove;
-        }))
-        , update_(actor_zeta::make_behavior(resource(),  [this](std::string& key, std::string& value) -> void {
-            data_[key] = value;
-            std::cerr << id() << " update " << key << " = " << value << std::endl;
-            ++count_update;
-        }))
-        , find_(actor_zeta::make_behavior(resource(), [this](std::string& key) -> std::string {
-            return data_[key];
-        })) {
+        , insert_(actor_zeta::make_behavior(resource(), this, &collection_part_t::insert))
+        , remove_(actor_zeta::make_behavior(resource(), this, &collection_part_t::remove))
+        , update_(actor_zeta::make_behavior(resource(), this, &collection_part_t::update))
+        , find_(actor_zeta::make_behavior(resource(), this, &collection_part_t::find)) {
         ++count_collection_part;
     }
 
+    // Методы для обработки сообщений
+    void insert(std::string& key, std::string& value) {
+        data_.emplace(key, value);
+        std::cerr << id() << " " << key << " " << value << std::endl;
+        ++count_insert;
+    }
+
+    void remove(std::string& key) {
+        data_.erase(key);
+        std::cerr << id() << " remove " << key << std::endl;
+        ++count_remove;
+    }
+
+    void update(std::string& key, std::string& value) {
+        data_[key] = value;
+        std::cerr << id() << " update " << key << " = " << value << std::endl;
+        ++count_update;
+    }
+
+    std::string find(std::string& key) {
+        return data_[key];
+    }
+
+    // Регистрация методов (вложенный dispatch_traits)
+    // ActionId генерируется автоматически: insert=0, remove=1, update=2, find=3
+    struct dispatch_traits {
+        using methods = actor_zeta::type_traits::type_list<
+            actor_zeta::method<&collection_part_t::insert>,
+            actor_zeta::method<&collection_part_t::remove>,
+            actor_zeta::method<&collection_part_t::update>,
+            actor_zeta::method<&collection_part_t::find>
+        >;
+    };
+
     void behavior(actor_zeta::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::make_message_id(collection_method::insert): {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>(): {
                 insert_(msg);
                 break;
             }
-            case actor_zeta::make_message_id(collection_method::remove): {
-                remove_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(collection_method::update): {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>(): {
                 update_(msg);
                 break;
             }
-            case actor_zeta::make_message_id(collection_method::find): {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>(): {
+                remove_(msg);
+                break;
+            }
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>(): {
                 find_(msg);
                 break;
             }
@@ -101,13 +115,13 @@ public:
     }
 
 protected:
-    bool enqueue_impl(actor_zeta::message_ptr msg) {
+    bool enqueue_impl(actor_zeta::message_ptr msg) override {
         auto tmp = std::move(msg);
             switch (tmp->command()) {
-                case actor_zeta::make_message_id(collection_method::insert):
-                case actor_zeta::make_message_id(collection_method::remove):
-                case actor_zeta::make_message_id(collection_method::update):
-                case actor_zeta::make_message_id(collection_method::find): {
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>():
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>():
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>():
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>(): {
                     auto index = cursor_ % actors_.size();
                     actors_[index]->enqueue(std::move(tmp));
                     e_->enqueue(actors_[index].get());
@@ -146,16 +160,16 @@ int main() {
     collection->create();
 
     std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key1"), std::string("value1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key2"), std::string("value2"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::insert, std::string("key3"), std::string("value3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key1"), std::string("value1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key2"), std::string("value2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key3"), std::string("value3"));
 
     std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::update, std::string("key1"), std::string("updated1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::update, std::string("key2"), std::string("updated2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::update, std::string("key1"), std::string("updated1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::update, std::string("key2"), std::string("updated2"));
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), collection_method::remove, std::string("key3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::remove, std::string("key3"));
 
     scheduler->start();
 

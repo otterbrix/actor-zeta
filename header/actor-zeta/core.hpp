@@ -9,8 +9,10 @@
 // clang-format on
 
 #include <actor-zeta/base/cooperative_actor.hpp>
+#include <actor-zeta/base/dispatch_traits.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/mailbox/id.hpp>
+#include <actor-zeta/send.hpp>
 
 namespace actor_zeta {
 
@@ -27,5 +29,5 @@ namespace actor_zeta {
     using mailbox::make_message_id;
 
     using scheduler::scheduler_t;
-    
+
 } // namespace actor_zeta
