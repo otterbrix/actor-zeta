@@ -71,19 +71,19 @@ public:
 
     void behavior(actor_zeta::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>(): {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>: {
                 insert_(msg);
                 break;
             }
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>(): {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>: {
                 update_(msg);
                 break;
             }
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>(): {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>: {
                 remove_(msg);
                 break;
             }
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>(): {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
                 find_(msg);
                 break;
             }
@@ -118,10 +118,10 @@ protected:
     bool enqueue_impl(actor_zeta::message_ptr msg) override {
         auto tmp = std::move(msg);
             switch (tmp->command()) {
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>():
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>():
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>():
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>(): {
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
+                case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
                     auto index = cursor_ % actors_.size();
                     actors_[index]->enqueue(std::move(tmp));
                     e_->enqueue(actors_[index].get());

@@ -15,7 +15,7 @@ namespace actor_zeta {
     template<auto MethodPtr>
     using method = method_map_entry<MethodPtr>;
 
-    /// @brief Нерекурсивный поиск action_id по методу через variadic expansion
+    /// @brief Compile-time поиск action_id по методу через variadic expansion
     namespace detail {
         // Хелпер для сравнения одного метода (работает только если типы совпадают)
         template<auto SearchPtr, auto CurrentPtr>
@@ -25,9 +25,9 @@ namespace actor_zeta {
         template<auto Ptr>
         struct is_same_method_ptr<Ptr, Ptr> : std::true_type {};
 
-        // Нерекурсивный поиск через constexpr цикл
+        // Compile-time поиск через constexpr цикл
         template<auto SearchPtr, auto... MethodPtrs>
-        constexpr uint64_t find_method_index_impl() {
+        static constexpr uint64_t find_method_index() {
             // Создаем массив совпадений через pack expansion
             constexpr bool matches[] = {is_same_method_ptr<SearchPtr, MethodPtrs>::value...};
 
@@ -41,17 +41,7 @@ namespace actor_zeta {
         }
     }
 
-    /// @brief Вспомогательный тип для поиска action_id по методу (нерекурсивная версия)
-    template<auto MethodPtr, typename MethodList>
-    struct find_action_id_with_index;
-
-    // Специализация для type_list с извлечением всех MethodPtrs
-    template<auto SearchPtr, auto... MethodPtrs>
-    struct find_action_id_with_index<SearchPtr, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
-        static constexpr uint64_t value = detail::find_method_index_impl<SearchPtr, MethodPtrs...>();
-    };
-
-    /// @brief Получение action_id для метода из Actor::dispatch_traits
+    /// @brief Получение action_id для метода из Actor::dispatch_traits (compile-time)
     /// ActionId генерируется автоматически на основе позиции в списке (0, 1, 2, ...)
     /// @code
     /// class MyActor {
@@ -64,19 +54,23 @@ namespace actor_zeta {
     /// };
     ///
     /// // Использование:
-    /// case msg_id<MyActor, &MyActor::insert>():
+    /// case msg_id<MyActor, &MyActor::insert>:
     /// @endcode
-    template<typename Actor, auto MethodPtr>
-    struct action_id {
-        static constexpr uint64_t value = find_action_id_with_index<MethodPtr, typename Actor::dispatch_traits::methods>::value;
+    template<typename Actor, auto MethodPtr, typename MethodList>
+    struct action_id_impl;
+
+    // Специализация для type_list с извлечением всех MethodPtrs
+    template<typename Actor, auto SearchPtr, auto... MethodPtrs>
+    struct action_id_impl<Actor, SearchPtr, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
+        static constexpr uint64_t value = detail::find_method_index<SearchPtr, MethodPtrs...>();
     };
 
-    /// @brief Короткий хелпер для создания message_id из action
-    /// Объединяет make_message_id + action для более компактного синтаксиса
+    /// @brief Compile-time constexpr переменная для message_id
+    /// Объединяет make_message_id + action_id для максимально компактного синтаксиса
     template<typename Actor, auto MethodPtr>
-    constexpr auto msg_id() noexcept {
-        return mailbox::make_message_id(action_id<Actor, MethodPtr>::value);
-    }
+    inline constexpr auto msg_id = mailbox::make_message_id(
+        action_id_impl<Actor, MethodPtr, typename Actor::dispatch_traits::methods>::value
+    );
 
     /// @brief Runtime поиск метода и отправка сообщения
     template<typename Actor, typename Method, typename MethodList>

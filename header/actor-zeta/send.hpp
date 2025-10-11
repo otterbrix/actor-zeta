@@ -15,12 +15,11 @@ namespace detail {
     /// @tparam ActionId Action ID для метода
     template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
     inline void dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args) {
-        auto msg_id = mailbox::make_message_id(ActionId);
         actor->enqueue(
             make_message(
                 actor->resource(),
                 sender,
-                msg_id,
+                mailbox::make_message_id(ActionId),
                 std::forward<Args>(args)...
             )
         );
