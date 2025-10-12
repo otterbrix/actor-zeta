@@ -186,6 +186,7 @@ private:
 };
 
 class actor_test_t final : public actor_zeta::basic_actor<actor_test_t> {
+private:
     supervisor_test_t* sup_ptr_;
     size_t consumer_latency_ms_;
     std::map<int64_t, int64_t> prev_index_;
@@ -196,12 +197,6 @@ class actor_test_t final : public actor_zeta::basic_actor<actor_test_t> {
     actor_zeta::behavior_t process_data_;
 
 public:
-    struct dispatch_traits {
-        using methods = actor_zeta::type_traits::type_list<
-            actor_zeta::method<&actor_test_t::add_address>,
-            actor_zeta::method<&actor_test_t::process_data>
-        >;
-    };
 
     actor_test_t(supervisor_test_t* ptr, size_t consumer_latency_ms)
         : actor_zeta::basic_actor<actor_test_t>(ptr)
@@ -255,6 +250,11 @@ public:
         //std::cout << std::this_thread::get_id() << " :: " << __func__ << " :: ms_dur " << ms_dur << " OUT >>>" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(consumer_latency_ms_));
     }
+    
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &actor_test_t::add_address,
+        &actor_test_t::process_data
+    >;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////

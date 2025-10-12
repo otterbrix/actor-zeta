@@ -27,12 +27,10 @@ public:
     void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
     void work_data(const std::string& data, const std::string& /*operatorName*/);
 
-    struct dispatch_traits {
-        using methods = actor_zeta::type_traits::type_list<
-            actor_zeta::method<&worker_t::download>,
-            actor_zeta::method<&worker_t::work_data>
-        >;
-    };
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &worker_t::download,
+        &worker_t::work_data
+    >;
 
     worker_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_t>(ptr)

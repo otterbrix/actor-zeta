@@ -15,6 +15,13 @@ namespace actor_zeta {
     template<auto MethodPtr>
     using method = method_map_entry<MethodPtr>;
 
+    /// @brief Шаблон dispatch_traits для удобного синтаксиса внутри актора
+    /// Позволяет писать: using dispatch_traits = dispatch_traits<&MyActor::method1, &MyActor::method2>;
+    template<auto... MethodPtrs>
+    struct dispatch_traits {
+        using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
+    };
+
     /// @brief Compile-time поиск action_id по методу через variadic expansion
     namespace detail {
         // Хелпер для сравнения одного метода (работает только если типы совпадают)

@@ -58,16 +58,12 @@ public:
         return data_[key];
     }
 
-    // Регистрация методов (вложенный dispatch_traits)
-    // ActionId генерируется автоматически: insert=0, remove=1, update=2, find=3
-    struct dispatch_traits {
-        using methods = actor_zeta::type_traits::type_list<
-            actor_zeta::method<&collection_part_t::insert>,
-            actor_zeta::method<&collection_part_t::remove>,
-            actor_zeta::method<&collection_part_t::update>,
-            actor_zeta::method<&collection_part_t::find>
-        >;
-    };
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &collection_part_t::insert,
+        &collection_part_t::remove,
+        &collection_part_t::update,
+        &collection_part_t::find
+    >;
 
     void behavior(actor_zeta::message* msg) {
         switch (msg->command()) {

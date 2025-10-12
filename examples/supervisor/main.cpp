@@ -15,12 +15,10 @@ public:
     void process_task(const std::string& task);
     void get_status();
 
-    struct dispatch_traits {
-        using methods = actor_zeta::type_traits::type_list<
-            actor_zeta::method<&worker_actor::process_task>,
-            actor_zeta::method<&worker_actor::get_status>
-        >;
-    };
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &worker_actor::process_task,
+        &worker_actor::get_status
+    >;
 
     explicit worker_actor(actor_zeta::pmr::memory_resource* ptr, std::string name)
         : actor_zeta::basic_actor<worker_actor>(ptr)
