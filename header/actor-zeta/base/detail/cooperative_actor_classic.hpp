@@ -33,6 +33,7 @@ namespace actor_zeta { namespace base {
         }
 
     public:
+        using dispatch_traits = typename Actor::dispatch_traits;
         using mailbox_t = MailBox;
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, MailBox, actor_type::classic>, pmr::deleter_t>;
 

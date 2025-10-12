@@ -12,9 +12,14 @@
 // Simple worker actor that processes tasks
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
-    enum class command : uint64_t {
-        process_task = 0,
-        get_status
+    void process_task(const std::string& task);
+    void get_status();
+
+    struct dispatch_traits {
+        using methods = actor_zeta::type_traits::type_list<
+            actor_zeta::method<&worker_actor::process_task>,
+            actor_zeta::method<&worker_actor::get_status>
+        >;
     };
 
     explicit worker_actor(actor_zeta::pmr::memory_resource* ptr, std::string name)
@@ -26,10 +31,10 @@ public:
 
     void behavior(actor_zeta::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::make_message_id(command::process_task):
+            case actor_zeta::msg_id<worker_actor, &worker_actor::process_task>:
                 process_task_(msg);
                 break;
-            case actor_zeta::make_message_id(command::get_status):
+            case actor_zeta::msg_id<worker_actor, &worker_actor::get_status>:
                 get_status_(msg);
                 break;
         }
@@ -39,20 +44,20 @@ public:
     size_t tasks_processed() const { return tasks_processed_; }
 
 private:
-    void process_task(const std::string& task) {
-        std::cerr << "[" << name_ << "] Processing task: " << task << std::endl;
-        ++tasks_processed_;
-    }
-
-    void get_status() {
-        std::cerr << "[" << name_ << "] Processed " << tasks_processed_ << " tasks" << std::endl;
-    }
-
     std::string name_;
     size_t tasks_processed_ = 0;
     actor_zeta::behavior_t process_task_;
     actor_zeta::behavior_t get_status_;
 };
+
+inline void worker_actor::process_task(const std::string& task) {
+    std::cerr << "[" << name_ << "] Processing task: " << task << std::endl;
+    ++tasks_processed_;
+}
+
+inline void worker_actor::get_status() {
+    std::cerr << "[" << name_ << "] Processed " << tasks_processed_ << " tasks" << std::endl;
+}
 
 // Supervisor that manages worker actors with manual scheduling
 class supervisor_actor final : public actor_zeta::actor_abstract_t {
@@ -123,7 +128,7 @@ private:
         auto msg = actor_zeta::make_message(
             resource(),
             address(),
-            worker_actor::command::process_task,
+            actor_zeta::msg_id<worker_actor, &worker_actor::process_task>,
             task);
         worker->enqueue(std::move(msg));
 
@@ -143,7 +148,7 @@ private:
             auto msg = actor_zeta::make_message(
                 resource(),
                 address(),
-                worker_actor::command::get_status);
+                actor_zeta::msg_id<worker_actor, &worker_actor::get_status>);
             worker->enqueue(std::move(msg));
             scheduler_->enqueue(worker.get());
         }

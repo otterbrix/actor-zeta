@@ -24,9 +24,14 @@ using actor_zeta::pmr::memory_resource;
 
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
-    enum class command_t : uint64_t {
-        download = 0x00,
-        work_data
+    void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
+    void work_data(const std::string& data, const std::string& /*operatorName*/);
+
+    struct dispatch_traits {
+        using methods = actor_zeta::type_traits::type_list<
+            actor_zeta::method<&worker_t::download>,
+            actor_zeta::method<&worker_t::work_data>
+        >;
     };
 
     worker_t(actor_zeta::pmr::memory_resource* ptr)
@@ -37,26 +42,15 @@ public:
 
     void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::make_message_id(command_t::download): {
+            case actor_zeta::msg_id<worker_t, &worker_t::download>: {
                 download_(msg);
                 break;
             }
-            case actor_zeta::make_message_id(command_t::work_data): {
+            case actor_zeta::msg_id<worker_t, &worker_t::work_data>: {
                 work_data_(msg);
                 break;
             }
         }
-    }
-
-
-    void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
-        tmp_ = url;
-        counter_download_data++;
-    }
-
-    void work_data(const std::string& data, const std::string& /*operatorName*/) {
-        tmp_ = data;
-        counter_work_data++;
     }
 
 private:
@@ -64,6 +58,16 @@ private:
     actor_zeta::behavior_t work_data_;
     std::string tmp_;
 };
+
+inline void worker_t::download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
+    tmp_ = url;
+    counter_download_data++;
+}
+
+inline void worker_t::work_data(const std::string& data, const std::string& /*operatorName*/) {
+    tmp_ = data;
+    counter_work_data++;
+}
 
 /// non thread safe
 class supervisor_lite final : public actor_zeta::actor_abstract_t {
@@ -190,11 +194,11 @@ int main() {
 
     // Broadcast download task - one message to all actors
     std::cerr << "=== Broadcasting download task to all " << actors << " actors ===" << std::endl;
-    supervisor->broadcast_on_worker(worker_t::command_t::download, std::string("url"), std::string("user"), std::string("pass"));
+    supervisor->broadcast_on_worker(actor_zeta::msg_id<worker_t, &worker_t::download>, std::string("url"), std::string("user"), std::string("pass"));
 
     // Broadcast work_data task - one message to all actors
     std::cerr << "=== Broadcasting work_data task to all " << actors << " actors ===" << std::endl;
-    supervisor->broadcast_on_worker(worker_t::command_t::work_data, std::string("data"), std::string("operator"));
+    supervisor->broadcast_on_worker(actor_zeta::msg_id<worker_t, &worker_t::work_data>, std::string("data"), std::string("operator"));
 
     std::cerr << "=== Waiting for processing ===" << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
