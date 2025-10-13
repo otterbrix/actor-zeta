@@ -15,45 +15,54 @@ actor-zeta is an open source C++11/14/17 virtual actor model implementation feat
 
 #include <actor-zeta.hpp>
 
-using actor_zeta::basic_async_actor;
-
-class key_value_storage_t final : public basic_async_actor {
+class key_value_storage_t final : public actor_zeta::basic_actor<key_value_storage_t> {
 public:
-    explicit key_value_storage_t(dummy_supervisor &ref) : basic_async_actor(ref, "storage") {
+    void init();
+    void search(std::string& key);
+    void add(const std::string& key, const std::string& value);
 
-        add_handler(
-                "init",
-                &key_value_storage_t::init
-        );
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &key_value_storage_t::init,
+        &key_value_storage_t::search,
+        &key_value_storage_t::add
+    >;
 
-        add_handler(
-                "search",
-                &key_value_storage_t::search
-        );
+    explicit key_value_storage_t(actor_zeta::pmr::memory_resource* ptr)
+        : actor_zeta::basic_actor<key_value_storage_t>(ptr)
+        , init_(actor_zeta::make_behavior(resource(), this, &key_value_storage_t::init))
+        , search_(actor_zeta::make_behavior(resource(), this, &key_value_storage_t::search))
+        , add_(actor_zeta::make_behavior(resource(), this, &key_value_storage_t::add)) {
+    }
 
-        add_handler(
-                "add",
-                &key_value_storage_t::add
-        );
-
+    void behavior(actor_zeta::message* msg) {
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<key_value_storage_t, &key_value_storage_t::init>) {
+            init_(msg);
+        } else if (cmd == actor_zeta::msg_id<key_value_storage_t, &key_value_storage_t::search>) {
+            search_(msg);
+        } else if (cmd == actor_zeta::msg_id<key_value_storage_t, &key_value_storage_t::add>) {
+            add_(msg);
+        }
     }
 
     ~key_value_storage_t() override = default;
+
+private:
+    actor_zeta::behavior_t init_;
+    actor_zeta::behavior_t search_;
+    actor_zeta::behavior_t add_;
 
     void init() {
        /// ...
     }
 
-private:
-
-    void search(std::string &key) {
+    void search(std::string& key) {
         /// ...
     }
 
-    void add(const std::string &key, const std::string &value) {
+    void add(const std::string& key, const std::string& value) {
         /// ...
     }
-    
 };
 
 ```

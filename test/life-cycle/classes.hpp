@@ -11,11 +11,6 @@
 class storage_t;
 class test_handlers;
 
-enum class dummy_supervisor_command : uint64_t {
-    create_storage = 1,
-    create_test_handlers = 2
-};
-
 class dummy_supervisor final : public actor_zeta::actor_abstract_t {
 public:
     static uint64_t constructor_counter;
@@ -42,15 +37,10 @@ public:
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::make_message_id(dummy_supervisor_command::create_storage): {
-                create_storage_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(dummy_supervisor_command::create_test_handlers): {
-                create_test_handlers_(msg);
-                break;
-            }
+        if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_storage>) {
+            create_storage_(msg);
+        } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_test_handlers>) {
+            create_test_handlers_(msg);
         }
     }
 
@@ -75,6 +65,11 @@ public:
         return true;
     }
 
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &dummy_supervisor::create_storage,
+        &dummy_supervisor::create_test_handlers
+    >;
+
 private:
     actor_zeta::behavior_t create_storage_;
     actor_zeta::behavior_t create_test_handlers_;
@@ -92,14 +87,6 @@ uint64_t dummy_supervisor::add_actor_impl_counter = 0;
 uint64_t dummy_supervisor::add_supervisor_impl_counter = 0;
 
 uint64_t dummy_supervisor::enqueue_base_counter = 0;
-
-enum class storage_names : uint64_t {
-    init = 0x00,
-    search,
-    add,
-    delete_table,
-    create_table
-};
 
 class storage_t final : public actor_zeta::basic_actor<storage_t> {
 public:
@@ -139,27 +126,17 @@ public:
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command().integer_value()) {
-            case actor_zeta::make_message_id(storage_names::init): {
-                init_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::search): {
-                search_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::add): {
-                add_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::delete_table): {
-                delete_table_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::create_table): {
-                create_table_(msg);
-                break;
-            }
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<storage_t, &storage_t::init>) {
+            init_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::search>) {
+            search_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::add>) {
+            add_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::delete_table>) {
+            delete_table_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::create_table>) {
+            create_table_(msg);
         }
     }
 
@@ -167,7 +144,6 @@ public:
         destructor_counter++;
     }
 
-private:
     void init() {
         init_counter++;
         TRACE("+++");
@@ -207,6 +183,15 @@ private:
                   << std::endl;
     }
 
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &storage_t::init,
+        &storage_t::search,
+        &storage_t::add,
+        &storage_t::delete_table,
+        &storage_t::create_table
+    >;
+
+private:
     actor_zeta::behavior_t init_;
     actor_zeta::behavior_t search_;
     actor_zeta::behavior_t add_;
@@ -223,14 +208,6 @@ uint64_t storage_t::add_counter = 0;
 uint64_t storage_t::delete_table_counter = 0;
 uint64_t storage_t::create_table_counter = 0;
 
-enum class test_handlers_names : uint64_t {
-    ptr_0 = 0x00,
-    ptr_1,
-    ptr_2,
-    ptr_3,
-    ptr_4,
-}; // namespace test_handlers_names
-
 class test_handlers final : public actor_zeta::basic_actor<test_handlers> {
 public:
     static uint64_t init_counter;
@@ -244,72 +221,68 @@ public:
 public:
     test_handlers(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_handlers>(ptr)
-        , ptr_0_(actor_zeta::make_behavior(
-              resource(),
-              []() {
-                  TRACE("+++");
-                  ptr_0_counter++;
-              }))
-        , ptr_1_(actor_zeta::make_behavior(
-              resource(),
-              []() {
-                  TRACE("+++");
-                  ptr_1_counter++;
-              }))
-        , ptr_2_(actor_zeta::make_behavior(
-              resource(),
-              [](int&) {
-                  TRACE("+++");
-                  ptr_2_counter++;
-              }))
-        , ptr_3_(actor_zeta::make_behavior(
-              resource(),
-              [](int data_1, int& data_2) {
-                  TRACE("+++");
-                  std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
-                  ptr_3_counter++;
-              }))
-        , ptr_4_(actor_zeta::make_behavior(
-              resource(),
-              [](int data_1, int& data_2, const std::string& data_3) {
-                  TRACE("+++");
-                  std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
-                  ptr_4_counter++;
-              })) {
+        , ptr_0_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_0))
+        , ptr_1_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_1))
+        , ptr_2_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_2))
+        , ptr_3_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_3))
+        , ptr_4_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_4)) {
         init();
     }
 
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command().integer_value()) {
-            case actor_zeta::make_message_id(test_handlers_names::ptr_0): {
-                ptr_0_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(test_handlers_names::ptr_1): {
-                ptr_1_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(test_handlers_names::ptr_2): {
-                ptr_2_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(test_handlers_names::ptr_3): {
-                ptr_3_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(test_handlers_names::ptr_4): {
-                ptr_4_(msg);
-                break;
-            }
-            default: {
-                TRACE("+++");
-                break;
-            }
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_0>) {
+            ptr_0_(msg);
+        } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_1>) {
+            ptr_1_(msg);
+        } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_2>) {
+            ptr_2_(msg);
+        } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_3>) {
+            ptr_3_(msg);
+        } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_4>) {
+            ptr_4_(msg);
+        } else {
+            TRACE("+++");
         }
     }
 
     ~test_handlers() override = default;
+
+    void ptr_0() {
+        TRACE("+++");
+        ptr_0_counter++;
+    }
+
+    void ptr_1() {
+        TRACE("+++");
+        ptr_1_counter++;
+    }
+
+    void ptr_2(int&) {
+        TRACE("+++");
+        ptr_2_counter++;
+    }
+
+    void ptr_3(int data_1, int& data_2) {
+        TRACE("+++");
+        std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
+        ptr_3_counter++;
+    }
+
+    void ptr_4(int data_1, int& data_2, const std::string& data_3) {
+        TRACE("+++");
+        std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
+        ptr_4_counter++;
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &test_handlers::ptr_0,
+        &test_handlers::ptr_1,
+        &test_handlers::ptr_2,
+        &test_handlers::ptr_3,
+        &test_handlers::ptr_4
+    >;
 
 private:
     void init() {

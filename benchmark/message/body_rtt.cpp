@@ -6,7 +6,7 @@
 #include <tuple>
 
 #include <actor-zeta/config.hpp>
-#include <actor-zeta/detail/pmr/memory_resource.hpp>
+#include <actor-zeta/core.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 
 #include "fixtures.hpp"
@@ -18,33 +18,25 @@ namespace benchmark_messages {
 
         template<typename... Args>
         auto message_arg_tmpl(
-#if HAVE_STD_PMR==1
-            actor_zeta::pmr::monotonic_buffer_resource* mr,
-#endif
+            std::pmr::monotonic_buffer_resource* mr,
             Args&&... args) -> void;
 
         namespace body {
 
             template<typename... Args>
             auto message_arg_tmpl(
-#if HAVE_STD_PMR==1
-                __attribute__((unused)) actor_zeta::pmr::monotonic_buffer_resource* mr,
-#endif
+                std::pmr::monotonic_buffer_resource* mr,
                 Args&&... args) -> void {
-                actor_zeta::detail::rtt rtt_tuple(nullptr, std::forward<Args>(args)...);
+                actor_zeta::detail::rtt rtt_tuple(mr, std::forward<Args>(args)...);
             }
 
             template<typename T, std::size_t... I>
             auto call_message_arg_tmpl(
                 T& packed_tuple,
-#if HAVE_STD_PMR==1
-                actor_zeta::pmr::monotonic_buffer_resource* mr,
-#endif
+                std::pmr::monotonic_buffer_resource* mr,
                 actor_zeta::type_traits::index_sequence<I...>) -> void {
                 message_arg_tmpl(
-#if HAVE_STD_PMR==1
                     mr,
-#endif
                     (std::get<I>(packed_tuple))...);
             }
 

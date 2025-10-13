@@ -8,25 +8,25 @@
 #include <chrono>
 #include <vector>
 
-enum class command : uint64_t {
-    ping = 0
-};
-
 // Basic actor that just handles messages
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
     explicit worker_actor(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_actor>(ptr)
-        , ping_(actor_zeta::make_behavior(resource(), []() -> void {
-            // Empty handler
-        })) {
+        , ping_(actor_zeta::make_behavior(resource(), this, &worker_actor::ping)) {
+    }
+
+    void ping() {
+        // Empty handler
     }
 
     void behavior(actor_zeta::message* msg) {
-        if (msg->command() == actor_zeta::make_message_id(command::ping)) {
+        if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
             ping_(msg);
         }
     }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::ping>;
 
 private:
     actor_zeta::behavior_t ping_;
@@ -78,7 +78,7 @@ TEST_CASE("shutdown - basic test") {
 
     // Send some messages
     for (int i = 0; i < 3; ++i) {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), command::ping);
+        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
     }
 
     scheduler->start();
@@ -105,7 +105,7 @@ TEST_CASE("shutdown - multiple actors") {
     // Send messages to all actors
     for (auto& actor : actors) {
         for (int i = 0; i < 2; ++i) {
-            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), command::ping);
+            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
         }
     }
 
@@ -128,7 +128,7 @@ TEST_CASE("shutdown - immediate stop") {
 
     // Send messages
     for (int i = 0; i < 10; ++i) {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), command::ping);
+        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
     }
 
     scheduler->start();

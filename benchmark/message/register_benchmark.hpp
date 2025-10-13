@@ -13,7 +13,6 @@ namespace benchmark_messages {
     }                                                                                                               \
     BENCHMARK_REGISTER_F(fixture, bm_name)->DenseRange(0, 32, 8)
 
-#if HAVE_STD_PMR==1
 #define REGISTER_MEMR_BENCHMARK(fixture, bm_name, p, ns, ...)                                                    \
     BENCHMARK_TEMPLATE_DEFINE_F(fixture, bm_name, p, __VA_ARGS__)                                                \
     (benchmark::State & state) {                                                                                 \
@@ -22,16 +21,6 @@ namespace benchmark_messages {
         }                                                                                                        \
     }                                                                                                            \
     BENCHMARK_REGISTER_F(fixture, bm_name)->DenseRange(0, 32, 8)
-#else
-#define REGISTER_MEMR_BENCHMARK(fixture, bm_name, p, ns, ...)                                                \
-    BENCHMARK_TEMPLATE_DEFINE_F(fixture, bm_name, p, __VA_ARGS__)                                            \
-    (benchmark::State & state) {                                                                             \
-        while (state.KeepRunning()) {                                                                        \
-            ns::call_message_arg_tmpl(arguments_, actor_zeta::type_traits::make_index_sequence<counter_>{}); \
-        }                                                                                                    \
-    }                                                                                                        \
-    BENCHMARK_REGISTER_F(fixture, bm_name)->DenseRange(0, 32, 8)
-#endif
 
 #define REGISTER_BENCHMARK_FOR_RAWPTR(fixture, bm_name, type_name, namespace_name, ...) REGISTER_BENCHMARK(fixture, bm_name, type_name, namespace_name, __VA_ARGS__)
 #define REGISTER_BENCHMARK_FOR_SMARTPTR(fixture, bm_name, type_name, namespace_name, ...) REGISTER_BENCHMARK(fixture, bm_name, type_name, namespace_name, __VA_ARGS__)

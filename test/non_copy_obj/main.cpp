@@ -15,10 +15,6 @@ using actor_zeta::pmr::memory_resource;
 class dummy_supervisor;
 class storage_t;
 
-enum class command_t {
-    check = 0x00
-};
-
 struct dummy_data {
     int number{0};
     std::string name{"default_name"};
@@ -40,11 +36,8 @@ public:
     void check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::make_message_id(command_t::check): {
-                check_(msg);
-                break;
-            }
+        if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
+            check_(msg);
         }
     }
 
@@ -53,6 +46,10 @@ public:
         behavior(tmp_msg.get());
         return true;
     }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &dummy_supervisor::check
+    >;
 
 private:
     actor_zeta::behavior_t check_;
@@ -74,7 +71,7 @@ TEST_CASE("base move test") {
     auto ptr_data = std::unique_ptr<dummy_data>(new dummy_data);
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), command_t::check, std::move(ptr_data), data);
+    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::move(ptr_data), data);
     REQUIRE(ptr_data == nullptr);
 }
 
@@ -84,5 +81,5 @@ TEST_CASE("construct in place") {
 
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), command_t::check, std::unique_ptr<dummy_data>(new dummy_data), data);
+    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
 }

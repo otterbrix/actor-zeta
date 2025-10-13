@@ -1,60 +1,76 @@
 #pragma once
 
-#include <iostream>
-#include <map>
-#include <memory>
-#include <string>
-#include <vector>
-
 #include <actor-zeta.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
 
-template<class... Args>
-struct counter_args_t {
-    static constexpr size_t value = sizeof...(Args);
-};
+// Simple ping-pong actor for multithreaded benchmark
+template<typename... Args>
+class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Args...>> {
+    using base_type = actor_zeta::basic_actor<ping_pong_actor<Args...>>;
 
-#define DEFINE_ACTOR(actor_name, supervisor_name, ...)                                                                    \
-    auto set_done(supervisor_name* sup_ptr_)->void;                                                                       \
-    class actor_name final : public actor_zeta::basic_async_actor {                                                       \
-        supervisor_name* sup_ptr_;                                                                                        \
-        std::map<name_t, actor_zeta::address_t> address_book_;                                                            \
-        template<size_t... I>                                                                                             \
-        auto perform(command_t cmd, actor_zeta::type_traits::index_sequence<I...>) -> void {                              \
-            actor_zeta::send(address_book_.begin()->second, address(), cmd, I...);                                        \
-        }                                                                                                                 \
-                                                                                                                          \
-    public:                                                                                                               \
-        actor_name(supervisor_name* ptr)                                                                                  \
-            : actor_zeta::basic_async_actor(ptr, names::actor)                                                            \
-            , sup_ptr_(ptr) {                                                                                             \
-            add_handler(command_t::add_address, &actor_name::add_address);                                                \
-            add_handler(command_t::start, &actor_name::start);                                                            \
-            add_handler(command_t::ping, &actor_name::ping);                                                              \
-            add_handler(command_t::pong, &actor_name::pong);                                                              \
-        }                                                                                                                 \
-                                                                                                                          \
-        ~actor_name() override = default;                                                                                 \
-                                                                                                                          \
-        void add_address(actor_zeta::address_t address, name_t name) {                                                    \
-            if (address && this != address.get()) {                                                                       \
-                address_book_.emplace(name, std::move(address));                                                          \
-            }                                                                                                             \
-        }                                                                                                                 \
-                                                                                                                          \
-        void start() {                                                                                                    \
-            perform(command_t::ping, actor_zeta::type_traits::make_index_sequence<counter_args_t<__VA_ARGS__>::value>()); \
-        }                                                                                                                 \
-                                                                                                                          \
-        void ping(__VA_ARGS__) {                                                                                          \
-            std::cout << std::this_thread::get_id() << " :: PING " << reinterpret_cast<void*>(this) << std::endl;         \
-            counter_g++;                                                                                                  \
-            perform(command_t::pong, actor_zeta::type_traits::make_index_sequence<counter_args_t<__VA_ARGS__>::value>()); \
-        }                                                                                                                 \
-                                                                                                                          \
-        void pong(__VA_ARGS__) {                                                                                          \
-            std::cout << std::this_thread::get_id() << " :: PONG " << reinterpret_cast<void*>(this) << std::endl;         \
-            counter_g++;                                                                                                  \
-            set_done(sup_ptr_);                                                                                           \
-        }                                                                                                                 \
+    ping_pong_actor* partner_;
+    actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
+    actor_zeta::behavior_t start_behavior_;
+    actor_zeta::behavior_t ping_behavior_;
+    actor_zeta::behavior_t pong_behavior_;
+
+public:
+    explicit ping_pong_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::scheduler_abstract_t* sched = nullptr)
+        : base_type(resource)
+        , partner_(nullptr)
+        , scheduler_(sched)
+        , start_behavior_(actor_zeta::make_behavior(resource, this, &ping_pong_actor::start))
+        , ping_behavior_(actor_zeta::make_behavior(resource, this, &ping_pong_actor::ping))
+        , pong_behavior_(actor_zeta::make_behavior(resource, this, &ping_pong_actor::pong)) {
     }
+
+    ~ping_pong_actor() override = default;
+
+    void set_partner(ping_pong_actor* p) {
+        partner_ = p;
+    }
+
+    void set_scheduler(actor_zeta::scheduler::scheduler_abstract_t* sched) {
+        scheduler_ = sched;
+    }
+
+    void start() {
+        // Send ping to partner and schedule only if needed
+        if (partner_ && scheduler_) {
+            // send() returns true if actor was unblocked - needs scheduling
+            if (actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...)) {
+                scheduler_->enqueue(partner_);
+            }
+        }
+    }
+
+    void ping(Args...) {
+        // Receive ping, send pong back
+        if (partner_ && scheduler_) {
+            // send() returns true if actor was unblocked - needs scheduling
+            if (actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...)) {
+                scheduler_->enqueue(partner_);
+            }
+        }
+    }
+
+    void pong(Args...) {
+        // Receive pong, do nothing (end of exchange)
+    }
+
+    void behavior(actor_zeta::message* msg) {
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::start>) {
+            start_behavior_(msg);
+        } else if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>) {
+            ping_behavior_(msg);
+        } else if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::pong>) {
+            pong_behavior_(msg);
+        }
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &ping_pong_actor::start,
+        &ping_pong_actor::ping,
+        &ping_pong_actor::pong
+    >;
+};

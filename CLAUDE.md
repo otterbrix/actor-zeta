@@ -145,10 +145,11 @@ The library implements **cooperative actors** with custom memory management:
 
 **Actor Lifecycle:**
 1. Define actor class inheriting from `basic_actor`
-2. Register handlers in constructor: `add_handler("command", &MyActor::method)`
-3. Spawn with PMR: `auto actor = spawn<MyActor>(memory_resource, args...)`
-4. Send messages: `send(actor, make_message("command", arg1, arg2))`
-5. Scheduler runs actor's message handlers cooperatively
+2. Define `dispatch_traits` with method pointers: `dispatch_traits<&MyActor::method1, &MyActor::method2>`
+3. Implement `behavior(message*)` method to dispatch messages
+4. Spawn with PMR: `auto actor = spawn<MyActor>(memory_resource, args...)`
+5. Send messages: `send(actor, sender, &MyActor::method, arg1, arg2)`
+6. Scheduler runs actor's message handlers cooperatively
 
 ### Message System (`header/actor-zeta/mailbox/`)
 
@@ -248,7 +249,11 @@ delete actor;
 
 ✅ **CORRECT:**
 ```cpp
-send(target_actor, make_message("command", arg1, arg2));
+// Method pointer dispatch (recommended)
+send(target_actor, sender_address, &MyActor::handle_command, arg1, arg2);
+
+// Or with message_id
+send(target_actor, sender_address, msg_id<MyActor, &MyActor::handle_command>, arg1, arg2);
 ```
 
 Messages are immutable. Handler signature:
@@ -263,16 +268,35 @@ void MyActor::handle_command(const ArgType1& arg1, const ArgType2& arg2) {
 ```cpp
 class MyActor final : public basic_actor<MyActor> {
 public:
-    explicit MyActor(/* supervisor reference */, constructor_args...)
-        : basic_actor(/* ... */, "actor_name") {
+    void handle_command1(const std::string& arg);
+    void handle_command2(int arg1, double arg2);
 
-        add_handler("command1", &MyActor::handle_command1);
-        add_handler("command2", &MyActor::handle_command2);
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &MyActor::handle_command1,
+        &MyActor::handle_command2
+    >;
+
+    explicit MyActor(actor_zeta::pmr::memory_resource* ptr, constructor_args...)
+        : basic_actor<MyActor>(ptr)
+        , command1_(actor_zeta::make_behavior(resource(), this, &MyActor::handle_command1))
+        , command2_(actor_zeta::make_behavior(resource(), this, &MyActor::handle_command2)) {
+    }
+
+    void behavior(actor_zeta::message* msg) {
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command1>) {
+            command1_(msg);
+        } else if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command2>) {
+            command2_(msg);
+        }
     }
 
     ~MyActor() override = default;
 
 private:
+    actor_zeta::behavior_t command1_;
+    actor_zeta::behavior_t command2_;
+
     void handle_command1(const std::string& arg) {
         // Handler implementation
     }
@@ -478,9 +502,11 @@ Switch between profiles using the dropdown in CLion's toolbar.
 - `void behavior(message*)` - virtual method called by base class, must use pointer
 - Direct `message*` usage in low-level code (tests, custom actors)
 
-**When to use each approach:**
-- **High-level actors (`basic_actor<T>`)**: Use `add_handler()` in constructor
-- **Low-level/test code**: Can use `make_behavior()` + `behavior(message*)` for fine control
+**Current API (all code should use this):**
+- Define `dispatch_traits<&Actor::method...>` with method pointers
+- Implement `behavior(message*)` to dispatch based on `msg_id<Actor, &Actor::method>`
+- Create `behavior_t` members using `make_behavior(resource, this, &Actor::method)`
+- Send messages using `send(actor, sender, &Actor::method, args...)`
 
 ## Recent Important Fixes (Session Memory)
 

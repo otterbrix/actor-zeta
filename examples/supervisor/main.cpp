@@ -60,13 +60,6 @@ inline void worker_actor::get_status() {
 // Supervisor that manages worker actors with manual scheduling
 class supervisor_actor final : public actor_zeta::actor_abstract_t {
 public:
-    enum class command : uint64_t {
-        create_worker = 0,
-        assign_task,
-        stop_workers,
-        check_status
-    };
-
     supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
         : actor_zeta::actor_abstract_t(ptr)
         , scheduler_(scheduler)
@@ -76,34 +69,6 @@ public:
         , check_status_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::check_status)) {
     }
 
-    void behavior(actor_zeta::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::make_message_id(command::create_worker):
-                create_worker_(msg);
-                break;
-            case actor_zeta::make_message_id(command::assign_task):
-                assign_task_(msg);
-                break;
-            case actor_zeta::make_message_id(command::stop_workers):
-                stop_workers_(msg);
-                break;
-            case actor_zeta::make_message_id(command::check_status):
-                check_status_(msg);
-                break;
-        }
-    }
-
-    size_t worker_count() const { return workers_.size(); }
-
-protected:
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        // Supervisor processes messages synchronously in calling thread
-        std::unique_lock<std::mutex> lock(mutex_);
-        behavior(msg.get());
-        return true;
-    }
-
-private:
     void create_worker(const std::string& name) {
         auto worker = actor_zeta::spawn<worker_actor>(resource(), name);
         std::cerr << "[Supervisor] Created worker: " << name << std::endl;
@@ -152,6 +117,37 @@ private:
         }
     }
 
+    void behavior(actor_zeta::message* msg) {
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::create_worker>) {
+            create_worker_(msg);
+        } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::assign_task>) {
+            assign_task_(msg);
+        } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::stop_workers>) {
+            stop_workers_(msg);
+        } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::check_status>) {
+            check_status_(msg);
+        }
+    }
+
+    size_t worker_count() const { return workers_.size(); }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &supervisor_actor::create_worker,
+        &supervisor_actor::assign_task,
+        &supervisor_actor::stop_workers,
+        &supervisor_actor::check_status
+    >;
+
+protected:
+    bool enqueue_impl(actor_zeta::message_ptr msg) override {
+        // Supervisor processes messages synchronously in calling thread
+        std::unique_lock<std::mutex> lock(mutex_);
+        behavior(msg.get());
+        return true;
+    }
+
+private:
     actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> workers_;
     size_t next_worker_ = 0;
@@ -182,7 +178,7 @@ int main() {
         auto msg = actor_zeta::make_message(
             resource,
             actor_zeta::address_t::empty_address(),
-            supervisor_actor::command::create_worker,
+            actor_zeta::msg_id<supervisor_actor, &supervisor_actor::create_worker>,
             std::string("Worker-") + std::to_string(i));
         supervisor->enqueue(std::move(msg));
     }
@@ -203,7 +199,7 @@ int main() {
         auto msg = actor_zeta::make_message(
             resource,
             actor_zeta::address_t::empty_address(),
-            supervisor_actor::command::assign_task,
+            actor_zeta::msg_id<supervisor_actor, &supervisor_actor::assign_task>,
             task);
         supervisor->enqueue(std::move(msg));
     }
@@ -218,7 +214,7 @@ int main() {
         auto msg = actor_zeta::make_message(
             resource,
             actor_zeta::address_t::empty_address(),
-            supervisor_actor::command::check_status);
+            actor_zeta::msg_id<supervisor_actor, &supervisor_actor::check_status>);
         supervisor->enqueue(std::move(msg));
     }
 
@@ -232,7 +228,7 @@ int main() {
         auto msg = actor_zeta::make_message(
             resource,
             actor_zeta::address_t::empty_address(),
-            supervisor_actor::command::stop_workers);
+            actor_zeta::msg_id<supervisor_actor, &supervisor_actor::stop_workers>);
         supervisor->enqueue(std::move(msg));
     }
 

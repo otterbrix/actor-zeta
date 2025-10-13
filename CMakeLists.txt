@@ -229,5 +229,5 @@ if (ALLOW_TESTS)
 endif()
 
 if (ALLOW_BENCHMARK)
-    # add_subdirectory(benchmark)
+    add_subdirectory(benchmark)
 endif()

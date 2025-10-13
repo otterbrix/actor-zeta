@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/mailbox/id.hpp>
+#include <actor-zeta/base/forwards.hpp>
 
 namespace actor_zeta {
 
@@ -96,19 +97,20 @@ namespace actor_zeta {
     // Forward declaration для detail::dispatch_method_impl
     namespace detail {
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
-        void dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args);
+        bool dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args);
     }
 
     // Нерекурсивный хелпер для dispatch одного метода
+    // Returns: true if method found AND actor was unblocked (needs scheduling)
     template<typename Actor, typename Method, auto MethodPtr, uint64_t Index, typename ActorPtr, typename Sender, typename... Args>
     static bool try_dispatch_one(Method method, ActorPtr* actor, Sender sender, Args&&... args) {
         // Сравниваем только если сигнатуры совпадают
         if constexpr (std::is_same<Method, decltype(MethodPtr)>::value) {
             if (method == MethodPtr) {
                 // Нашли! Отправляем сообщение с ActionId = Index
-                detail::dispatch_method_impl<Actor, MethodPtr, Index>(
+                // Возвращаем результат enqueue() - true если актор разблокирован
+                return detail::dispatch_method_impl<Actor, MethodPtr, Index>(
                     actor, sender, std::forward<Args>(args)...);
-                return true;
             }
         }
         return false;
@@ -124,8 +126,19 @@ namespace actor_zeta {
     // Специализация runtime_dispatch_helper с извлечением MethodPtrs из type_list
     template<typename Actor, typename Method, auto... MethodPtrs>
     struct runtime_dispatch_helper<Actor, Method, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
+        // Перегрузка для ActorPtr*
         template<typename ActorPtr, typename Sender, typename... Args>
         static bool dispatch(Method method, ActorPtr* actor, Sender sender, Args&&... args) {
+            return dispatch_impl<Actor, Method, MethodPtrs...>(
+                method, actor, sender,
+                std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
+                std::forward<Args>(args)...);
+        }
+
+        // Перегрузка для address_t
+        template<typename Sender, typename... Args>
+        static bool dispatch(Method method, base::address_t target, Sender sender, Args&&... args) {
+            auto* actor = static_cast<Actor*>(target.operator->());
             return dispatch_impl<Actor, Method, MethodPtrs...>(
                 method, actor, sender,
                 std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
