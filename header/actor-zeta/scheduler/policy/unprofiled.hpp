@@ -1,7 +1,6 @@
 #pragma once
 
 #include <actor-zeta/scheduler/job_ptr.hpp>
-#include <actor-zeta/scheduler/scheduler_abstract.hpp>
 
 namespace actor_zeta { namespace scheduler {
 

@@ -10,8 +10,8 @@
 #include <vector>
 
 #include <actor-zeta/detail/ref_counted.hpp>
-#include <actor-zeta/scheduler/scheduler_abstract.hpp>
 #include <actor-zeta/scheduler/worker.hpp>
+#include <actor-zeta/scheduler/job_ptr.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
@@ -102,11 +102,11 @@ namespace actor_zeta { namespace scheduler {
             }
 
             /// run cleanup code for each job
-            auto f = &cleanup_and_release;
+            auto release_job = [](job_ptr job) { job.release(); };
             for (auto& w : workers_) {
-                policy_.foreach_resumable(w.get(), f);
+                policy_.foreach_resumable(w.get(), release_job);
             }
-            policy_.foreach_central_resumable(this, f);
+            policy_.foreach_central_resumable(this, release_job);
         }
 
         /// @brief Enqueue a job for execution
