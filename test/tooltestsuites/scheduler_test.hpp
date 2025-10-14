@@ -5,25 +5,39 @@
 
 #include <deque>
 
-#include "actor-zeta/scheduler/scheduler_abstract.hpp"
+#include "actor-zeta/scheduler/job_ptr.hpp"
 
 namespace actor_zeta { namespace test {
 
-    class scheduler_test_t final : public scheduler::scheduler_abstract_t {
+    class scheduler_test_t final {
     public:
         scheduler_test_t(std::size_t num_worker_threads, std::size_t max_throughput);
 
-        std::deque<scheduler::resumable_t*> jobs;
+        std::deque<scheduler::job_ptr> jobs;
 
         bool run_once();
         size_t run(size_t max_count = std::numeric_limits<size_t>::max());
 
-    ///protected:
-        void start() override;
-        void stop() override;
-        void enqueue(scheduler::resumable_t* ptr) override;
+        void start();
+        void stop();
+        void enqueue(scheduler::job_ptr job);
+
+        template<typename T>
+        void enqueue(T* actor) {
+            enqueue(scheduler::job_ptr::wrap(actor));
+        }
+
+        inline size_t max_throughput() const {
+            return max_throughput_;
+        }
+
+        inline size_t num_workers() const {
+            return num_workers_;
+        }
 
     private:
+        size_t max_throughput_;
+        size_t num_workers_;
     };
 
 }} // namespace actor_zeta::test

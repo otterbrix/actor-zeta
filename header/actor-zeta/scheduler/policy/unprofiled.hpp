@@ -1,6 +1,6 @@
 #pragma once
 
-#include <actor-zeta/scheduler/resumable.hpp>
+#include <actor-zeta/scheduler/job_ptr.hpp>
 #include <actor-zeta/scheduler/scheduler_abstract.hpp>
 
 namespace actor_zeta { namespace scheduler {
@@ -13,13 +13,13 @@ namespace actor_zeta { namespace scheduler {
         void before_shutdown(Worker*) {}
 
         template<class Worker>
-        void before_resume(Worker*, resumable*) {}
+        void before_resume(Worker*, job_ptr) {}
 
         template<class Worker>
-        void after_resume(Worker*, resumable*) {}
+        void after_resume(Worker*, job_ptr) {}
 
         template<class Worker>
-        void after_completion(Worker*, resumable*) {}
+        void after_completion(Worker*, job_ptr) {}
 
     protected:
         template<class WorkerOrCoordinator>

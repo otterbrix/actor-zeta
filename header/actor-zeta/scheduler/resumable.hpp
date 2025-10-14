@@ -1,9 +1,6 @@
 #pragma once
 
-#include <type_traits>
 #include <cstddef>
-
-#include "forwards.hpp"
 
 namespace actor_zeta {
 
@@ -11,17 +8,21 @@ namespace actor_zeta {
 
     namespace scheduler {
 
+    /// @brief Result of resume operation
     enum class resume_result {
-        resume,
-        awaiting,
-        done,
-        shutdown
+        resume,     ///< Job needs to be resumed again (has more work)
+        awaiting,   ///< Job is waiting for external event (blocked)
+        done,       ///< Job is completed
+        shutdown    ///< Job is shutdown sentinel
     };
 
-    /// Extended resume result with additional information about execution
+    /// @brief Extended resume result with execution statistics
+    ///
+    /// Contains both the execution status and the number of messages processed.
+    /// Supports implicit conversion to resume_result for backward compatibility.
     struct resume_info {
-        resume_result result;           // Execution status
-        size_t messages_processed;      // Number of messages processed in this resume call
+        resume_result result;           ///< Execution status
+        size_t messages_processed;      ///< Number of messages processed in this resume call
 
         resume_info() noexcept
             : result(resume_result::done)
@@ -33,32 +34,10 @@ namespace actor_zeta {
             , messages_processed(processed) {
         }
 
-        // Implicit conversion to resume_result for backward compatibility
+        /// @brief Implicit conversion to resume_result for backward compatibility
         operator resume_result() const noexcept {
             return result;
         }
     };
-
-    struct resumable {
-        resumable();
-        virtual ~resumable();
-        virtual resume_info resume(scheduler_abstract_t*, max_throughput_t) = 0;
-        virtual void intrusive_ptr_add_ref_impl() = 0;
-        virtual void intrusive_ptr_release_impl() = 0;
-    };
-
-    using resumable_t = resumable;
-
-    template<class T>
-    typename std::enable_if<std::is_same<T*, resumable*>::value>::type
-    intrusive_ptr_add_ref(T* ptr) {
-        ptr->intrusive_ptr_add_ref_impl();
-    }
-
-    template<class T>
-    typename std::enable_if<std::is_same<T*, resumable*>::value>::type
-    intrusive_ptr_release(T* ptr) {
-        ptr->intrusive_ptr_release_impl();
-    }
 
 }} // namespace actor_zeta::scheduler

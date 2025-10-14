@@ -55,7 +55,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
     SECTION("No messages - returns 0") {
-        auto info = actor->resume(nullptr, 100);
+        auto info = actor->resume(100);
         // When no messages, messages_processed should be 0
         REQUIRE(info.messages_processed == 0);
         // Result can be resume (try_block failed) or awaiting (try_block succeeded)
@@ -65,7 +65,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
     SECTION("Single message") {
         actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
 
-        auto info = actor->resume(nullptr, 100);
+        auto info = actor->resume(100);
         REQUIRE(info.messages_processed == 1);
         REQUIRE(actor->processed_count() == 1);
     }
@@ -75,7 +75,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
             actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
         }
 
-        auto info = actor->resume(nullptr, 100);
+        auto info = actor->resume(100);
         REQUIRE(info.messages_processed == 5);
         REQUIRE(actor->processed_count() == 5);
     }
@@ -85,13 +85,13 @@ TEST_CASE("resume_info - actor returns correct message count") {
             actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
         }
 
-        auto info = actor->resume(nullptr, 3);
+        auto info = actor->resume(3);
         REQUIRE(info.messages_processed == 3);
         REQUIRE(actor->processed_count() == 3);
         REQUIRE(info.result == actor_zeta::scheduler::resume_result::resume);
 
         // Resume again
-        auto info2 = actor->resume(nullptr, 3);
+        auto info2 = actor->resume(3);
         REQUIRE(info2.messages_processed == 3);
         REQUIRE(actor->processed_count() == 6);
     }
@@ -103,7 +103,7 @@ TEST_CASE("resume_info - backward compatibility with switch") {
 
     actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
 
-    auto info = actor->resume(nullptr, 100);
+    auto info = actor->resume(100);
 
     // Should be able to switch on resume_info directly
     bool switched = false;

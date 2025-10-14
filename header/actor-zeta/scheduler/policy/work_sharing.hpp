@@ -7,29 +7,31 @@
 
 #include <actor-zeta/scheduler/forwards.hpp>
 #include <actor-zeta/scheduler/policy/unprofiled.hpp>
-#include <actor-zeta/scheduler/resumable.hpp>
+#include <actor-zeta/scheduler/job_ptr.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
     class work_sharing : public unprofiled {
     public:
-        using queue_type = std::list<resumable*>;
+        using queue_type = std::list<job_ptr>;
 
         ~work_sharing() override;
 
         struct coordinator_data {
-            explicit coordinator_data(scheduler_abstract_t*) {}
+            template<typename Scheduler>
+            explicit coordinator_data(Scheduler*) {}
             queue_type queue;
             std::mutex lock;
             std::condition_variable cv;
         };
 
         struct worker_data {
-            explicit worker_data(scheduler_abstract_t*) {}
+            template<typename Scheduler>
+            explicit worker_data(Scheduler*) {}
         };
 
         template<class Coordinator>
-        bool enqueue(Coordinator* self, resumable* job) {
+        bool enqueue(Coordinator* self, job_ptr job) {
             queue_type l;
             l.push_back(job);
             std::unique_lock<std::mutex> guard(cast(self).lock);
@@ -39,33 +41,33 @@ namespace actor_zeta { namespace scheduler {
         }
 
         template<class Coordinator>
-        void central_enqueue(Coordinator* self, resumable* job) {
+        void central_enqueue(Coordinator* self, job_ptr job) {
             enqueue(self, job);
         }
 
         template<class Worker>
-        void external_enqueue(Worker* self, resumable* job) {
+        void external_enqueue(Worker* self, job_ptr job) {
             enqueue(self->parent(), job);
         }
 
         template<class Worker>
-        void internal_enqueue(Worker* self, resumable* job) {
+        void internal_enqueue(Worker* self, job_ptr job) {
             enqueue(self->parent(), job);
         }
 
         template<class Worker>
-        void resume_job_later(Worker* self, resumable* job) {
+        void resume_job_later(Worker* self, job_ptr job) {
             enqueue(self->parent(), job);
         }
 
         template<class Worker>
-        resumable* dequeue(Worker* self) {
+        job_ptr dequeue(Worker* self) {
             auto& parent_data = cast(self->parent());
             std::unique_lock<std::mutex> guard(parent_data.lock);
             // @TODO CRITICAL BUG on condition in cooperative_actor::enqueue_impl: 'flags() != static_cast<int>(state::empty)'
             // infinite waiting on condition_variable
             parent_data.cv.wait(guard, [&] { return !parent_data.queue.empty(); });
-            resumable* job = parent_data.queue.front();
+            job_ptr job = parent_data.queue.front();
             parent_data.queue.pop_front();
             return job;
         }
@@ -76,16 +78,16 @@ namespace actor_zeta { namespace scheduler {
         template<class Coordinator, class UnaryFunction>
         void foreach_central_resumable(Coordinator* self, UnaryFunction f) {
             auto& queue = cast(self).queue;
-            auto next = [&]() -> resumable* {
+            auto next = [&]() -> job_ptr {
                 if (queue.empty()) {
-                    return nullptr;
+                    return job_ptr{nullptr, nullptr, nullptr, nullptr};
                 }
                 auto front = queue.front();
                 queue.pop_front();
                 return front;
             };
             std::unique_lock<std::mutex> guard(cast(self).lock);
-            for (auto job = next(); job != nullptr; job = next()) {
+            for (auto job = next(); job; job = next()) {
                 f(job);
             }
         }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 // Simple ping-pong actor for multithreaded benchmark
 template<typename... Args>
@@ -8,13 +9,13 @@ class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Arg
     using base_type = actor_zeta::basic_actor<ping_pong_actor<Args...>>;
 
     ping_pong_actor* partner_;
-    actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
+    actor_zeta::scheduler::sharing_scheduler* scheduler_;
     actor_zeta::behavior_t start_behavior_;
     actor_zeta::behavior_t ping_behavior_;
     actor_zeta::behavior_t pong_behavior_;
 
 public:
-    explicit ping_pong_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::scheduler_abstract_t* sched = nullptr)
+    explicit ping_pong_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : base_type(resource)
         , partner_(nullptr)
         , scheduler_(sched)
@@ -29,7 +30,7 @@ public:
         partner_ = p;
     }
 
-    void set_scheduler(actor_zeta::scheduler::scheduler_abstract_t* sched) {
+    void set_scheduler(actor_zeta::scheduler::sharing_scheduler* sched) {
         scheduler_ = sched;
     }
 

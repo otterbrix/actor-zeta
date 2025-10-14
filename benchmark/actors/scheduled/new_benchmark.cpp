@@ -2,6 +2,7 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/policy/work_sharing.hpp>
+#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -67,7 +68,7 @@ public:
 class PingPongFixture_0 : public benchmark::Fixture {
     using Actor = ping_pong_actor<>;
 
-    std::unique_ptr<actor_zeta::scheduler::scheduler_abstract_t> scheduler_;
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor1_;
     actor_zeta::pmr::memory_resource* resource_;
@@ -118,7 +119,7 @@ public:
 class PingPongFixture_1 : public benchmark::Fixture {
     using Actor = ping_pong_actor<int64_t>;
 
-    std::unique_ptr<actor_zeta::scheduler::scheduler_abstract_t> scheduler_;
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor1_;
     actor_zeta::pmr::memory_resource* resource_;
