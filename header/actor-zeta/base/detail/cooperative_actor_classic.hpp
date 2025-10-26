@@ -105,6 +105,7 @@ namespace actor_zeta { namespace base {
         };
 
         /// @brief Promise specialization for void
+        // Note: Both GCC and Clang accept template<> for member class specialization
         template<>
         class promise<void> final {
         public:
@@ -112,21 +113,16 @@ namespace actor_zeta { namespace base {
             promise(const promise&) = delete;
             promise& operator=(const promise&) = delete;
 
-            /// @brief Construct promise from slot pointer
             explicit promise(detail::slot_refcount* slot, pmr::memory_resource* res) noexcept
-                : slot_(slot)
-                , resource_(res) {
+                : slot_(slot), resource_(res) {
                 assert(slot_ && "promise<void> constructed with null slot");
             }
 
-            /// @brief Move constructor
             promise(promise&& other) noexcept
-                : slot_(other.slot_)
-                , resource_(other.resource_) {
+                : slot_(other.slot_), resource_(other.resource_) {
                 other.slot_ = nullptr;
             }
 
-            /// @brief Move assignment
             promise& operator=(promise&& other) noexcept {
                 if (this != &other) {
                     slot_ = other.slot_;
@@ -138,18 +134,15 @@ namespace actor_zeta { namespace base {
 
             ~promise() noexcept = default;
 
-            /// @brief Set successful result (void - no value, store dummy)
             void set_value() {
                 assert(slot_ && "set_value() on moved-from promise<void>");
-                slot_->set_result(detail::rtt(resource_, int{0}));  // Dummy value for void
+                slot_->set_result(detail::rtt(resource_, int{0}));
             }
 
-            /// @brief Check if promise is valid
             [[nodiscard]] bool is_valid() const noexcept {
                 return slot_ != nullptr;
             }
 
-            /// @brief Get slot pointer (does NOT transfer ownership)
             [[nodiscard]] detail::slot_refcount* slot() const noexcept {
                 return slot_;
             }
@@ -250,7 +243,7 @@ namespace actor_zeta { namespace base {
             bool needs_scheduling_;
         };
 
-        /// @brief unique_future specialization for void - direct slot ownership
+        /// @brief unique_future<void> specialization - read interface for void async operations
         template<>
         class unique_future<void> final {
         public:
