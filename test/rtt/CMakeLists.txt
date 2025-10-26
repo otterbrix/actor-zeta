@@ -27,4 +27,9 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}.
 
 include(CTest)
 include(Catch)
-catch_discover_tests(${PROJECT_NAME})
+
+# Increase timeout for all tests in this executable (especially rt_tuple with AddressSanitizer)
+# ASan makes test ~10x slower due to debug output
+catch_discover_tests(${PROJECT_NAME}
+    PROPERTIES TIMEOUT 60
+)

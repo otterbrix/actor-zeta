@@ -41,9 +41,11 @@ public:
     void send() {
         // Start ping-pong - send start message to actor0
         if (actor_0_ && scheduler_) {
-            // send() returns future - ignore it
             auto future = actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
-            scheduler_->enqueue(actor_0_.get());
+            // Only enqueue if actor was unblocked by this message
+            if (future.needs_scheduling()) {
+                scheduler_->enqueue(actor_0_.get());
+            }
         } else if (actor_0_) {
             // Synchronous mode (no scheduler)
             auto future = actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);

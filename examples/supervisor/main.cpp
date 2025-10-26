@@ -90,8 +90,10 @@ public:
         // Send task to worker (returns future - can be ignored for fire-and-forget)
         auto future = actor_zeta::send(worker.get(), address(), &worker_actor::process_task, task);
 
-        // Manual scheduling - IMPORTANT!
-        scheduler_->enqueue(worker.get());
+        // Check if worker needs scheduling after enqueue
+        if (future.needs_scheduling()) {
+            scheduler_->enqueue(worker.get());
+        }
     }
 
     void stop_workers() {
@@ -105,8 +107,10 @@ public:
         for (auto& worker : workers_) {
             // Send status request to worker (returns future - can be ignored for fire-and-forget)
             auto future = actor_zeta::send(worker.get(), address(), &worker_actor::get_status);
-            // Manual scheduling
-            scheduler_->enqueue(worker.get());
+            // Manual scheduling only if needed
+            if (future.needs_scheduling()) {
+                scheduler_->enqueue(worker.get());
+            }
         }
     }
 

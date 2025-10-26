@@ -35,20 +35,24 @@ public:
     }
 
     void start() {
-        // Send ping to partner and schedule
+        // Send ping to partner and schedule only if needed
         if (partner_ && scheduler_) {
-            // send() returns future - ignore it
             auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
-            scheduler_->enqueue(partner_);
+            // Only enqueue if actor was unblocked by this message
+            if (future.needs_scheduling()) {
+                scheduler_->enqueue(partner_);
+            }
         }
     }
 
     void ping(Args...) {
         // Receive ping, send pong back
         if (partner_ && scheduler_) {
-            // send() returns future - ignore it
             auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
-            scheduler_->enqueue(partner_);
+            // Only enqueue if actor was unblocked by this message
+            if (future.needs_scheduling()) {
+                scheduler_->enqueue(partner_);
+            }
         }
     }
 

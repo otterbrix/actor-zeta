@@ -131,20 +131,28 @@ public:
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
                 auto index = cursor_ % actors_.size();
-                // Forward the message to the selected actor and get its future
-                auto child_future = actors_[index]->enqueue_impl<R>(std::move(msg));
-                e_->enqueue(actors_[index].get());
                 ++cursor_;
                 ++count_balancer;
 
-                // Convert child's async future to sync future by waiting for result
-                // For supervisors, we execute synchronously
+                // Forward the message to the selected actor
+                auto child_future = actors_[index]->enqueue_impl<R>(std::move(msg));
+
+                // Execute child immediately if needed (inline execution to avoid deadlock)
+                if (child_future.needs_scheduling()) {
+                    // Process child's message immediately on this thread
+                    auto& child = actors_[index];
+                    while (!child_future.is_ready()) {
+                        child->resume(1);  // Process one message
+                    }
+                }
+
+                // Extract result and convert to balancer's future type
                 if constexpr (std::is_same_v<R, void>) {
-                    std::move(child_future).get(); // Wait for completion
-                    return unique_future<R>(); // Return ready void future
+                    std::move(child_future).get();  // Wait for completion
+                    return unique_future<R>();      // Return ready void future
                 } else {
-                    R result = std::move(child_future).get(); // Wait and get result
-                    return unique_future<R>(std::move(result)); // Return ready future with result
+                    R result = std::move(child_future).get();  // Get result
+                    return unique_future<R>(std::move(result)); // Return future with result
                 }
             }
             default: {
