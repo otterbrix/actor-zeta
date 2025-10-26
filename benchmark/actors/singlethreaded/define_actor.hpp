@@ -45,7 +45,7 @@ public:
         // Receive pong, do nothing (end of exchange)
     }
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::start>) {
             start_behavior_(msg);

@@ -25,7 +25,7 @@ namespace benchmark_messages {
         (benchmark::State& state) {
             auto* resource = actor_zeta::pmr::get_default_resource();
             while (state.KeepRunning()) {
-                auto message = actor_zeta::make_message(
+                auto message = actor_zeta::detail::make_message(
                     resource,
                     actor_zeta::base::address_t::empty_address(),
                     name_);
@@ -39,7 +39,7 @@ namespace benchmark_messages {
         (benchmark::State& state) {
             auto* resource = actor_zeta::pmr::get_default_resource();
             while (state.KeepRunning()) {
-                auto message = actor_zeta::make_message(
+                auto message = actor_zeta::detail::make_message(
                     resource,
                     actor_zeta::base::address_t::empty_address(),
                     name_);
@@ -64,7 +64,7 @@ namespace benchmark_messages {
             template<typename... Args>
             auto message_arg_tmpl(uint64_t name_, Args&&... args) -> void {
                 auto* resource = actor_zeta::pmr::get_default_resource();
-                auto message = actor_zeta::make_message(
+                auto message = actor_zeta::detail::make_message(
                     resource,
                     actor_zeta::base::address_t::empty_address(),
                     name_,
@@ -86,7 +86,7 @@ namespace benchmark_messages {
             template<typename... Args>
             auto message_arg_tmpl(uint64_t name_, Args&&... args) -> void {
                 auto* resource = actor_zeta::pmr::get_default_resource();
-                auto message = actor_zeta::make_message(
+                auto message = actor_zeta::detail::make_message(
                     resource,
                     actor_zeta::base::address_t::empty_address(),
                     name_,

@@ -45,7 +45,7 @@ public:
 
     void enqueue_impl(actor_zeta::message_ptr msg) {
         auto tmp = std::move(msg);
-        behavior(tmp.get());
+        behavior(msg.get());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

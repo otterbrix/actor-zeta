@@ -21,10 +21,6 @@ namespace actor_zeta { namespace base {
         return address_t(this);
     }
 
-    bool actor_abstract_t::enqueue(mailbox::message_ptr msg) {
-        return enqueue_impl(std::move(msg));
-    }
-
     void actor_abstract_t::operator delete(void*) noexcept{
 
     }

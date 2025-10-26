@@ -84,11 +84,13 @@ public:
         // Empty behavior
     }
 
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp = std::move(msg);
-        behavior(tmp.get());
-        return true;
+    /// @brief Override enqueue_impl для supervisor - используем helper
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
     }
+
+protected:
 
 private:
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
@@ -135,17 +137,19 @@ public:
         }
     }
 
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp = std::move(msg);
-        behavior(tmp.get());
-        return true;
-    }
-
     using dispatch_traits = actor_zeta::dispatch_traits<
         &dummy_supervisor::create_actor,
         &dummy_supervisor::create_supervisor,
         &dummy_supervisor::create_supervisor_custom_resource
     >;
+
+    /// @brief Override enqueue_impl для supervisor - используем helper
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    }
+
+protected:
 
 private:
     actor_zeta::behavior_t create_actor_;

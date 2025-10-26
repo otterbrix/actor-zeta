@@ -1,27 +1,40 @@
 #pragma once
 
 #include <cassert>
+#include <atomic>
 
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/mailbox/priority.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/detail/rtt.hpp>
+#include <actor-zeta/detail/slot_refcount.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include "actor-zeta/detail/memory.hpp"
 
 namespace actor_zeta { namespace mailbox {
 
-    ///
-    /// @brief
-    ///
+    /// @brief Unified slot status - combines state and error code
+    /// Values 0-1: Normal states (pending, ready)
+    /// Values 2+: Error states with specific error reasons
+    enum class slot_error_code : int {
+        pending = 0,            // Awaiting processing (initial state)
+        ok = 1,                 // Result is ready (success)
+        slot_pool_exhausted = 2,
+        mailbox_full = 3,
+        broken_promise = 4,     // Actor destroyed with pending futures
+        cancelled = 5,          // Cancelled via future.cancel()
+        orphaned = 6            // Future destroyed (forced cancellation)
+    };
+
+    /// @brief Message with optional async result support
 
     class message final : public actor_zeta::detail::singly_linked<message> {
     public:
         message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;
-        message(message&& other) noexcept = default;
+        message(message&& other) noexcept;  // Cannot be default due to atomic fields
         message& operator=(message&& other) noexcept;
         explicit message(actor_zeta::pmr::memory_resource* /* resource */);
         message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/);
@@ -42,10 +55,33 @@ namespace actor_zeta { namespace mailbox {
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
+        actor_zeta::detail::slot_refcount* result_slot() const noexcept { return result_slot_; }
+        void set_result_slot(actor_zeta::detail::slot_refcount* slot) noexcept { result_slot_ = slot; }
+
+        /// @brief Get current error/status code
+        slot_error_code error() const noexcept {
+            return error_.load(std::memory_order_acquire);
+        }
+
+        /// @brief Set error/status code (atomic write)
+        void set_error(slot_error_code e) noexcept {
+            error_.store(e, std::memory_order_release);
+        }
+
+        void cancel() noexcept { cancelled_.store(true, std::memory_order_release); }
+        bool is_cancelled() const noexcept { return cancelled_.load(std::memory_order_acquire); }
+
+        void mark_orphaned() noexcept { orphaned_.store(true, std::memory_order_release); }
+        bool is_orphaned() const noexcept { return orphaned_.load(std::memory_order_acquire); }
+
     private:
         base::address_t sender_;
         message_id command_;
         actor_zeta::detail::rtt body_;
+        actor_zeta::detail::slot_refcount* result_slot_{nullptr};
+        std::atomic<slot_error_code> error_{slot_error_code::pending};
+        std::atomic<bool> cancelled_{false};
+        std::atomic<bool> orphaned_{false};
     };
 
     static_assert(std::is_move_constructible<message>::value, "");

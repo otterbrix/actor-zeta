@@ -58,17 +58,18 @@ public:
         return storages_.size()+test_handlers_.size();
     }
 
-    bool enqueue_impl(actor_zeta::message_ptr msg) override  {
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
         enqueue_base_counter++;
-        auto tmp_msg =  (std::move(msg));
-        behavior(tmp_msg.get());
-        return true;
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &dummy_supervisor::create_storage,
         &dummy_supervisor::create_test_handlers
     >;
+
+protected:
 
 private:
     actor_zeta::behavior_t create_storage_;

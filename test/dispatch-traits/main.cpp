@@ -37,7 +37,7 @@ public:
         &test_actor::method3
     >;
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<test_actor, &test_actor::method1>:
                 method1_(msg);

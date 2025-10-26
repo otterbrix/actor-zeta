@@ -65,7 +65,7 @@ public:
         &collection_part_t::find
     >;
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>: {
                 insert_(msg);
@@ -107,31 +107,55 @@ public:
     void create() {
         auto ptr = actor_zeta::spawn<collection_part_t> (resource());
         actors_.emplace_back(std::move(ptr));
+    }
 
+    // Dummy methods - just for dispatch_traits, never actually called
+    void insert(std::string&, std::string&) {}
+    void remove(std::string&) {}
+    void update(std::string&, std::string&) {}
+    std::string find(std::string&) { return ""; }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &collection_t::insert,
+        &collection_t::remove,
+        &collection_t::update,
+        &collection_t::find
+    >;
+
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        // Balancer logic: forward message to child actor using round-robin
+        switch (msg->command()) {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
+                auto index = cursor_ % actors_.size();
+                // Forward the message to the selected actor and get its future
+                auto child_future = actors_[index]->enqueue_impl<R>(std::move(msg));
+                e_->enqueue(actors_[index].get());
+                ++cursor_;
+                ++count_balancer;
+
+                // Convert child's async future to sync future by waiting for result
+                // For supervisors, we execute synchronously
+                if constexpr (std::is_same_v<R, void>) {
+                    std::move(child_future).get(); // Wait for completion
+                    return unique_future<R>(); // Return ready void future
+                } else {
+                    R result = std::move(child_future).get(); // Wait and get result
+                    return unique_future<R>(std::move(result)); // Return ready future with result
+                }
+            }
+            default: {
+                std::cerr << "unknown command" << std::endl;
+                // Return invalid future for unknown commands
+                return unique_future<R>();
+            }
+        }
     }
 
 protected:
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp = std::move(msg);
-            switch (tmp->command()) {
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
-                    auto index = cursor_ % actors_.size();
-                    actors_[index]->enqueue(std::move(tmp));
-                    e_->enqueue(actors_[index].get());
-                    ++cursor_;
-                    ++count_balancer;
-                    return true;
-                }
-                default: {
-                    std::cerr << "unknown command" << std::endl;
-                    return false;
-                }
-            }
-
-    }
 
 private:
     actor_zeta::scheduler::sharing_scheduler* e_;
@@ -157,16 +181,16 @@ int main() {
     collection->create();
 
     std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key1"), std::string("value1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key2"), std::string("value2"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key3"), std::string("value3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key1"), std::string("value1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key2"), std::string("value2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key3"), std::string("value3"));
 
     std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::update, std::string("key1"), std::string("updated1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::update, std::string("key2"), std::string("updated2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key1"), std::string("updated1"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key2"), std::string("updated2"));
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::remove, std::string("key3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::remove, std::string("key3"));
 
     scheduler->start();
 

@@ -20,7 +20,7 @@ public:
         // Empty handler
     }
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
             ping_(msg);
         }
@@ -51,18 +51,16 @@ public:
         workers_.emplace_back(std::move(worker));
     }
 
-protected:
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        if (workers_.empty()) {
-            return false;
-        }
-
-        auto index = cursor_ % workers_.size();
-        workers_[index]->enqueue(std::move(msg));
-        scheduler_->enqueue(workers_[index].get());  // Manual schedule
-        ++cursor_;
-        return true;
+    void behavior(actor_zeta::mailbox::message* /*msg*/) {
+        // Balancer doesn't process messages directly - it forwards them to workers
     }
+
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    }
+
+protected:
 
 private:
     actor_zeta::scheduler::sharing_scheduler* scheduler_;

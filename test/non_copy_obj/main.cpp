@@ -41,15 +41,16 @@ public:
         }
     }
 
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp_msg = std::move(msg);
-        behavior(tmp_msg.get());
-        return true;
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &dummy_supervisor::check
     >;
+
+protected:
 
 private:
     actor_zeta::behavior_t check_;

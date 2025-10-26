@@ -35,22 +35,20 @@ public:
     }
 
     void start() {
-        // Send ping to partner and schedule only if needed
+        // Send ping to partner and schedule
         if (partner_ && scheduler_) {
-            // send() returns true if actor was unblocked - needs scheduling
-            if (actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...)) {
-                scheduler_->enqueue(partner_);
-            }
+            // send() returns future - ignore it
+            auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
+            scheduler_->enqueue(partner_);
         }
     }
 
     void ping(Args...) {
         // Receive ping, send pong back
         if (partner_ && scheduler_) {
-            // send() returns true if actor was unblocked - needs scheduling
-            if (actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...)) {
-                scheduler_->enqueue(partner_);
-            }
+            // send() returns future - ignore it
+            auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
+            scheduler_->enqueue(partner_);
         }
     }
 
@@ -58,7 +56,7 @@ public:
         // Receive pong, do nothing (end of exchange)
     }
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::start>) {
             start_behavior_(msg);

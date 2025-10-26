@@ -41,20 +41,19 @@ public:
     void send() {
         // Start ping-pong - send start message to actor0
         if (actor_0_ && scheduler_) {
-            // send() returns true if actor was unblocked - needs scheduling
-            if (actor_zeta::send(actor_0_.get(), this->address(), &Actor::start)) {
-                scheduler_->enqueue(actor_0_.get());
-            }
+            // send() returns future - ignore it
+            auto future = actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
+            scheduler_->enqueue(actor_0_.get());
         } else if (actor_0_) {
             // Synchronous mode (no scheduler)
-            actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
+            auto future = actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
             actor_0_->resume(1);
             actor_1_->resume(1);
             actor_0_->resume(1);
         }
     }
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<simple_supervisor, &simple_supervisor::prepare>) {
             prepare_behavior_(msg);
@@ -68,9 +67,11 @@ public:
         &simple_supervisor::send
     >;
 
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp_msg = std::move(msg);
-        behavior(tmp_msg.get());
-        return true;
+    /// @brief Override enqueue_impl для supervisor - используем helper
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* ctx) { behavior(ctx); });
     }
+
+protected:
 };

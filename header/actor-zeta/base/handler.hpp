@@ -2,6 +2,7 @@
 
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/detail/unique_function.hpp>
+#include <actor-zeta/mailbox/message.hpp>
 
 namespace actor_zeta { namespace base {
 

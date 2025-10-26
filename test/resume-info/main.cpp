@@ -15,7 +15,7 @@ public:
         ++processed_count_;
     }
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
             test_(msg);
         }

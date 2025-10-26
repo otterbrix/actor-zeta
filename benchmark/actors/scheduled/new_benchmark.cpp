@@ -52,7 +52,7 @@ public:
         &ping_pong_actor::pong
     >;
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>:
                 ping_behavior_(msg);
