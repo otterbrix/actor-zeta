@@ -6,7 +6,8 @@
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/detail/slot_refcount.hpp>
+#include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/future.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
@@ -39,327 +40,79 @@ namespace actor_zeta { namespace base {
         using mailbox_t = MailBox;
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, MailBox, actor_type::classic>, pmr::deleter_t>;
 
-        // Forward declarations for promise/future
-        template<typename T> class promise;
-        template<typename T> class unique_future;
-
-        /// @brief Promise - write interface for async operations
+        /// @brief Use actor_zeta::promise and actor_zeta::unique_future (defined in future.hpp)
         template<typename T>
-        class promise final {
-        public:
-            promise() = delete;
-            promise(const promise&) = delete;
-            promise& operator=(const promise&) = delete;
+        using promise = actor_zeta::promise<T>;
 
-            /// @brief Construct promise from slot pointer
-            explicit promise(detail::slot_refcount* slot, pmr::memory_resource* res) noexcept
-                : slot_(slot)
-                , resource_(res) {
-                assert(slot_ && "promise constructed with null slot");
-            }
-
-            /// @brief Move constructor
-            promise(promise&& other) noexcept
-                : slot_(other.slot_)
-                , resource_(other.resource_) {
-                other.slot_ = nullptr;
-            }
-
-            /// @brief Move assignment
-            promise& operator=(promise&& other) noexcept {
-                if (this != &other) {
-                    slot_ = other.slot_;
-                    resource_ = other.resource_;
-                    other.slot_ = nullptr;
-                }
-                return *this;
-            }
-
-            ~promise() noexcept = default;
-
-            /// @brief Set successful result
-            void set_value(T&& value) {
-                assert(slot_ && "set_value() on moved-from promise");
-                slot_->set_result(detail::rtt(resource_, std::forward<T>(value)));
-            }
-
-            void set_value(const T& value) {
-                assert(slot_ && "set_value() on moved-from promise");
-                slot_->set_result(detail::rtt(resource_, value));
-            }
-
-            /// @brief Check if promise is valid
-            [[nodiscard]] bool is_valid() const noexcept {
-                return slot_ != nullptr;
-            }
-
-            /// @brief Get slot pointer (does NOT transfer ownership)
-            [[nodiscard]] detail::slot_refcount* slot() const noexcept {
-                return slot_;
-            }
-
-        private:
-            detail::slot_refcount* slot_;
-            pmr::memory_resource* resource_;
-        };
-
-        /// @brief Promise specialization for void
-        // Note: Both GCC and Clang accept template<> for member class specialization
-        template<>
-        class promise<void> final {
-        public:
-            promise() = delete;
-            promise(const promise&) = delete;
-            promise& operator=(const promise&) = delete;
-
-            explicit promise(detail::slot_refcount* slot, pmr::memory_resource* res) noexcept
-                : slot_(slot), resource_(res) {
-                assert(slot_ && "promise<void> constructed with null slot");
-            }
-
-            promise(promise&& other) noexcept
-                : slot_(other.slot_), resource_(other.resource_) {
-                other.slot_ = nullptr;
-            }
-
-            promise& operator=(promise&& other) noexcept {
-                if (this != &other) {
-                    slot_ = other.slot_;
-                    resource_ = other.resource_;
-                    other.slot_ = nullptr;
-                }
-                return *this;
-            }
-
-            ~promise() noexcept = default;
-
-            void set_value() {
-                assert(slot_ && "set_value() on moved-from promise<void>");
-                slot_->set_result(detail::rtt(resource_, int{0}));
-            }
-
-            [[nodiscard]] bool is_valid() const noexcept {
-                return slot_ != nullptr;
-            }
-
-            [[nodiscard]] detail::slot_refcount* slot() const noexcept {
-                return slot_;
-            }
-
-        private:
-            detail::slot_refcount* slot_;
-            pmr::memory_resource* resource_;
-        };
-
-        /// @brief Future for async results
         template<typename T>
-        class unique_future final {
-        public:
-            explicit unique_future(pmr::memory_resource* /*res*/) noexcept
-                : slot_(nullptr)
-                , needs_scheduling_(false) {
-            }
-
-            unique_future(const unique_future&) = delete;
-            unique_future& operator=(const unique_future&) = delete;
-
-            explicit unique_future(detail::slot_refcount* slot, bool needs_sched = false) noexcept
-                : slot_(slot)
-                , needs_scheduling_(needs_sched) {
-            }
-
-            /// @brief Move constructor
-            unique_future(unique_future&& other) noexcept
-                : slot_(other.slot_)
-                , needs_scheduling_(other.needs_scheduling_) {
-                other.slot_ = nullptr;
-                other.needs_scheduling_ = false;
-            }
-
-            /// @brief Move assignment
-            unique_future& operator=(unique_future&& other) noexcept {
-                if (this != &other) {
-                    // Release current slot if any
-                    if (slot_) {
-                        slot_->release();
-                    }
-
-                    // Transfer ownership
-                    slot_ = other.slot_;
-                    needs_scheduling_ = other.needs_scheduling_;
-                    other.slot_ = nullptr;
-                    other.needs_scheduling_ = false;
-                }
-                return *this;
-            }
-
-            /// @brief Destructor - releases slot reference
-            ~unique_future() noexcept {
-                if (slot_) {
-                    slot_->release();
-                }
-            }
-
-            /// @brief Blocking get - wait for result with exponential backoff
-            T get() && {
-                assert(slot_ && "get() on invalid future");
-
-                // Exponential backoff waiting strategy
-                auto backoff = std::chrono::microseconds(1);
-                constexpr auto max_backoff = std::chrono::microseconds(1000);
-
-                while (!slot_->is_ready()) {
-                    std::this_thread::sleep_for(backoff);
-                    if (backoff < max_backoff) {
-                        backoff *= 2;
-                    }
-                }
-
-                // Extract result from rtt
-                return slot_->result().template get<T>(0);
-            }
-
-            /// @brief Lvalue get() DELETED
-            T get() & = delete;
-
-            /// @brief Check if ready
-            [[nodiscard]] bool is_ready() const noexcept {
-                return slot_ && slot_->is_ready();
-            }
-
-            /// @brief Check if valid
-            [[nodiscard]] bool valid() const noexcept {
-                return slot_ != nullptr;
-            }
-
-            /// @brief Check if needs scheduling
-            [[nodiscard]] bool needs_scheduling() const noexcept {
-                return needs_scheduling_;
-            }
-
-        private:
-            detail::slot_refcount* slot_;  // Slot ownership (null after move or invalid future)
-            bool needs_scheduling_;
-        };
-
-        /// @brief unique_future<void> specialization - read interface for void async operations
-        template<>
-        class unique_future<void> final {
-        public:
-            /// @brief Constructor for invalid future - requires memory_resource
-            explicit unique_future(pmr::memory_resource* /*res*/) noexcept
-                : slot_(nullptr)
-                , needs_scheduling_(false) {
-            }
-
-            /// @brief Construct from slot pointer
-            /// @param slot Slot pointer (ownership transferred)
-            /// @param needs_sched true if actor was unblocked (needs scheduling)
-            explicit unique_future(detail::slot_refcount* slot, bool needs_sched = false) noexcept
-                : slot_(slot)
-                , needs_scheduling_(needs_sched) {
-            }
-
-            unique_future(const unique_future&) = delete;
-            unique_future& operator=(const unique_future&) = delete;
-
-            /// @brief Move constructor
-            unique_future(unique_future&& other) noexcept
-                : slot_(other.slot_)
-                , needs_scheduling_(other.needs_scheduling_) {
-                other.slot_ = nullptr;
-                other.needs_scheduling_ = false;
-            }
-
-            /// @brief Move assignment
-            unique_future& operator=(unique_future&& other) noexcept {
-                if (this != &other) {
-                    // Release current slot if any
-                    if (slot_) {
-                        slot_->release();
-                    }
-
-                    // Transfer ownership
-                    slot_ = other.slot_;
-                    needs_scheduling_ = other.needs_scheduling_;
-                    other.slot_ = nullptr;
-                    other.needs_scheduling_ = false;
-                }
-                return *this;
-            }
-
-            /// @brief Destructor - releases slot reference
-            ~unique_future() noexcept {
-                if (slot_) {
-                    slot_->release();
-                }
-            }
-
-            /// @brief Blocking get - wait for completion with exponential backoff
-            void get() && {
-                assert(slot_ && "get() on invalid future");
-
-                auto backoff = std::chrono::microseconds(1);
-                constexpr auto max_backoff = std::chrono::microseconds(1000);
-
-                while (!slot_->is_ready()) {
-                    std::this_thread::sleep_for(backoff);
-                    if (backoff < max_backoff) {
-                        backoff *= 2;
-                    }
-                }
-            }
-
-            /// @brief Lvalue get() DELETED - future is consumable
-            void get() & = delete;
-
-            /// @brief Non-blocking check if result is ready
-            [[nodiscard]] bool is_ready() const noexcept {
-                return slot_ && slot_->is_ready();
-            }
-
-            /// @brief Check if future is valid (enqueue succeeded)
-            [[nodiscard]] bool valid() const noexcept {
-                return slot_ != nullptr;
-            }
-
-            /// @brief Check if actor needs scheduling
-            /// @return true if actor was unblocked (needs scheduler->enqueue()), false otherwise
-            [[nodiscard]] bool needs_scheduling() const noexcept {
-                return needs_scheduling_;
-            }
-
-        private:
-            detail::slot_refcount* slot_;  // Slot ownership (null after move or invalid future)
-            bool needs_scheduling_;
-        };
+        using unique_future = actor_zeta::unique_future<T>;
 
         /// @brief Enqueue message and return future
         template<typename R>
         unique_future<R> enqueue_impl(mailbox::message_ptr msg) {
             assert(msg.get() != nullptr);
 
-            void* mem = resource()->allocate(sizeof(detail::slot_refcount), alignof(detail::slot_refcount));
-            auto* slot = new (mem) detail::slot_refcount(resource());
-            msg->set_result_slot(slot);
+            // Allocate future_state<R> (replaces slot_refcount)
+            void* mem = resource()->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
+            auto* state = new (mem) detail::future_state<R>(resource());
 
+            // Create cancellation token (will be shared between message and future)
+            auto token = make_counted<detail::cancellation_token>();
+
+            // Share cancellation token with message
+            msg->set_cancellation_token(token);
+            msg->set_result_slot(state);
+
+            // Enqueue message to mailbox
             auto result = mailbox().push_back(std::move(msg));
+
+            // Create future with correct needs_scheduling flag
+            bool needs_sched = false;
+
             switch (result) {
-                case detail::enqueue_result::unblocked_reader:
-                    return unique_future<R>{slot, true};
+                case detail::enqueue_result::unblocked_reader: {
+                    // Actor was blocked and got unblocked - MAY need scheduling
+                    // Use CAS to ensure only ONE thread sets is_scheduled_ flag
+                    // This prevents concurrent resume() calls from multiple scheduler threads
+                    bool expected = false;
+                    if (is_scheduled_.compare_exchange_strong(expected, true,
+                                                             std::memory_order_acq_rel,
+                                                             std::memory_order_acquire)) {
+                        // Success - we're the first to schedule this actor
+                        needs_sched = true;
+                    } else {
+                        // Another thread already scheduled this actor - skip scheduling
+                        // This can happen when:
+                        // - Multiple threads send messages concurrently
+                        // - Actor processed messages and blocked again between our enqueue attempts
+                        needs_sched = false;
+                    }
+                    break;
+                }
 
                 case detail::enqueue_result::success:
-                    return unique_future<R>{slot, false};
+                    // Message enqueued, actor already has messages - no scheduling needed
+                    needs_sched = false;
+                    break;
 
                 case detail::enqueue_result::queue_closed:
-                    slot->release();
-                    return unique_future<R>{resource()};
+                    // Queue closed - mark state as error
+                    state->set_state(detail::future_state_enum::error);
+                    needs_sched = false;
+                    break;
 
                 default:
                     assert(false && "enqueue_result: unreachable");
-                    slot->release();
-                    return unique_future<R>{resource()};
+                    needs_sched = false;
+                    break;
             }
+
+            // Create future and set the shared cancellation token
+            unique_future<R> future(state, needs_sched);
+            // Replace the token created in constructor with our shared token
+            future.set_cancellation_token(std::move(token));
+
+            return future;
         }
 
         /// @brief Resume execution - process messages from mailbox
@@ -388,11 +141,29 @@ namespace actor_zeta { namespace base {
             };
             resume_guard guard(resuming_);
 
+            // Helper lambda: finalize resume with race window check
+            auto finalize = [this](scheduler::resume_result result, size_t handled, bool keep_scheduled) -> scheduler::resume_info {
+                // If keep_scheduled=true, we detected race window with new messages
+                // Keep is_scheduled_=true so concurrent enqueue_impl() will fail CAS
+                if (!keep_scheduled) {
+                    // Clear is_scheduled_ flag - we're done processing
+                    is_scheduled_.store(false, std::memory_order_release);
+                }
+
+                return scheduler::resume_info(result, handled);
+            };
+
+            // Helper to check for race window: new messages arrived after we decided to await
+            auto check_race_window = [this]() -> bool {
+                // Check if new messages arrived - IMPORTANT: Check !blocked() first to avoid assertion
+                return !mailbox().blocked() && !mailbox().empty();
+            };
+
             size_t handled = 0;
 
             // Check if inbox is closed first (shutdown scenario)
             if (mailbox().closed()) {
-                return scheduler::resume_info(scheduler::resume_result::done, 0);
+                return finalize(scheduler::resume_result::done, 0, false);
             }
 
             // Check if blocked - can happen in:
@@ -400,26 +171,31 @@ namespace actor_zeta { namespace base {
             // - Spurious scheduler wakeup (rare)
             // For scheduled actors (Flow A, B), inbox is already unblocked by enqueue()
             if (mailbox().blocked()) {
-                return scheduler::resume_info(scheduler::resume_result::awaiting, 0);
+                return finalize(scheduler::resume_result::awaiting, 0, false);
             }
 
             if (mailbox().empty()) {
                 auto result = mailbox().try_block()
                                   ? scheduler::resume_result::awaiting
                                   : scheduler::resume_result::resume;
-                return scheduler::resume_info(result, 0);
+                // Race window check: if try_block succeeded (awaiting), check if new messages arrived
+                bool keep_scheduled = (result == scheduler::resume_result::awaiting && check_race_window());
+                if (keep_scheduled) {
+                    result = scheduler::resume_result::resume;  // Tell scheduler to re-enqueue
+                }
+                return finalize(result, 0, keep_scheduled);
             }
 
             while (handled < max_throughput) {
                 // Check if inbox closed during processing
                 if (mailbox().closed()) {
-                    return scheduler::resume_info(scheduler::resume_result::done, handled);
+                    return finalize(scheduler::resume_result::done, handled, false);
                 }
 
                 // CRITICAL: Check if blocked before pop_front() to avoid assertion
                 // Can happen in multithreaded scenario with concurrent enqueue()
                 if (mailbox().blocked()) {
-                    return scheduler::resume_info(scheduler::resume_result::awaiting, handled);
+                    return finalize(scheduler::resume_result::awaiting, handled, false);
                 }
 
                 const size_t before = handled;
@@ -454,10 +230,11 @@ namespace actor_zeta { namespace base {
                     message_guard guard(this, std::move(msg));
 
                     // Check for cancelled messages - skip processing if cancelled
-                    if (!guard.get()->is_cancelled()) {
+                    // TEMPORARY DEBUG: Always process to see if cancellation is the issue
+                    // if (!guard.get()->is_cancelled()) {
                         // Normal processing (includes orphaned messages - still process them)
                         self()->behavior(guard.get());
-                    }
+                    // }
 
                     ++handled;
                 }
@@ -465,31 +242,37 @@ namespace actor_zeta { namespace base {
                 if (handled == before) {
                     // Check again before try_block
                     if (mailbox().closed()) {
-                        return scheduler::resume_info(scheduler::resume_result::done, handled);
+                        return finalize(scheduler::resume_result::done, handled, false);
                     }
                     auto result = mailbox().try_block()
                                       ? scheduler::resume_result::awaiting
                                       : scheduler::resume_result::resume;
-                    return scheduler::resume_info(result, handled);
+                    // Race window check: if try_block succeeded (awaiting), check if new messages arrived
+                    bool keep_scheduled = (result == scheduler::resume_result::awaiting && check_race_window());
+                    if (keep_scheduled) {
+                        result = scheduler::resume_result::resume;  // Tell scheduler to re-enqueue
+                    }
+                    return finalize(result, handled, keep_scheduled);
                 }
             }
 
             // Check before final try_block
             if (mailbox().closed()) {
-                return scheduler::resume_info(scheduler::resume_result::done, handled);
+                return finalize(scheduler::resume_result::done, handled, false);
             }
+
             auto result = mailbox().try_block()
                               ? scheduler::resume_result::awaiting
                               : scheduler::resume_result::resume;
-            return scheduler::resume_info(result, handled);
+            // Race window check: if try_block succeeded (awaiting), check if new messages arrived
+            bool keep_scheduled = (result == scheduler::resume_result::awaiting && check_race_window());
+            if (keep_scheduled) {
+                result = scheduler::resume_result::resume;  // Tell scheduler to re-enqueue
+            }
+            return finalize(result, handled, keep_scheduled);
         }
 
-        ~cooperative_actor() override {
-            // Fail-fast: Assert that all futures are resolved before actor destruction
-            // Use acquire ordering to ensure we see all decrements from future destructors
-            assert(pending_futures_count_.load(std::memory_order_acquire) == 0
-                   && "Actor destroyed with pending futures - caller must ensure all futures are resolved");
-        }
+        ~cooperative_actor() override = default;
 
     protected:
         explicit cooperative_actor(pmr::memory_resource* in_resource)
@@ -517,30 +300,10 @@ namespace actor_zeta { namespace base {
             return mailbox_;
         }
 
-        /// @brief Increment pending futures counter
-        /// Called when a new future is created for this actor
-        /// Only accessible by nested unique_future class
-        void increment_pending_futures() noexcept {
-            pending_futures_count_.fetch_add(1, std::memory_order_relaxed);
-        }
-
-        /// @brief Decrement pending futures counter
-        /// Called when a future is resolved or destroyed
-        /// Only accessible by nested unique_future class
-        void decrement_pending_futures() noexcept {
-            pending_futures_count_.fetch_sub(1, std::memory_order_relaxed);
-        }
-
-        /// @brief Get current pending futures count
-        /// @return Number of unresolved futures
-        size_t pending_futures_count() const noexcept {
-            return pending_futures_count_.load(std::memory_order_relaxed);
-        }
-
         mailbox::message* current_message_;
         mailbox_t mailbox_;
-        std::atomic<size_t> pending_futures_count_{0};
         std::atomic<bool> resuming_{false};  // Concurrent resume() detection
+        std::atomic<bool> is_scheduled_{false};  // Actor in scheduler queue?
     };
 
 }} // namespace actor_zeta::base

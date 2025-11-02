@@ -37,7 +37,7 @@ namespace detail {
 
     template<typename ActorPtr, typename Sender, typename Method, typename... Args,
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
-    inline auto send(ActorPtr* actor, Sender sender, Method method, Args&&... args)
+    [[nodiscard]] inline auto send(ActorPtr* actor, Sender sender, Method method, Args&&... args)
         -> typename Actor::template unique_future<
             typename type_traits::callable_trait<Method>::result_type>
     {
@@ -55,7 +55,7 @@ namespace detail {
 
     template<typename Sender, typename Method, typename... Args,
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
-    inline auto send(base::address_t target, Sender sender, Method method, Args&&... args)
+    [[nodiscard]] inline auto send(base::address_t target, Sender sender, Method method, Args&&... args)
         -> typename Actor::template unique_future<
             typename type_traits::callable_trait<Method>::result_type>
     {

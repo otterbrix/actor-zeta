@@ -72,8 +72,9 @@ TEST_CASE("base move test") {
     auto ptr_data = std::unique_ptr<dummy_data>(new dummy_data);
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::move(ptr_data), data);
+    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::move(ptr_data), data);
     REQUIRE(ptr_data == nullptr);
+    std::move(fut).get();
 }
 
 TEST_CASE("construct in place") {
@@ -82,5 +83,6 @@ TEST_CASE("construct in place") {
 
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
+    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
+    std::move(fut).get();
 }

@@ -176,8 +176,16 @@ int main() {
     int const actors = 5;
 
     // Create actors using new send() API (supervisor processes messages synchronously)
+    // Collect futures from create() calls and wait for completion
+    std::vector<supervisor_lite::unique_future<void>> create_futures;
+    create_futures.reserve(actors);
     for (auto i = actors; i > 0; --i) {
-        actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &supervisor_lite::create);
+        create_futures.push_back(actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &supervisor_lite::create));
+    }
+
+    // Wait for all actors to be created
+    for (auto& future : create_futures) {
+        std::move(future).get();
     }
 
     std::cerr << "=== Created " << actors << " worker actors ===" << std::endl;

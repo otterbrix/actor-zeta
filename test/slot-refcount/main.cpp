@@ -1,7 +1,7 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
-#include <actor-zeta/detail/slot_refcount.hpp>
+#include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <thread>
 #include <vector>
@@ -10,13 +10,13 @@
 using namespace actor_zeta::detail;
 using namespace actor_zeta;
 
-TEST_CASE("slot_refcount - basic construction and destruction") {
+TEST_CASE("future_state<int> - basic construction and destruction") {
     auto* res = pmr::get_default_resource();
 
     SECTION("construct with initial refcount = 2") {
         // Allocate slot manually
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         REQUIRE(!slot->is_ready());
 
@@ -28,8 +28,8 @@ TEST_CASE("slot_refcount - basic construction and destruction") {
     }
 
     SECTION("set_result makes slot ready") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         REQUIRE(!slot->is_ready());
 
@@ -46,12 +46,12 @@ TEST_CASE("slot_refcount - basic construction and destruction") {
     }
 }
 
-TEST_CASE("slot_refcount - refcount increment/decrement") {
+TEST_CASE("future_state<int> - refcount increment/decrement") {
     auto* res = pmr::get_default_resource();
 
     SECTION("add_ref increases refcount") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         // Initial refcount = 2
         // Add 3 more references
@@ -68,8 +68,8 @@ TEST_CASE("slot_refcount - refcount increment/decrement") {
     }
 
     SECTION("last owner deletes slot") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         // Only one release should NOT delete (refcount 2 -> 1)
         slot->release();
@@ -84,12 +84,12 @@ TEST_CASE("slot_refcount - refcount increment/decrement") {
     }
 }
 
-TEST_CASE("slot_refcount - result storage and retrieval") {
+TEST_CASE("future_state<int> - result storage and retrieval") {
     auto* res = pmr::get_default_resource();
 
     SECTION("store and retrieve int") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         rtt value(res, 123);
         slot->set_result(std::move(value));
@@ -102,8 +102,8 @@ TEST_CASE("slot_refcount - result storage and retrieval") {
     }
 
     SECTION("store and retrieve string") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         rtt value(res, std::string("hello world"));
         slot->set_result(std::move(value));
@@ -116,8 +116,8 @@ TEST_CASE("slot_refcount - result storage and retrieval") {
     }
 
     SECTION("ready flag atomic visibility") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         REQUIRE(!slot->is_ready());
 
@@ -131,12 +131,12 @@ TEST_CASE("slot_refcount - result storage and retrieval") {
     }
 }
 
-TEST_CASE("slot_refcount - thread safety") {
+TEST_CASE("future_state<int> - thread safety") {
     auto* res = pmr::get_default_resource();
 
     SECTION("concurrent add_ref from multiple threads") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         constexpr int num_threads = 10;
         constexpr int refs_per_thread = 100;
@@ -169,8 +169,8 @@ TEST_CASE("slot_refcount - thread safety") {
         constexpr int releases_per_thread = 100;
         constexpr int total_refs = 2 + num_threads * releases_per_thread;
 
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         // Add references first
         for (int i = 0; i < num_threads * releases_per_thread; ++i) {
@@ -199,8 +199,8 @@ TEST_CASE("slot_refcount - thread safety") {
     }
 
     SECTION("concurrent add_ref and release") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         constexpr int num_threads = 8;
         constexpr int operations = 1000;
@@ -247,8 +247,8 @@ TEST_CASE("slot_refcount - thread safety") {
     }
 
     SECTION("concurrent set_result and is_ready") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         std::atomic<bool> result_set{false};
 
@@ -278,12 +278,12 @@ TEST_CASE("slot_refcount - thread safety") {
     }
 }
 
-TEST_CASE("slot_refcount - memory ordering guarantees") {
+TEST_CASE("future_state<int> - memory ordering guarantees") {
     auto* res = pmr::get_default_resource();
 
     SECTION("release-acquire semantics for ready flag") {
-        void* mem = res->allocate(sizeof(slot_refcount), alignof(slot_refcount));
-        auto* slot = new (mem) slot_refcount(res);
+        void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
+        auto* slot = new (mem) future_state<int>(res);
 
         std::atomic<int> side_effect{0};
 

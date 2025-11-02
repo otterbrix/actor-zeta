@@ -7,7 +7,8 @@
 #include <actor-zeta/mailbox/priority.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/detail/rtt.hpp>
-#include <actor-zeta/detail/slot_refcount.hpp>
+#include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include "actor-zeta/detail/memory.hpp"
@@ -55,33 +56,89 @@ namespace actor_zeta { namespace mailbox {
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
-        actor_zeta::detail::slot_refcount* result_slot() const noexcept { return result_slot_; }
-        void set_result_slot(actor_zeta::detail::slot_refcount* slot) noexcept { result_slot_ = slot; }
+        /// @brief Get future state (result slot)
+        actor_zeta::detail::future_state_base* result_slot() const noexcept { return result_slot_; }
 
-        /// @brief Get current error/status code
+        /// @brief Set future state (result slot)
+        void set_result_slot(actor_zeta::detail::future_state_base* slot) noexcept { result_slot_ = slot; }
+
+        /// @brief Get cancellation token (creates on first access if needed)
+        intrusive_ptr<actor_zeta::detail::cancellation_token> cancellation_token() {
+            if (!cancellation_token_) {
+                cancellation_token_ = make_counted<actor_zeta::detail::cancellation_token>();
+            }
+            return cancellation_token_;
+        }
+
+        /// @brief Share cancellation token with future
+        void set_cancellation_token(intrusive_ptr<actor_zeta::detail::cancellation_token> token) noexcept {
+            cancellation_token_ = std::move(token);
+        }
+
+        /// @brief Check if cancelled (via shared cancellation token)
+        bool is_cancelled() const noexcept {
+            return cancellation_token_ && cancellation_token_->is_cancelled();
+        }
+
+        /// @brief Request cancellation (sets flag in shared token)
+        void cancel() noexcept {
+            if (cancellation_token_) {
+                cancellation_token_->cancel();
+            }
+        }
+
+        /// @brief Get current state from result_slot
+        [[nodiscard]] actor_zeta::detail::future_state_enum state() const noexcept {
+            return result_slot_ ? result_slot_->state() : actor_zeta::detail::future_state_enum::invalid;
+        }
+
+        // DEPRECATED: Kept for backward compatibility, will be removed in future versions
         slot_error_code error() const noexcept {
-            return error_.load(std::memory_order_acquire);
+            auto s = state();
+            if (s == actor_zeta::detail::future_state_enum::ready) return slot_error_code::ok;
+            if (s == actor_zeta::detail::future_state_enum::cancelled) return slot_error_code::cancelled;
+            return slot_error_code::pending;
         }
 
-        /// @brief Set error/status code (atomic write)
         void set_error(slot_error_code e) noexcept {
-            error_.store(e, std::memory_order_release);
+            // Map legacy error codes to new state enum
+            if (!result_slot_) return;
+
+            switch (e) {
+                case slot_error_code::ok:
+                    result_slot_->set_state(actor_zeta::detail::future_state_enum::ready);
+                    break;
+                case slot_error_code::cancelled:
+                case slot_error_code::orphaned:
+                    result_slot_->set_state(actor_zeta::detail::future_state_enum::cancelled);
+                    break;
+                case slot_error_code::broken_promise:
+                case slot_error_code::mailbox_full:
+                case slot_error_code::slot_pool_exhausted:
+                    result_slot_->set_state(actor_zeta::detail::future_state_enum::error);
+                    break;
+                default:
+                    break;
+            }
         }
 
-        void cancel() noexcept { cancelled_.store(true, std::memory_order_release); }
-        bool is_cancelled() const noexcept { return cancelled_.load(std::memory_order_acquire); }
-
-        void mark_orphaned() noexcept { orphaned_.store(true, std::memory_order_release); }
-        bool is_orphaned() const noexcept { return orphaned_.load(std::memory_order_acquire); }
+        void mark_orphaned() noexcept { cancel(); }  // Orphaned = cancelled
+        bool is_orphaned() const noexcept { return is_cancelled(); }
 
     private:
         base::address_t sender_;
         message_id command_;
         actor_zeta::detail::rtt body_;
-        actor_zeta::detail::slot_refcount* result_slot_{nullptr};
-        std::atomic<slot_error_code> error_{slot_error_code::pending};
-        std::atomic<bool> cancelled_{false};
-        std::atomic<bool> orphaned_{false};
+
+        // NEW: unified future state (replaces slot_refcount)
+        actor_zeta::detail::future_state_base* result_slot_{nullptr};
+
+        // NEW: shared cancellation token (lazy initialization)
+        intrusive_ptr<actor_zeta::detail::cancellation_token> cancellation_token_;
+
+        // REMOVED: atomic<slot_error_code> error_  (state now in future_state)
+        // REMOVED: atomic<bool> cancelled_  (now in cancellation_token)
+        // REMOVED: atomic<bool> orphaned_  (now in cancellation_token)
     };
 
     static_assert(std::is_move_constructible<message>::value, "");

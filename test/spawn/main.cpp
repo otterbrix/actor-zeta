@@ -190,8 +190,9 @@ TEST_CASE("spawn supervisor") {
     actor_counter = 0;
     auto* mr_ptr = actor_zeta::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor);
+    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor);
     supervisor->scheduler_test()->run_once();
+    std::move(fut).get();
     REQUIRE(supervisor_counter == 1);
     REQUIRE(supervisor_sub_counter == 1);
 }
@@ -202,8 +203,9 @@ TEST_CASE("spawn supervisor custom resource") {
     actor_counter = 0;
     auto* mr_ptr = actor_zeta::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor_custom_resource);
+    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor_custom_resource);
     supervisor->scheduler_test()->run_once();
+    std::move(fut).get();
     REQUIRE(supervisor_counter == 1);
     REQUIRE(supervisor_sub_counter == 1);
 }
@@ -213,7 +215,8 @@ TEST_CASE("spawn actor") {
     actor_counter = 0;
     auto* mr_ptr = actor_zeta::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_actor);
+    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_actor);
     supervisor->scheduler_test()->run_once();
+    std::move(fut).get();
     REQUIRE(actor_counter == 1);
 }

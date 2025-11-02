@@ -75,15 +75,18 @@ TEST_CASE("shutdown - basic test") {
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
-    // Send some messages
+    // Send some messages and collect futures
+    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
     for (int i = 0; i < 3; ++i) {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
+        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
     }
 
     scheduler->start();
 
     // Wait for processing
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Futures are ready after sleep - destructor will clean up
 
     // This should not crash
     scheduler->stop();
@@ -102,10 +105,11 @@ TEST_CASE("shutdown - multiple actors") {
         actors.push_back(actor_zeta::spawn<worker_actor>(resource));
     }
 
-    // Send messages to all actors
+    // Send messages to all actors and collect futures
+    std::vector<decltype(actor_zeta::send(actors[0].get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
     for (auto& actor : actors) {
         for (int i = 0; i < 2; ++i) {
-            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
+            futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
         }
     }
 
@@ -113,6 +117,8 @@ TEST_CASE("shutdown - multiple actors") {
 
     // Wait for processing
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Futures are ready after sleep - destructor will clean up
 
     // This should not crash
     scheduler->stop();
@@ -127,9 +133,10 @@ TEST_CASE("shutdown - immediate stop") {
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
-    // Send messages
+    // Send messages and collect futures
+    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
     for (int i = 0; i < 10; ++i) {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
+        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
     }
 
     scheduler->start();
@@ -137,6 +144,8 @@ TEST_CASE("shutdown - immediate stop") {
     // Stop immediately without waiting
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     scheduler->stop();
+
+    // Futures may be cancelled due to immediate stop - destructor will clean up
 
     REQUIRE(true); // If we get here, no crash occurred
 }

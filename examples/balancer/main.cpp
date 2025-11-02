@@ -146,19 +146,37 @@ public:
                     }
                 }
 
-                // Extract result and convert to balancer's future type
+                // Extract result from child future
                 if constexpr (std::is_same_v<R, void>) {
                     std::move(child_future).get();  // Wait for completion
-                    return unique_future<R>();      // Return ready void future
                 } else {
-                    R result = std::move(child_future).get();  // Get result
-                    return unique_future<R>(std::move(result)); // Return future with result
+                    // For non-void: get result but we'll return it via future_state below
                 }
+
+                // Create future_state<R> for balancer's return value (already ready)
+                void* mem = resource()->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                                                 alignof(actor_zeta::detail::future_state<R>));
+                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource());
+
+                // Set result immediately (balancer executed synchronously)
+                if constexpr (std::is_same_v<R, void>) {
+                    state->set_result_rtt(actor_zeta::detail::rtt(resource(), int{0}));
+                } else {
+                    R result = std::move(child_future).get();  // Get result from child
+                    state->set_result_rtt(actor_zeta::detail::rtt(resource(), std::move(result)));
+                }
+
+                // Return async future (already in ready state)
+                return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
             }
             default: {
                 std::cerr << "unknown command" << std::endl;
                 // Return invalid future for unknown commands
-                return unique_future<R>();
+                void* mem = resource()->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                                                 alignof(actor_zeta::detail::future_state<R>));
+                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource());
+                state->set_state(actor_zeta::detail::future_state_enum::error);
+                return unique_future<R>(state, false);
             }
         }
     }
@@ -189,16 +207,16 @@ int main() {
     collection->create();
 
     std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key1"), std::string("value1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key2"), std::string("value2"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key3"), std::string("value3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key1"), std::string("value1")).get();
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key2"), std::string("value2")).get();
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key3"), std::string("value3")).get();
 
     std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key1"), std::string("updated1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key2"), std::string("updated2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key1"), std::string("updated1")).get();
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key2"), std::string("updated2")).get();
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::remove, std::string("key3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::remove, std::string("key3")).get();
 
     scheduler->start();
 
