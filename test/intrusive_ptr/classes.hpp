@@ -52,7 +52,7 @@ public:
         ++class1_instances;
     }
 
-    ~class1() override {
+    ~class1() {
         --class1_instances;
     }
 

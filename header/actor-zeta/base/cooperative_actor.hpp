@@ -9,14 +9,25 @@
 namespace actor_zeta { namespace base {
 
     /// @brief Intrusive reference counting support for cooperative_actor
-    /// Uses ref_counted base class methods
-    template<class T,class Target,class Traits,class Type>
-    auto intrusive_ptr_add_ref(T* ptr) -> typename std::enable_if<std::is_same<T*, cooperative_actor<Target,Traits,Type>*>::value>::type {
+    /// Works with any type that has ref() and deref() methods
+
+    // Type trait to check if T has ref() and deref() methods
+    template<typename T, typename = void>
+    struct has_ref_deref : std::false_type {};
+
+    template<typename T>
+    struct has_ref_deref<T, typename std::enable_if<
+        std::is_same<decltype(std::declval<T>().ref()), void>::value &&
+        std::is_same<decltype(std::declval<T>().deref()), void>::value
+    >::type> : std::true_type {};
+
+    template<class T>
+    auto intrusive_ptr_add_ref(T* ptr) -> typename std::enable_if<has_ref_deref<T>::value>::type {
         ptr->ref();
     }
 
-    template<class T,class Target,class Traits,class Type>
-    auto intrusive_ptr_release(T* ptr) -> typename std::enable_if<std::is_same<T*, cooperative_actor<Target,Traits,Type>*>::value>::type {
+    template<class T>
+    auto intrusive_ptr_release(T* ptr) -> typename std::enable_if<has_ref_deref<T>::value>::type {
         ptr->deref();
     }
 

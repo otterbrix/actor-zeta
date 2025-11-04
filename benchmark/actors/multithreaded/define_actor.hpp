@@ -24,7 +24,7 @@ public:
         , pong_behavior_(actor_zeta::make_behavior(resource, this, &ping_pong_actor::pong)) {
     }
 
-    ~ping_pong_actor() override = default;
+    ~ping_pong_actor() = default;
 
     void set_partner(ping_pong_actor* p) {
         partner_ = p;

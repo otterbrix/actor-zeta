@@ -103,14 +103,19 @@ inline std::size_t worker_t::work_data_with_result(const std::string& data, cons
 }
 
 /// non thread safe
-class supervisor_lite final : public actor_zeta::actor_abstract_t {
+class supervisor_lite final : public actor_zeta::base::actor_mixin<supervisor_lite> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     supervisor_lite(memory_resource* ptr)
-        : actor_zeta::actor_abstract_t(ptr)
-        , create_(actor_zeta::make_behavior(resource(),  this, &supervisor_lite::create))
+        : actor_zeta::base::actor_mixin<supervisor_lite>()
+        , resource_(ptr)
+        , create_(actor_zeta::make_behavior(resource_,  this, &supervisor_lite::create))
         , e_(new actor_zeta::scheduler::sharing_scheduler(2, 1000)) {
         e_->start();
     }
+
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     ~supervisor_lite() {
         e_->stop();
@@ -118,7 +123,7 @@ public:
     }
 
     void create() {
-        auto ptr = actor_zeta::spawn<worker_t>(resource());
+        auto ptr = actor_zeta::spawn<worker_t>(resource_);
         actors_.emplace_back(std::move(ptr));
         ++size_actors_;
     }
@@ -162,6 +167,7 @@ private:
         return size_actors_.load();
     }
 
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::behavior_t create_;
     actor_zeta::scheduler::sharing_scheduler* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
@@ -196,8 +202,11 @@ int main() {
     std::vector<worker_t::unique_future<void>> download_futures;
     download_futures.reserve(supervisor->worker_count());
     for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
-        download_futures.push_back(actor_zeta::send(supervisor->get_worker(i), supervisor->address(), &worker_t::download, std::string("url"), std::string("user"), std::string("pass")));
-        supervisor->schedule_worker(i);
+        auto future = actor_zeta::send(supervisor->get_worker(i), supervisor->address(), &worker_t::download, std::string("url"), std::string("user"), std::string("pass"));
+        if (future.needs_scheduling()) {
+            supervisor->schedule_worker(i);
+        }
+        download_futures.push_back(std::move(future));
     }
 
     // Broadcast work_data task - one message to all actors using new send() API
@@ -205,8 +214,11 @@ int main() {
     std::vector<worker_t::unique_future<void>> work_futures;
     work_futures.reserve(supervisor->worker_count());
     for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
-        work_futures.push_back(actor_zeta::send(supervisor->get_worker(i), supervisor->address(), &worker_t::work_data, std::string("data"), std::string("operator")));
-        supervisor->schedule_worker(i);
+        auto future = actor_zeta::send(supervisor->get_worker(i), supervisor->address(), &worker_t::work_data, std::string("data"), std::string("operator"));
+        if (future.needs_scheduling()) {
+            supervisor->schedule_worker(i);
+        }
+        work_futures.push_back(std::move(future));
     }
 
     std::cerr << "=== Waiting for processing ===" << std::endl;
@@ -243,8 +255,10 @@ int main() {
                 std::string("pass")
             );
 
+            if (future.needs_scheduling()) {
+                supervisor->schedule_worker(i);
+            }
             futures.push_back(std::move(future));
-            supervisor->schedule_worker(i);
         }
     }
 

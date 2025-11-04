@@ -1,7 +1,7 @@
 #pragma once
 
 #include "traits_actor.hpp"
-#include <actor-zeta/base/actor_abstract.hpp>
+#include <actor-zeta/base/actor_mixin.hpp>
 #include <actor-zeta/base/behavior.hpp>
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/detail/memory.hpp>
@@ -95,7 +95,7 @@ namespace actor_zeta { namespace base {
 
     template<class Actor, class MailBox>
     class cooperative_actor<Actor, MailBox, actor_type::classic>
-        : public actor_abstract_t {
+        : public actor_mixin<Actor> {
     private:
         static constexpr bool check_dispatch_traits_exists() {
             using dispatch_traits_check = typename Actor::dispatch_traits;
@@ -104,6 +104,11 @@ namespace actor_zeta { namespace base {
         }
 
     public:
+        // Import types from actor_mixin
+        using typename actor_mixin<Actor>::id_t;
+        using typename actor_mixin<Actor>::placement_tag;
+        using actor_mixin<Actor>::placement;
+
         using mailbox_t = MailBox;
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, MailBox, actor_type::classic>, pmr::deleter_t>;
 
@@ -123,11 +128,7 @@ namespace actor_zeta { namespace base {
             void* mem = resource()->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
             auto* state = new (mem) detail::future_state<R>(resource());
 
-            // Create cancellation token (will be shared between message and future)
-            auto token = make_counted<detail::cancellation_token>();
-
-            // Share cancellation token with message
-            msg->set_cancellation_token(token);
+            // Share state with message (holds reference)
             msg->set_result_slot(state);
 
             // Check if actor is being destroyed - reject new enqueue()
@@ -136,7 +137,6 @@ namespace actor_zeta { namespace base {
             if (is_destroying(state_.load(std::memory_order_acquire))) {
                 state->set_state(detail::future_state_enum::error);
                 unique_future<R> future(state, false);  // needs_sched = false
-                future.set_cancellation_token(std::move(token));
                 return future;
             }
 
@@ -199,11 +199,8 @@ namespace actor_zeta { namespace base {
                     break;
             }
 
-            // Create future and set the shared cancellation token
+            // Create future with state reference
             unique_future<R> future(state, needs_sched);
-            // Replace the token created in constructor with our shared token
-            future.set_cancellation_token(std::move(token));
-
             return future;
         }
 
@@ -231,7 +228,15 @@ namespace actor_zeta { namespace base {
                     auto current = state_ref_.load(std::memory_order_acquire);
                     actor_state desired;
 
+#ifndef NDEBUG
+                    int cas_attempts = 0;
+                    constexpr int MAX_CAS_ATTEMPTS = 100000;  // Failsafe: detect livelock
+#endif
+
                     while (true) {
+#ifndef NDEBUG
+                        assert(++cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard constructor: CAS loop - possible livelock!");
+#endif
                         // Detect concurrent resume() - running bit already set
                         if (is_running(current)) {
                             assert(false && "Concurrent resume() detected - scheduler BUG!");
@@ -256,7 +261,15 @@ namespace actor_zeta { namespace base {
                     auto current = state_ref_.load(std::memory_order_acquire);
                     actor_state desired;
 
+#ifndef NDEBUG
+                    int cas_attempts = 0;
+                    constexpr int MAX_CAS_ATTEMPTS = 100000;  // Failsafe: detect livelock
+#endif
+
                     while (true) {
+#ifndef NDEBUG
+                        assert(++cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard destructor: CAS loop - possible livelock!");
+#endif
                         assert(is_running(current) && "resume_guard: not running!");
 
                         // Clear running bit
@@ -364,12 +377,14 @@ namespace actor_zeta { namespace base {
                         }
 
                         ~message_guard() noexcept {
-                            actor_->current_message_ = prev_message_;
-
-                            // Release actor's refcount if message has result slot
+                            // CRITICAL: Release result_slot FIRST while actor is still alive
+                            // If we reset current_message_ first, actor might be destroyed before release()
                             if (message_ && message_->result_slot()) {
                                 message_->result_slot()->release();
                             }
+
+                            // THEN reset current_message_ (safe even if actor being destroyed)
+                            actor_->current_message_ = prev_message_;
                         }
 
                         mailbox::message* get() const noexcept { return message_.get(); }
@@ -427,7 +442,27 @@ namespace actor_zeta { namespace base {
             return finalize(result, handled, keep_scheduled);
         }
 
-        ~cooperative_actor() override {
+        /// @brief Get PMR memory resource used by this actor
+        pmr::memory_resource* resource() const noexcept {
+            return resource_;
+        }
+
+        /// @brief Increment intrusive reference count
+        void ref() noexcept {
+            refcount_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        /// @brief Decrement intrusive reference count
+        void deref() noexcept {
+            if (refcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                // Last reference released - no action needed
+                // Actor managed by unique_ptr, not intrusive_ptr
+            }
+        }
+
+        cooperative_actor()= delete;
+
+        ~cooperative_actor() {
             // SHUTDOWN PROTOCOL: Ensure safe destruction while scheduler may be running
             //
             // CRITICAL THREE-PHASE SHUTDOWN:
@@ -526,7 +561,8 @@ namespace actor_zeta { namespace base {
 
     protected:
         explicit cooperative_actor(pmr::memory_resource* in_resource)
-            : actor_abstract_t(check_ptr(in_resource))
+            : actor_mixin<Actor>()
+            , resource_(check_ptr(in_resource))
             , current_message_(nullptr)
             , mailbox_() {
             // Проверка наличия dispatch_traits (Actor уже полностью определен здесь)
@@ -538,8 +574,13 @@ namespace actor_zeta { namespace base {
         /// @brief Call this at the BEGINNING of derived class destructor
         /// This prevents bad_function_call when behavior_t members are destroyed
         /// while resume() is still processing messages
+        ///
+        /// CRITICAL: This method:
+        /// 1. Sets destroying bit immediately (prevents new behavior() calls)
+        /// 2. Waits for in-progress resume() to complete
+        /// 3. Returns when it's safe to destroy behavior_t members
         void begin_shutdown() noexcept {
-            // Set destroying bit immediately - prevents new resume() from calling behavior()
+            // Step 1: Set destroying bit immediately - prevents new resume() from calling behavior()
             auto current = state_.load(std::memory_order_acquire);
             while (!is_destroying(current)) {
                 auto desired = set_destroying(current);
@@ -549,6 +590,28 @@ namespace actor_zeta { namespace base {
                     break;
                 }
             }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+
+            // Step 2: Wait for any in-progress resume() to complete
+            // This ensures behavior() completes before derived class destroys behavior_t members
+            //
+            // CRITICAL: Without this wait, we have a race:
+            // - Thread 1 (main): begin_shutdown() returns → destroy behavior_t
+            // - Thread 2 (worker): still in behavior() → reads behavior_t → RACE!
+#ifndef NDEBUG
+            int spin_count = 0;
+            constexpr int MAX_SPINS = 10000000;
+#endif
+            while (is_running(state_.load(std::memory_order_seq_cst))) {
+                std::this_thread::yield();
+#ifndef NDEBUG
+                if (++spin_count > MAX_SPINS) {
+                    assert(false && "begin_shutdown() waiting too long for resume() - possible deadlock!");
+                }
+#endif
+            }
+
+            // Extra fence to ensure all previous operations are visible
             std::atomic_thread_fence(std::memory_order_seq_cst);
         }
 
@@ -567,9 +630,11 @@ namespace actor_zeta { namespace base {
             return mailbox_;
         }
 
+        pmr::memory_resource* resource_;
         mailbox::message* current_message_;
         mailbox_t mailbox_;
         std::atomic<actor_state> state_{actor_state::idle};  // Combined execution state
+        std::atomic<size_t> refcount_{0};  // Intrusive reference count
     };
 
 }} // namespace actor_zeta::base

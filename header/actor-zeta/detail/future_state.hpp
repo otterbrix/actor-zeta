@@ -1,7 +1,6 @@
 #pragma once
 
 #include <actor-zeta/detail/memory_resource.hpp>
-#include <actor-zeta/detail/ref_counted.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 #include <atomic>
 #include <cassert>
@@ -18,32 +17,6 @@ namespace actor_zeta { namespace detail {
         error = 3,             // Error occurred (broken promise, mailbox closed, etc.)
         consumed = 4,          // get() called, result moved out
         cancelled = 5          // Explicitly cancelled
-    };
-
-    /// @brief Cancellation token with intrusive refcounting
-    /// Shared between message and future via intrusive_ptr
-    /// Allows RAII-based cancellation when future is destroyed
-    class cancellation_token final : public ref_counted {
-    public:
-        cancellation_token() = default;
-
-        /// @brief Request cancellation (can be called from any thread)
-        void cancel() noexcept {
-            cancelled_.store(true, std::memory_order_release);
-        }
-
-        /// @brief Check if cancelled
-        [[nodiscard]] bool is_cancelled() const noexcept {
-            return cancelled_.load(std::memory_order_acquire);
-        }
-
-        /// @brief Reset cancellation state (for reuse in pools)
-        void reset() noexcept {
-            cancelled_.store(false, std::memory_order_release);
-        }
-
-    private:
-        std::atomic<bool> cancelled_{false};
     };
 
     /// @brief Base class for future state (type-erased part)
@@ -182,19 +155,15 @@ namespace actor_zeta { namespace detail {
         void set_result(rtt&& value) noexcept {
 #ifndef NDEBUG
             assert(magic_ == kMagicAlive && "Use-after-free: set_result() on deleted state!");
-            auto current = state_.load(std::memory_order_relaxed);
-            assert(current == future_state_enum::pending && "set_result() called on non-pending state!");
 #endif
-            result_ = std::move(value);
-
             // Atomic transition: pending → ready
             auto expected = future_state_enum::pending;
-            if (!transition(expected, future_state_enum::ready)) {
-                // Transition failed - state changed concurrently (e.g., cancelled)
-#ifndef NDEBUG
-                assert(false && "Concurrent state modification detected in set_result()!");
-#endif
+            if (transition(expected, future_state_enum::ready)) {
+                // Transition succeeded - now safe to store result
+                result_ = std::move(value);
             }
+            // Transition failed - state changed concurrently (cancelled, etc.)
+            // Don't store result, it won't be read anyway
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
@@ -259,9 +228,9 @@ namespace actor_zeta { namespace detail {
             assert(magic_ == kMagicAlive && "Use-after-free: set_ready() on deleted state!");
 #endif
             auto expected = future_state_enum::pending;
-            bool transitioned = transition(expected, future_state_enum::ready);
-            assert(transitioned && "set_ready() called on non-pending state!");
-            (void)transitioned;
+            // Try transition - if it fails, future was cancelled or already processed
+            // This is safe - no result to store, so no harm done
+            (void)transition(expected, future_state_enum::ready);
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)

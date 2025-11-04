@@ -58,19 +58,24 @@ inline void worker_actor::get_status() {
 }
 
 // Supervisor that manages worker actors with manual scheduling
-class supervisor_actor final : public actor_zeta::actor_abstract_t {
+class supervisor_actor final : public actor_zeta::base::actor_mixin<supervisor_actor> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::actor_abstract_t(ptr)
+        : actor_zeta::base::actor_mixin<supervisor_actor>()
+        , resource_(ptr)
         , scheduler_(scheduler)
-        , create_worker_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::create_worker))
-        , assign_task_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::assign_task))
-        , stop_workers_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::stop_workers))
-        , check_status_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::check_status)) {
+        , create_worker_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::create_worker))
+        , assign_task_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::assign_task))
+        , stop_workers_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::stop_workers))
+        , check_status_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::check_status)) {
     }
 
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+
     void create_worker(const std::string& name) {
-        auto worker = actor_zeta::spawn<worker_actor>(resource(), name);
+        auto worker = actor_zeta::spawn<worker_actor>(resource_, name);
         std::cerr << "[Supervisor] Created worker: " << name << std::endl;
         workers_.emplace_back(std::move(worker));
     }
@@ -145,6 +150,7 @@ public:
 protected:
 
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> workers_;
     size_t next_worker_ = 0;

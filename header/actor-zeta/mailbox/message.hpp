@@ -62,28 +62,15 @@ namespace actor_zeta { namespace mailbox {
         /// @brief Set future state (result slot)
         void set_result_slot(actor_zeta::detail::future_state_base* slot) noexcept { result_slot_ = slot; }
 
-        /// @brief Get cancellation token (creates on first access if needed)
-        intrusive_ptr<actor_zeta::detail::cancellation_token> cancellation_token() {
-            if (!cancellation_token_) {
-                cancellation_token_ = make_counted<actor_zeta::detail::cancellation_token>();
-            }
-            return cancellation_token_;
-        }
-
-        /// @brief Share cancellation token with future
-        void set_cancellation_token(intrusive_ptr<actor_zeta::detail::cancellation_token> token) noexcept {
-            cancellation_token_ = std::move(token);
-        }
-
-        /// @brief Check if cancelled (via shared cancellation token)
+        /// @brief Check if cancelled (via result_slot state)
         bool is_cancelled() const noexcept {
-            return cancellation_token_ && cancellation_token_->is_cancelled();
+            return result_slot_ && result_slot_->is_cancelled();
         }
 
-        /// @brief Request cancellation (sets flag in shared token)
+        /// @brief Request cancellation (sets state in result_slot)
         void cancel() noexcept {
-            if (cancellation_token_) {
-                cancellation_token_->cancel();
+            if (result_slot_) {
+                result_slot_->set_state(actor_zeta::detail::future_state_enum::cancelled);
             }
         }
 
@@ -130,15 +117,13 @@ namespace actor_zeta { namespace mailbox {
         message_id command_;
         actor_zeta::detail::rtt body_;
 
-        // NEW: unified future state (replaces slot_refcount)
+        // Unified future state (replaces slot_refcount)
         actor_zeta::detail::future_state_base* result_slot_{nullptr};
 
-        // NEW: shared cancellation token (lazy initialization)
-        intrusive_ptr<actor_zeta::detail::cancellation_token> cancellation_token_;
-
         // REMOVED: atomic<slot_error_code> error_  (state now in future_state)
-        // REMOVED: atomic<bool> cancelled_  (now in cancellation_token)
-        // REMOVED: atomic<bool> orphaned_  (now in cancellation_token)
+        // REMOVED: atomic<bool> cancelled_  (now in future_state)
+        // REMOVED: atomic<bool> orphaned_  (now in future_state)
+        // REMOVED: intrusive_ptr<cancellation_token> cancellation_token_  (state now in future_state)
     };
 
     static_assert(std::is_move_constructible<message>::value, "");

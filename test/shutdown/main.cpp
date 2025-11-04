@@ -33,10 +33,13 @@ private:
 };
 
 // Balancer actor that manually enqueues and schedules
-class balancer_actor final : public actor_zeta::actor_abstract_t {
+class balancer_actor final : public actor_zeta::base::actor_mixin<balancer_actor> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::actor_abstract_t(resource)
+        : actor_zeta::base::actor_mixin<balancer_actor>()
+        , resource_(resource)
         , scheduler_(scheduler) {
     }
 
@@ -46,8 +49,10 @@ public:
         workers_.clear();
     }
 
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+
     void add_worker() {
-        auto worker = actor_zeta::spawn<worker_actor>(resource());
+        auto worker = actor_zeta::spawn<worker_actor>(resource_);
         workers_.emplace_back(std::move(worker));
     }
 
@@ -63,6 +68,7 @@ public:
 protected:
 
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
     size_t cursor_ = 0;
     std::vector<worker_actor::unique_actor> workers_;

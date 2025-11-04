@@ -125,8 +125,7 @@ namespace actor_zeta {
     public:
         explicit unique_future(pmr::memory_resource* /*res*/) noexcept
             : state_(nullptr)
-            , needs_scheduling_(false)
-            , cancellation_token_() {
+            , needs_scheduling_(false) {
         }
 
         unique_future(const unique_future&) = delete;
@@ -137,15 +136,13 @@ namespace actor_zeta {
         /// @param needs_sched true if actor was unblocked (needs scheduling)
         explicit unique_future(detail::future_state<T>* state, bool needs_sched = false) noexcept
             : state_(state)
-            , needs_scheduling_(needs_sched)
-            , cancellation_token_(make_counted<detail::cancellation_token>()) {
+            , needs_scheduling_(needs_sched) {
         }
 
         /// @brief Move constructor
         unique_future(unique_future&& other) noexcept
             : state_(other.state_)
-            , needs_scheduling_(other.needs_scheduling_)
-            , cancellation_token_(std::move(other.cancellation_token_)) {
+            , needs_scheduling_(other.needs_scheduling_) {
             other.state_ = nullptr;
             other.needs_scheduling_ = false;
         }
@@ -154,8 +151,8 @@ namespace actor_zeta {
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
                 // RAII cancellation before releasing
-                if (state_ && !state_->is_ready() && cancellation_token_) {
-                    cancellation_token_->cancel();
+                if (state_ && !state_->is_ready()) {
+                    state_->set_state(detail::future_state_enum::cancelled);
                 }
 
                 // Release current state if any
@@ -166,7 +163,6 @@ namespace actor_zeta {
                 // Transfer ownership
                 state_ = other.state_;
                 needs_scheduling_ = other.needs_scheduling_;
-                cancellation_token_ = std::move(other.cancellation_token_);
 
                 other.state_ = nullptr;
                 other.needs_scheduling_ = false;
@@ -176,12 +172,6 @@ namespace actor_zeta {
 
         /// @brief Destructor - RAII cancellation + releases state reference
         ~unique_future() noexcept {
-            // RAII cancellation: if future is destroyed before get() → cancel
-            // TEMPORARY DEBUG: Disable RAII cancellation to test
-            // if (state_ && !state_->is_ready() && cancellation_token_) {
-            //     cancellation_token_->cancel();
-            // }
-
             if (state_) {
                 state_->release();
             }
@@ -197,7 +187,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready()) {
                 // Check cancellation
-                if (cancellation_token_ && cancellation_token_->is_cancelled()) {
+                if (state_->is_cancelled()) {
                     state_->release();
                     state_ = nullptr;
                     assert(false && "get() on cancelled future!");
@@ -241,30 +231,19 @@ namespace actor_zeta {
 
         /// @brief Request cancellation
         void cancel() noexcept {
-            if (cancellation_token_) {
-                cancellation_token_->cancel();
+            if (state_) {
+                state_->set_state(detail::future_state_enum::cancelled);
             }
         }
 
         /// @brief Check if cancelled
         [[nodiscard]] bool is_cancelled() const noexcept {
-            return cancellation_token_ && cancellation_token_->is_cancelled();
-        }
-
-        /// @brief Get cancellation token (for sharing with message)
-        [[nodiscard]] intrusive_ptr<detail::cancellation_token> get_cancellation_token() const noexcept {
-            return cancellation_token_;
-        }
-
-        /// @brief Set cancellation token (for enqueue_impl to share token with message)
-        void set_cancellation_token(intrusive_ptr<detail::cancellation_token> token) noexcept {
-            cancellation_token_ = std::move(token);
+            return state_ && state_->is_cancelled();
         }
 
     private:
         detail::future_state<T>* state_;  // State ownership (null after move or invalid future)
         bool needs_scheduling_;
-        intrusive_ptr<detail::cancellation_token> cancellation_token_;  // Shared cancellation token
     };
 
     /// @brief unique_future<void> specialization - read interface for void async operations
@@ -274,8 +253,7 @@ namespace actor_zeta {
         /// @brief Constructor for invalid future - requires memory_resource
         explicit unique_future(pmr::memory_resource* /*res*/) noexcept
             : state_(nullptr)
-            , needs_scheduling_(false)
-            , cancellation_token_() {
+            , needs_scheduling_(false) {
         }
 
         /// @brief Construct from future_state pointer
@@ -283,8 +261,7 @@ namespace actor_zeta {
         /// @param needs_sched true if actor was unblocked (needs scheduling)
         explicit unique_future(detail::future_state<void>* state, bool needs_sched = false) noexcept
             : state_(state)
-            , needs_scheduling_(needs_sched)
-            , cancellation_token_(make_counted<detail::cancellation_token>()) {
+            , needs_scheduling_(needs_sched) {
         }
 
         unique_future(const unique_future&) = delete;
@@ -293,8 +270,7 @@ namespace actor_zeta {
         /// @brief Move constructor
         unique_future(unique_future&& other) noexcept
             : state_(other.state_)
-            , needs_scheduling_(other.needs_scheduling_)
-            , cancellation_token_(std::move(other.cancellation_token_)) {
+            , needs_scheduling_(other.needs_scheduling_) {
             other.state_ = nullptr;
             other.needs_scheduling_ = false;
         }
@@ -303,8 +279,8 @@ namespace actor_zeta {
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
                 // RAII cancellation before releasing
-                if (state_ && !state_->is_ready() && cancellation_token_) {
-                    cancellation_token_->cancel();
+                if (state_ && !state_->is_ready()) {
+                    state_->set_state(detail::future_state_enum::cancelled);
                 }
 
                 // Release current state if any
@@ -315,7 +291,6 @@ namespace actor_zeta {
                 // Transfer ownership
                 state_ = other.state_;
                 needs_scheduling_ = other.needs_scheduling_;
-                cancellation_token_ = std::move(other.cancellation_token_);
 
                 other.state_ = nullptr;
                 other.needs_scheduling_ = false;
@@ -325,12 +300,6 @@ namespace actor_zeta {
 
         /// @brief Destructor - RAII cancellation + releases state reference
         ~unique_future() noexcept {
-            // RAII cancellation: if future is destroyed before get() → cancel
-            // TEMPORARY DEBUG: Disable RAII cancellation to test
-            // if (state_ && !state_->is_ready() && cancellation_token_) {
-            //     cancellation_token_->cancel();
-            // }
-
             if (state_) {
                 state_->release();
             }
@@ -345,7 +314,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready()) {
                 // Check cancellation
-                if (cancellation_token_ && cancellation_token_->is_cancelled()) {
+                if (state_->is_cancelled()) {
                     state_->release();
                     state_ = nullptr;
                     assert(false && "get() on cancelled future!");
@@ -384,30 +353,19 @@ namespace actor_zeta {
 
         /// @brief Request cancellation
         void cancel() noexcept {
-            if (cancellation_token_) {
-                cancellation_token_->cancel();
+            if (state_) {
+                state_->set_state(detail::future_state_enum::cancelled);
             }
         }
 
         /// @brief Check if cancelled
         [[nodiscard]] bool is_cancelled() const noexcept {
-            return cancellation_token_ && cancellation_token_->is_cancelled();
-        }
-
-        /// @brief Get cancellation token (for sharing with message)
-        [[nodiscard]] intrusive_ptr<detail::cancellation_token> get_cancellation_token() const noexcept {
-            return cancellation_token_;
-        }
-
-        /// @brief Set cancellation token (for enqueue_impl to share token with message)
-        void set_cancellation_token(intrusive_ptr<detail::cancellation_token> token) noexcept {
-            cancellation_token_ = std::move(token);
+            return state_ && state_->is_cancelled();
         }
 
     private:
         detail::future_state<void>* state_;  // State ownership (null after move or invalid future)
         bool needs_scheduling_;
-        intrusive_ptr<detail::cancellation_token> cancellation_token_;  // Shared cancellation token
     };
 
 } // namespace actor_zeta

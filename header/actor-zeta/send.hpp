@@ -17,20 +17,21 @@ namespace detail {
         using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
         using result_type = typename callable_trait::result_type;
 
-        base::actor_abstract_t* base_ptr;
+        Actor* typed_actor;
         if constexpr (std::is_same_v<ActorPtr, base::address_t>) {
-            base_ptr = actor->operator->();
+            // address_t provides operator->() which returns the underlying actor pointer
+            typed_actor = static_cast<Actor*>(actor->operator->());
         } else {
-            base_ptr = actor;
+            // Direct actor pointer
+            typed_actor = actor;
         }
 
         auto msg = detail::make_message(
-            base_ptr->resource(),
+            typed_actor->resource(),
             sender,
             mailbox::make_message_id(ActionId),
             std::forward<Args>(args)...);
 
-        auto* typed_actor = static_cast<Actor*>(base_ptr);
         return typed_actor->template enqueue_impl<result_type>(std::move(msg));
     }
 } // namespace detail

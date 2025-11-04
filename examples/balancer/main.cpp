@@ -96,16 +96,21 @@ private:
 
 
 
-class collection_t final : public actor_zeta::actor_abstract_t {
+class collection_t final : public actor_zeta::base::actor_mixin<collection_t> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::actor_abstract_t(resource)
+        : actor_zeta::base::actor_mixin<collection_t>()
+        , resource_(resource)
         , e_(scheduler) {
         ++count_collection;
     }
 
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+
     void create() {
-        auto ptr = actor_zeta::spawn<collection_part_t> (resource());
+        auto ptr = actor_zeta::spawn<collection_part_t> (resource_);
         actors_.emplace_back(std::move(ptr));
     }
 
@@ -154,16 +159,16 @@ public:
                 }
 
                 // Create future_state<R> for balancer's return value (already ready)
-                void* mem = resource()->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
                                                  alignof(actor_zeta::detail::future_state<R>));
-                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource());
+                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
 
                 // Set result immediately (balancer executed synchronously)
                 if constexpr (std::is_same_v<R, void>) {
-                    state->set_result_rtt(actor_zeta::detail::rtt(resource(), int{0}));
+                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, int{0}));
                 } else {
                     R result = std::move(child_future).get();  // Get result from child
-                    state->set_result_rtt(actor_zeta::detail::rtt(resource(), std::move(result)));
+                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, std::move(result)));
                 }
 
                 // Return async future (already in ready state)
@@ -172,9 +177,9 @@ public:
             default: {
                 std::cerr << "unknown command" << std::endl;
                 // Return invalid future for unknown commands
-                void* mem = resource()->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
                                                  alignof(actor_zeta::detail::future_state<R>));
-                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource());
+                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
                 state->set_state(actor_zeta::detail::future_state_enum::error);
                 return unique_future<R>(state, false);
             }
@@ -184,6 +189,7 @@ public:
 protected:
 
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* e_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;

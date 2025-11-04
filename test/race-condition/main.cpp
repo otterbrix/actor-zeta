@@ -17,7 +17,7 @@ public:
         , processed_count_(0) {
     }
 
-    ~stress_actor() override = default;
+    ~stress_actor() = default;
 
     int compute(int value) {
         // Simulate some work

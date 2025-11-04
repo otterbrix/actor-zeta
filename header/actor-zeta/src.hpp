@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <actor-zeta/detail/pmr/polymorphic_allocator.hpp>
 
-#include <actor-zeta/impl/actor/actor_abstract.ipp>
 #include <actor-zeta/impl/actor/address.ipp>
 
 #include <actor-zeta/impl/detail/aligned_allocate.ipp>
