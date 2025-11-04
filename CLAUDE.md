@@ -565,7 +565,7 @@ Switch between profiles using the dropdown in CLion's toolbar.
   - If blocked, we should resume anyway to check for new messages
 - **Reproduces in:** Balancer pattern with manual `enqueue()` + `schedule()` calls
 - **Files affected:**
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:91-95` - added blocked() check
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:321` - added blocked() check in resume()
   - `test/shutdown/main.cpp` - new test case reproduces the bug with balancer pattern
 
 ### CI/CD - Compiler C++20 Support
@@ -593,8 +593,9 @@ Switch between profiles using the dropdown in CLion's toolbar.
   }
   ```
 - **Files affected:**
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:56-59` - removed auto-scheduling
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp` - removed auto-scheduling from enqueue_impl()
   - `test/shutdown/main.cpp` - balancer_actor example demonstrates manual scheduling pattern
+- **Note:** Line numbers are historical and may have changed after subsequent refactoring
 
 ### Resume Info - Extended Actor Resume Result
 - **Feature:** `resume()` now returns `resume_info` struct with execution statistics
@@ -624,6 +625,56 @@ Switch between profiles using the dropdown in CLion's toolbar.
   - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:86-150` - `resume_core_()` now returns `resume_info` with message count
   - `header/actor-zeta/impl/scheduler/sharing_scheduler.ipp:142-148` - shutdown_helper returns `resume_info`
 - **Backward compatibility:** Existing scheduler code works unchanged via implicit conversion
+
+### Actor State Refactoring - Unified State Management
+- **Change:** Replaced three atomic flags with single `atomic<actor_state>` using bit flags
+- **Motivation:** Simplify synchronization, prevent invalid state combinations, enable atomic state transitions
+- **Implementation:**
+  ```cpp
+  // Before (three separate atomics):
+  std::atomic<bool> resuming_{false};      // Concurrent resume() detection
+  std::atomic<bool> is_scheduled_{false};  // Actor in scheduler queue?
+  std::atomic<bool> destroying_{false};    // Actor is being destroyed
+
+  // After (single atomic enum):
+  std::atomic<actor_state> state_{actor_state::idle};  // Combined execution state
+
+  // actor_state enum with bit flags:
+  enum class actor_state : uint8_t {
+      idle                         = 0b000,  // Not scheduled, not running
+      scheduled                    = 0b001,  // In scheduler queue
+      running                      = 0b010,  // Executing resume()
+      running_scheduled            = 0b011,  // Running + needs reschedule
+      idle_destroying              = 0b100,  // Being destroyed
+      scheduled_destroying         = 0b101,  // INVALID: can't schedule destroying actor
+      running_destroying           = 0b110,  // Destroying while running
+      running_scheduled_destroying = 0b111   // INVALID: can't reschedule destroying actor
+  };
+  ```
+- **Key benefits:**
+  - **Single atomic** - simpler synchronization, one CAS instead of multiple operations
+  - **Invalid states impossible** - enum constrains valid combinations
+  - **Atomic transitions** - CAS validates state transitions (idle→scheduled, scheduled→running_scheduled)
+  - **Clear semantics** - all execution states in one place
+  - **Follows future_state pattern** - consistent approach across library
+- **Helper functions:**
+  - `is_scheduled()`, `is_running()`, `is_destroying()` - check individual bits
+  - `set_scheduled()`, `set_running()`, `set_destroying()` - set/clear bits atomically
+  - `make_state()` - construct state from three booleans
+- **State transitions:**
+  - `enqueue_impl()`: `idle → scheduled` (CAS ensures only one thread schedules)
+  - `resume_guard` constructor: `scheduled → running_scheduled` or `idle → running`
+  - `resume_guard` destructor: clears running bit, optionally clears scheduled bit
+  - Destructor/`begin_shutdown()`: sets destroying bit via CAS loop
+- **Testing:** All 59 tests pass with TSAN (100%) and ASAN (100%)
+- **Files affected:**
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:23-88` - added `actor_state` enum and helpers
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:119-208` - updated `enqueue_impl()` with atomic transitions
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:223-283` - refactored `resume_guard` to work with state_
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:308,388` - updated destroying checks in resume()
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:443-536` - updated destructor with atomic state transitions
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:541-553` - updated `begin_shutdown()`
+  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:572` - replaced three atomics with single `state_`
 
 ---
 
@@ -739,6 +790,8 @@ See `PROMISE_FUTURE_IMPLEMENTATION.md` for detailed architecture.
 ### Promise/Future Code Quality Improvements (2025-01)
 
 Recent fixes to promise/future implementation:
+
+**Note:** Line numbers below are historical and may have changed after subsequent refactoring (e.g., Actor State Refactoring added 65+ lines at the beginning of the file).
 
 #### ✅ Bug Fix #1: Memory Leak in `release_message_ref()`
 - **Issue:** Future deleted message even if actor hadn't processed it yet
