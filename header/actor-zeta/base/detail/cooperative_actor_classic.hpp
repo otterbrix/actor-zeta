@@ -20,6 +20,73 @@
 
 namespace actor_zeta { namespace base {
 
+    /// @brief Actor execution state - combines scheduled/running/destroying flags
+    /// Uses bit flags for efficient atomic operations
+    /// Bit 0: scheduled - actor is in scheduler queue
+    /// Bit 1: running - resume() is currently executing
+    /// Bit 2: destroying - actor is being destroyed
+    enum class actor_state : uint8_t {
+        idle                         = 0b000,  // Not scheduled, not running
+        scheduled                    = 0b001,  // In scheduler queue
+        running                      = 0b010,  // Executing resume()
+        running_scheduled            = 0b011,  // Running + needs reschedule
+        idle_destroying              = 0b100,  // Being destroyed
+        scheduled_destroying         = 0b101,  // INVALID: can't schedule destroying actor
+        running_destroying           = 0b110,  // Destroying while running
+        running_scheduled_destroying = 0b111   // INVALID: can't reschedule destroying actor
+    };
+
+    /// @brief Check if actor is scheduled (in queue)
+    constexpr bool is_scheduled(actor_state s) noexcept {
+        return (static_cast<uint8_t>(s) & 0b001) != 0;
+    }
+
+    /// @brief Check if actor is running (executing resume())
+    constexpr bool is_running(actor_state s) noexcept {
+        return (static_cast<uint8_t>(s) & 0b010) != 0;
+    }
+
+    /// @brief Check if actor is being destroyed
+    constexpr bool is_destroying(actor_state s) noexcept {
+        return (static_cast<uint8_t>(s) & 0b100) != 0;
+    }
+
+    /// @brief Set/clear scheduled bit
+    constexpr actor_state set_scheduled(actor_state s, bool value) noexcept {
+        auto bits = static_cast<uint8_t>(s);
+        if (value) {
+            bits |= 0b001;
+        } else {
+            bits &= ~0b001;
+        }
+        return static_cast<actor_state>(bits);
+    }
+
+    /// @brief Set/clear running bit
+    constexpr actor_state set_running(actor_state s, bool value) noexcept {
+        auto bits = static_cast<uint8_t>(s);
+        if (value) {
+            bits |= 0b010;
+        } else {
+            bits &= ~0b010;
+        }
+        return static_cast<actor_state>(bits);
+    }
+
+    /// @brief Set destroying bit (always sets, never clears)
+    constexpr actor_state set_destroying(actor_state s) noexcept {
+        return static_cast<actor_state>(static_cast<uint8_t>(s) | 0b100);
+    }
+
+    /// @brief Construct state from individual flags
+    constexpr actor_state make_state(bool scheduled, bool running, bool destroying) noexcept {
+        uint8_t bits = 0;
+        if (scheduled) bits |= 0b001;
+        if (running) bits |= 0b010;
+        if (destroying) bits |= 0b100;
+        return static_cast<actor_state>(bits);
+    }
+
     template<class Target>
     Target* check_ptr(Target* ptr) {
         assert(ptr);
@@ -66,7 +133,7 @@ namespace actor_zeta { namespace base {
             // Check if actor is being destroyed - reject new enqueue()
             // This prevents race where enqueue() happens after destructor wait loop
             // but before behavior_t members are destroyed
-            if (destroying_.load(std::memory_order_acquire)) {
+            if (is_destroying(state_.load(std::memory_order_acquire))) {
                 state->set_state(detail::future_state_enum::error);
                 unique_future<R> future(state, false);  // needs_sched = false
                 future.set_cancellation_token(std::move(token));
@@ -82,33 +149,35 @@ namespace actor_zeta { namespace base {
             switch (result) {
                 case detail::enqueue_result::unblocked_reader: {
                     // Actor was blocked and got unblocked - MAY need scheduling
-                    // Use CAS to ensure only ONE thread sets is_scheduled_ flag
-                    // This prevents concurrent resume() calls from multiple scheduler threads
-                    bool expected = false;
-                    if (is_scheduled_.compare_exchange_strong(expected, true,
-                                                             std::memory_order_acq_rel,
-                                                             std::memory_order_acquire)) {
-                        // CAS succeeded - but check if resume() is still running
-                        // CRITICAL RACE WINDOW FIX:
-                        // Thread A: ~resume_guard() → resuming_=false → is_scheduled_=false
-                        // Thread B: CAS is_scheduled_ succeeds HERE (between the two stores)
-                        // Thread B: Would schedule duplicate resume()!
-                        //
-                        // Solution: Check if resume() still active AFTER CAS
-                        if (resuming_.load(std::memory_order_acquire)) {
-                            // resume() still running - rollback CAS and don't schedule
-                            is_scheduled_.store(false, std::memory_order_release);
+                    // Atomic transition: idle → scheduled (or running → running, no scheduling needed)
+                    // Use CAS to ensure only ONE thread successfully schedules
+                    auto current = state_.load(std::memory_order_acquire);
+                    actor_state desired;
+
+                    while (true) {
+                        // If already running, don't schedule (will self-reschedule if needed)
+                        // If destroying, don't schedule
+                        if (is_running(current) || is_destroying(current)) {
                             needs_sched = false;
-                        } else {
-                            // Safe to schedule - resume() has fully exited
-                            needs_sched = true;
+                            break;
                         }
-                    } else {
-                        // Another thread already scheduled this actor - skip scheduling
-                        // This can happen when:
-                        // - Multiple threads send messages concurrently
-                        // - Actor processed messages and blocked again between our enqueue attempts
-                        needs_sched = false;
+
+                        // If already scheduled, another thread won the race
+                        if (is_scheduled(current)) {
+                            needs_sched = false;
+                            break;
+                        }
+
+                        // Try transition: idle → scheduled
+                        desired = set_scheduled(current, true);
+                        if (state_.compare_exchange_weak(current, desired,
+                                                         std::memory_order_acq_rel,
+                                                         std::memory_order_acquire)) {
+                            // CAS succeeded - we are the one to schedule
+                            needs_sched = true;
+                            break;
+                        }
+                        // CAS failed - current updated, retry
                     }
                     break;
                 }
@@ -150,58 +219,78 @@ namespace actor_zeta { namespace base {
             assert(max_throughput > 0 && "max_throughput must be greater than 0");
 
             // CONCURRENT RESUME DETECTION: RAII guard to detect concurrent resume()
-            // Also handles is_scheduled_ cleanup to prevent race condition
+            // Also handles state transitions to prevent race conditions
             struct resume_guard {
-                std::atomic<bool>& resuming_flag_;
-                std::atomic<bool>& scheduled_flag_;
-                bool clear_scheduled_;
+                std::atomic<actor_state>& state_ref_;
+                bool keep_scheduled_;
 
-                explicit resume_guard(std::atomic<bool>& resuming, std::atomic<bool>& scheduled)
-                    : resuming_flag_(resuming)
-                    , scheduled_flag_(scheduled)
-                    , clear_scheduled_(true) {
-                    bool expected = false;
-                    // Use seq_cst for TSan visibility
-                    if (!resuming_flag_.compare_exchange_strong(expected, true, std::memory_order_seq_cst)) {
-                        assert(false && "Concurrent resume() detected - scheduler BUG!");
+                explicit resume_guard(std::atomic<actor_state>& state)
+                    : state_ref_(state)
+                    , keep_scheduled_(false) {
+                    // Atomic transition: scheduled → running_scheduled (or idle → running)
+                    auto current = state_ref_.load(std::memory_order_acquire);
+                    actor_state desired;
+
+                    while (true) {
+                        // Detect concurrent resume() - running bit already set
+                        if (is_running(current)) {
+                            assert(false && "Concurrent resume() detected - scheduler BUG!");
+                        }
+
+                        // Set running bit, preserve scheduled and destroying bits
+                        desired = set_running(current, true);
+
+                        if (state_ref_.compare_exchange_weak(current, desired,
+                                                             std::memory_order_seq_cst,
+                                                             std::memory_order_acquire)) {
+                            // CAS succeeded - we are now running
+                            break;
+                        }
+                        // CAS failed - current updated, retry
                     }
                 }
 
                 ~resume_guard() {
-                    // CRITICAL ORDER: Clear resuming_ FIRST, then is_scheduled_
-                    // This ensures no concurrent resume() can start until we've fully exited
-                    //
-                    // Thread A (resume exit):           Thread B (enqueue):
-                    // ~resume_guard() starts
-                    //   resuming_ = false [1]
-                    //                                    enqueue() → CAS is_scheduled_
-                    //                                    resume() called
-                    //                                    resuming_.CAS fails ✓ (already false)
-                    //   is_scheduled_ = false [2]
-                    // ~resume_guard() ends
-                    //
-                    // Use seq_cst to ensure destructor wait sees this change
-                    resuming_flag_.store(false, std::memory_order_seq_cst);
+                    // Atomic transition: clear running bit, optionally clear scheduled bit
+                    // Preserves destroying bit
+                    auto current = state_ref_.load(std::memory_order_acquire);
+                    actor_state desired;
 
-                    if (clear_scheduled_) {
-                        scheduled_flag_.store(false, std::memory_order_release);
+                    while (true) {
+                        assert(is_running(current) && "resume_guard: not running!");
+
+                        // Clear running bit
+                        desired = set_running(current, false);
+
+                        // Clear scheduled bit if not keeping it
+                        if (!keep_scheduled_) {
+                            desired = set_scheduled(desired, false);
+                        }
+
+                        if (state_ref_.compare_exchange_weak(current, desired,
+                                                             std::memory_order_seq_cst,
+                                                             std::memory_order_acquire)) {
+                            // CAS succeeded - state updated
+                            break;
+                        }
+                        // CAS failed - current updated, retry
                     }
                 }
 
                 void keep_scheduled() {
-                    clear_scheduled_ = false;
+                    keep_scheduled_ = true;
                 }
             };
-            resume_guard guard(resuming_, is_scheduled_);
+            resume_guard guard(state_);
 
             // Helper lambda: finalize resume with race window check
             auto finalize = [&guard](scheduler::resume_result result, size_t handled, bool keep_scheduled) -> scheduler::resume_info {
                 // If keep_scheduled=true, we detected race window with new messages
-                // Tell guard to keep is_scheduled_=true for scheduler re-enqueue
+                // Tell guard to keep scheduled bit set for scheduler re-enqueue
                 if (keep_scheduled) {
                     guard.keep_scheduled();
                 }
-                // Otherwise, guard destructor will clear is_scheduled_=false atomically with resuming_
+                // Otherwise, guard destructor will clear both running and scheduled bits
 
                 return scheduler::resume_info(result, handled);
             };
@@ -216,7 +305,7 @@ namespace actor_zeta { namespace base {
 
             // Check if actor is being destroyed - exit immediately without processing
             // This prevents calling behavior() on destroyed behavior_t members
-            if (destroying_.load(std::memory_order_acquire)) {
+            if (is_destroying(state_.load(std::memory_order_acquire))) {
                 return finalize(scheduler::resume_result::done, 0, false);
             }
 
@@ -288,15 +377,15 @@ namespace actor_zeta { namespace base {
 
                     message_guard guard(this, std::move(msg));
 
-                    // CRITICAL: Check destroying_ flag IMMEDIATELY before calling behavior()
+                    // CRITICAL: Check destroying flag IMMEDIATELY before calling behavior()
                     // This prevents bad_function_call when:
-                    // - Main thread enters ~cooperative_actor(), sets destroying_=true
-                    // - Scheduler thread is here in resume() with resuming_=true
-                    // - Destructor waits for resuming_=false
-                    // - We check destroying_ and skip behavior() call
+                    // - Main thread enters ~cooperative_actor(), sets destroying=true
+                    // - Scheduler thread is here in resume() with running=true
+                    // - Destructor waits for running=false
+                    // - We check destroying and skip behavior() call
                     // - behavior_t members are still alive (destructor waiting)
                     // Similar to future_state magic_ check pattern
-                    if (!destroying_.load(std::memory_order_acquire)) {
+                    if (!is_destroying(state_.load(std::memory_order_acquire))) {
                         // Safe to call behavior() - actor not being destroyed
                         self()->behavior(guard.get());
                     }
@@ -342,16 +431,28 @@ namespace actor_zeta { namespace base {
             // SHUTDOWN PROTOCOL: Ensure safe destruction while scheduler may be running
             //
             // CRITICAL THREE-PHASE SHUTDOWN:
-            // Phase 1: Set destroying_ flag to reject new enqueue() calls (via begin_shutdown())
+            // Phase 1: Set destroying bit to reject new enqueue() calls (via begin_shutdown())
             // Phase 2: Wait for in-progress resume() to complete
             // Phase 3: Close mailbox and cleanup
             //
             // This prevents race where enqueue() happens after wait but before destruction
             //
-            // Step 0: Set destroying_ flag if not already set
+            // Step 0: Set destroying bit if not already set
             // IMPORTANT: Derived classes with behavior_t members MUST call begin_shutdown()
             // at the beginning of their destructor to avoid bad_function_call
-            bool already_shutdown = destroying_.exchange(true, std::memory_order_acq_rel);
+            auto current = state_.load(std::memory_order_acquire);
+            bool already_shutdown = is_destroying(current);
+
+            // Set destroying bit atomically
+            while (!is_destroying(current)) {
+                auto desired = set_destroying(current);
+                if (state_.compare_exchange_weak(current, desired,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+                    break;
+                }
+            }
+
             (void)already_shutdown;  // Suppress unused warning in release
 #ifndef NDEBUG
             // NOTE: If this assertion fires, add begin_shutdown() call to derived destructor
@@ -361,11 +462,11 @@ namespace actor_zeta { namespace base {
             // assert(already_shutdown && "IMPORTANT: Derived class with behavior_t members must call begin_shutdown() in destructor!");
 #endif
 
-            // Fence to ensure destroying_ write is visible before we proceed
+            // Fence to ensure destroying write is visible before we proceed
             std::atomic_thread_fence(std::memory_order_seq_cst);
 
             // Step 1: Wait for any in-progress resume() to complete
-            // The resuming_ flag is set by resume_guard and cleared when resume() exits
+            // The running bit is set by resume_guard and cleared when resume() exits
             // This ensures message_guard destructor completes before we deallocate actor
             //
             // SAFETY: This prevents heap-use-after-free when:
@@ -385,7 +486,7 @@ namespace actor_zeta { namespace base {
 #endif
             // CRITICAL: Must use seq_cst to ensure TSan sees the synchronization
             // acquire alone is not sufficient for TSan to detect happens-before relationship
-            while (resuming_.load(std::memory_order_seq_cst)) {
+            while (is_running(state_.load(std::memory_order_seq_cst))) {
                 std::this_thread::yield();
 #ifndef NDEBUG
                 if (++spin_count > MAX_SPINS) {
@@ -397,20 +498,29 @@ namespace actor_zeta { namespace base {
             // Extra fence to ensure all previous operations are visible
             std::atomic_thread_fence(std::memory_order_seq_cst);
 
-            // Step 2: Clear is_scheduled_ flag (cleanup, not strictly necessary)
-            is_scheduled_.store(false, std::memory_order_release);
+            // Step 2: Transition to idle_destroying (clear scheduled bit if set)
+            current = state_.load(std::memory_order_acquire);
+            while (true) {
+                assert(!is_running(current) && "Destructor: still running after wait!");
+                auto desired = make_state(false, false, true);  // idle_destroying
+                if (state_.compare_exchange_weak(current, desired,
+                                                 std::memory_order_release,
+                                                 std::memory_order_acquire)) {
+                    break;
+                }
+            }
 
             // Step 3: Mailbox will be closed automatically by ~mailbox_t destructor
             // This is safe because:
             // - We've waited for resume() to complete
-            // - destroying_ flag prevents new resume() calls from processing messages
+            // - destroying bit prevents new resume() calls from processing messages
             // - No race with drain() because resume() has exited
             //
             // Note: ~mailbox_t runs AFTER this destructor body completes
 
             // Now safe to destroy - guaranteed:
-            // 1. No in-progress resume() (waited for resuming_=false)
-            // 2. No new message processing (destroying_ checked in resume())
+            // 1. No in-progress resume() (waited for running=false)
+            // 2. No new message processing (destroying checked in resume())
             // 3. No access to 'this' pointer from scheduler threads
         }
 
@@ -429,8 +539,16 @@ namespace actor_zeta { namespace base {
         /// This prevents bad_function_call when behavior_t members are destroyed
         /// while resume() is still processing messages
         void begin_shutdown() noexcept {
-            // Set destroying_ flag immediately - prevents new resume() from calling behavior()
-            destroying_.store(true, std::memory_order_release);
+            // Set destroying bit immediately - prevents new resume() from calling behavior()
+            auto current = state_.load(std::memory_order_acquire);
+            while (!is_destroying(current)) {
+                auto desired = set_destroying(current);
+                if (state_.compare_exchange_weak(current, desired,
+                                                 std::memory_order_release,
+                                                 std::memory_order_acquire)) {
+                    break;
+                }
+            }
             std::atomic_thread_fence(std::memory_order_seq_cst);
         }
 
@@ -451,9 +569,7 @@ namespace actor_zeta { namespace base {
 
         mailbox::message* current_message_;
         mailbox_t mailbox_;
-        std::atomic<bool> resuming_{false};  // Concurrent resume() detection
-        std::atomic<bool> is_scheduled_{false};  // Actor in scheduler queue?
-        std::atomic<bool> destroying_{false};  // Actor is being destroyed - reject new enqueue()
+        std::atomic<actor_state> state_{actor_state::idle};  // Combined execution state
     };
 
 }} // namespace actor_zeta::base
