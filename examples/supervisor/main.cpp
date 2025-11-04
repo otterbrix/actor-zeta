@@ -87,11 +87,13 @@ public:
 
         std::cerr << "[Supervisor] Assigning task '" << task << "' to " << worker->name() << std::endl;
 
-        // Send task to worker (fire-and-forget - drop future immediately)
-        actor_zeta::send(worker.get(), address(), &worker_actor::process_task, task);
+        // Send task to worker (returns future with needs_scheduling flag)
+        auto future = actor_zeta::send(worker.get(), address(), &worker_actor::process_task, task);
 
-        // Manual scheduling - caller's responsibility after enqueue
-        scheduler_->enqueue(worker.get());
+        // Manual scheduling - only if actor was unblocked (check needs_scheduling)
+        if (future.needs_scheduling()) {
+            scheduler_->enqueue(worker.get());
+        }
     }
 
     void stop_workers() {
@@ -103,10 +105,13 @@ public:
     void check_status() {
         std::cerr << "[Supervisor] Status check - " << workers_.size() << " workers:" << std::endl;
         for (auto& worker : workers_) {
-            // Send status request to worker (fire-and-forget - drop future immediately)
-            actor_zeta::send(worker.get(), address(), &worker_actor::get_status);
-            // Manual scheduling - caller's responsibility after enqueue
-            scheduler_->enqueue(worker.get());
+            // Send status request to worker (returns future with needs_scheduling flag)
+            auto future = actor_zeta::send(worker.get(), address(), &worker_actor::get_status);
+
+            // Manual scheduling - only if actor was unblocked (check needs_scheduling)
+            if (future.needs_scheduling()) {
+                scheduler_->enqueue(worker.get());
+            }
         }
     }
 
