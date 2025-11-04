@@ -124,7 +124,7 @@ namespace actor_zeta { namespace base {
         unique_future<R> enqueue_impl(mailbox::message_ptr msg) {
             assert(msg.get() != nullptr);
 
-            // Allocate future_state<R> (replaces slot_refcount)
+            // Allocate future_state<R>
             void* mem = resource()->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
             auto* state = new (mem) detail::future_state<R>(resource());
 
@@ -447,19 +447,6 @@ namespace actor_zeta { namespace base {
             return resource_;
         }
 
-        /// @brief Increment intrusive reference count
-        void ref() noexcept {
-            refcount_.fetch_add(1, std::memory_order_relaxed);
-        }
-
-        /// @brief Decrement intrusive reference count
-        void deref() noexcept {
-            if (refcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                // Last reference released - no action needed
-                // Actor managed by unique_ptr, not intrusive_ptr
-            }
-        }
-
         cooperative_actor()= delete;
 
         ~cooperative_actor() {
@@ -633,8 +620,7 @@ namespace actor_zeta { namespace base {
         pmr::memory_resource* resource_;
         mailbox::message* current_message_;
         mailbox_t mailbox_;
-        std::atomic<actor_state> state_{actor_state::idle};  // Combined execution state
-        std::atomic<size_t> refcount_{0};  // Intrusive reference count
+        std::atomic<actor_state> state_{actor_state::idle};
     };
 
 }} // namespace actor_zeta::base

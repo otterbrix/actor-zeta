@@ -101,18 +101,17 @@ namespace actor_zeta { namespace scheduler {
                 w->get_thread().join(); /// wait until all workers finish working
             }
 
-            /// run cleanup code for each job
-            auto release_job = [](job_ptr job) { job.release(); };
+            /// Clear remaining job_ptr from queues (actor lifetime managed by unique_ptr)
+            auto clear_job = [](job_ptr) { /* NO-OP: job_ptr does not own actor */ };
             for (auto& w : workers_) {
-                policy_.foreach_resumable(w.get(), release_job);
+                policy_.foreach_resumable(w.get(), clear_job);
             }
-            policy_.foreach_central_resumable(this, release_job);
+            policy_.foreach_central_resumable(this, clear_job);
         }
 
         /// @brief Enqueue a job for execution
-        /// @param job Type-erased job pointer
+        /// @param job Type-erased job pointer (not owned - actor managed by unique_ptr)
         void enqueue(job_ptr job) {
-            job.add_ref();  // Take ownership before scheduling
             policy_.central_enqueue(this, job);
         }
 

@@ -117,13 +117,8 @@ namespace actor_zeta { namespace mailbox {
         message_id command_;
         actor_zeta::detail::rtt body_;
 
-        // Unified future state (replaces slot_refcount)
+        // Future state for request-response pattern
         actor_zeta::detail::future_state_base* result_slot_{nullptr};
-
-        // REMOVED: atomic<slot_error_code> error_  (state now in future_state)
-        // REMOVED: atomic<bool> cancelled_  (now in future_state)
-        // REMOVED: atomic<bool> orphaned_  (now in future_state)
-        // REMOVED: intrusive_ptr<cancellation_token> cancellation_token_  (state now in future_state)
     };
 
     static_assert(std::is_move_constructible<message>::value, "");

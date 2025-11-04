@@ -20,7 +20,6 @@ namespace actor_zeta { namespace detail {
     };
 
     /// @brief Base class for future state (type-erased part)
-    /// Replaces slot_refcount with improved state management
     class future_state_base {
     public:
         explicit future_state_base(pmr::memory_resource* res) noexcept
