@@ -74,21 +74,28 @@ namespace actor_zeta { namespace detail {
         void add_ref() noexcept {
 #ifndef NDEBUG
             assert(magic_ == kMagicAlive && "Use-after-free: add_ref() on deleted state!");
-            int old_count = refcount_.load(std::memory_order_relaxed);
-            assert(old_count > 0 && "Refcount underflow!");
-            assert(old_count < 10000 && "Refcount overflow!");
-#endif
+            // Use fetch_add result to check ACTUAL old value in concurrent scenario
+            // This prevents race where multiple threads read stale value before increment
+            int old_value = refcount_.fetch_add(1, std::memory_order_relaxed);
+            assert(old_value > 0 && "Refcount underflow!");
+            // Increased limit to 1000000 - 10000 was too low for stress tests with many concurrent threads
+            assert(old_value < 1000000 && "Refcount overflow!");
+#else
             refcount_.fetch_add(1, std::memory_order_relaxed);
+#endif
         }
 
         /// @brief Decrement reference count and deallocate if zero
         void release() noexcept {
 #ifndef NDEBUG
             assert(magic_ == kMagicAlive && "Double release detected!");
-            int old_count = refcount_.load(std::memory_order_relaxed);
-            assert(old_count > 0 && "Refcount underflow!");
 #endif
-            if (refcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            // Use fetch_sub result - it returns the OLD value before decrement
+            int old_value = refcount_.fetch_sub(1, std::memory_order_acq_rel);
+#ifndef NDEBUG
+            assert(old_value > 0 && "Refcount underflow!");
+#endif
+            if (old_value == 1) {
                 destroy();
             }
         }
