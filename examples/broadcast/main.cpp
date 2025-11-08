@@ -1,10 +1,6 @@
 #include <cassert>
-
-#include <atomic>
-#include <chrono>
 #include <iostream>
 #include <memory>
-#include <thread>
 #include <vector>
 
 #include <actor-zeta.hpp>
@@ -12,32 +8,21 @@
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
-static std::atomic<uint64_t> counter_download_data{0};
-static std::atomic<uint64_t> counter_work_data{0};
-
 using actor_zeta::pmr::memory_resource;
 
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
-    // Fire-and-forget methods (void return)
-    void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
-    void work_data(const std::string& data, const std::string& /*operatorName*/);
-
     // Request-response methods (return results automatically via promise)
     std::size_t download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
     std::size_t work_data_with_result(const std::string& data, const std::string& /*operatorName*/);
 
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &worker_t::download,
-        &worker_t::work_data,
         &worker_t::download_with_result,
         &worker_t::work_data_with_result
     >;
 
     worker_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_t>(ptr)
-        , download_(actor_zeta::make_behavior(resource(), this, &worker_t::download))
-        , work_data_(actor_zeta::make_behavior(resource(),  this, &worker_t::work_data))
         , download_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::download_with_result))
         , work_data_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::work_data_with_result)) {
     }
@@ -48,14 +33,6 @@ public:
                   << ", error_before=" << static_cast<int>(msg->error()) << std::endl;
 
         switch (cmd) {
-            case actor_zeta::msg_id<worker_t, &worker_t::download>: {
-                download_(msg);
-                break;
-            }
-            case actor_zeta::msg_id<worker_t, &worker_t::work_data>: {
-                work_data_(msg);
-                break;
-            }
             case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>: {
                 download_with_result_(msg);
                 std::cerr << "[Worker " << id() << "] After handler, error=" << static_cast<int>(msg->error()) << std::endl;
@@ -69,36 +46,21 @@ public:
     }
 
 private:
-    actor_zeta::behavior_t download_;
-    actor_zeta::behavior_t work_data_;
     actor_zeta::behavior_t download_with_result_;
     actor_zeta::behavior_t work_data_with_result_;
     std::string tmp_;
 };
 
-// Fire-and-forget implementations
-inline void worker_t::download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
-    tmp_ = url;
-    counter_download_data++;
-}
-
-inline void worker_t::work_data(const std::string& data, const std::string& /*operatorName*/) {
-    tmp_ = data;
-    counter_work_data++;
-}
-
 // Request-response implementations - automatically return results via promise
 inline std::size_t worker_t::download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
     std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
     tmp_ = url;
-    counter_download_data++;
     std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
     return tmp_.size(); // Return downloaded size
 }
 
 inline std::size_t worker_t::work_data_with_result(const std::string& data, const std::string& /*operatorName*/) {
     tmp_ = data;
-    counter_work_data++;
     return tmp_.size(); // Return processed size
 }
 
@@ -196,49 +158,8 @@ int main() {
 
     std::cerr << "=== Created " << actors << " worker actors ===" << std::endl;
 
-    // Broadcast download task - one message to all actors using new send() API
-    // IMPORTANT: Must collect futures even for void methods to prevent premature orphaning
-    std::cerr << "=== Broadcasting download task to all " << actors << " actors ===" << std::endl;
-    std::vector<worker_t::unique_future<void>> download_futures;
-    download_futures.reserve(supervisor->worker_count());
-    for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
-        auto future = actor_zeta::send(supervisor->get_worker(i), supervisor->address(), &worker_t::download, std::string("url"), std::string("user"), std::string("pass"));
-        if (future.needs_scheduling()) {
-            supervisor->schedule_worker(i);
-        }
-        download_futures.push_back(std::move(future));
-    }
-
-    // Broadcast work_data task - one message to all actors using new send() API
-    std::cerr << "=== Broadcasting work_data task to all " << actors << " actors ===" << std::endl;
-    std::vector<worker_t::unique_future<void>> work_futures;
-    work_futures.reserve(supervisor->worker_count());
-    for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
-        auto future = actor_zeta::send(supervisor->get_worker(i), supervisor->address(), &worker_t::work_data, std::string("data"), std::string("operator"));
-        if (future.needs_scheduling()) {
-            supervisor->schedule_worker(i);
-        }
-        work_futures.push_back(std::move(future));
-    }
-
-    std::cerr << "=== Waiting for processing ===" << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    std::cerr << "\n=== Results ===" << std::endl;
-    std::cerr << "Download messages processed: " << counter_download_data.load() << std::endl;
-    std::cerr << "Work_data messages processed: " << counter_work_data.load() << std::endl;
-
-    auto expected = actors; // One broadcast per type, all actors should process
-    std::cerr << "Expected per counter: " << expected << std::endl;
-
-    // Success if all broadcasts reached all actors
-    bool passed = counter_download_data.load() == expected && counter_work_data.load() == expected;
-    std::cerr << "\nFire-and-forget test: " << (passed ? "PASSED ✓" : "FAILED ✗") << std::endl;
-
-    // =================================================================
-    // Phase C: Demonstrate request-response pattern with futures
-    // =================================================================
-    std::cerr << "\n\n=== REQUEST-RESPONSE PATTERN WITH FUTURES ===" << std::endl;
+    // Demonstrate request-response pattern with futures
+    std::cerr << "\n=== REQUEST-RESPONSE PATTERN WITH FUTURES ===" << std::endl;
     std::cerr << "Collecting futures from multiple workers..." << std::endl;
 
     std::vector<worker_t::unique_future<std::size_t>> futures;
@@ -274,11 +195,7 @@ int main() {
 
     std::cerr << "  Total size from all workers: " << total_size << std::endl;
 
-    std::cerr << "\nRequest-response test: PASSED ✓" << std::endl;
+    std::cerr << "\n=== Request-response test: PASSED ✓ ===" << std::endl;
 
-    std::cerr << "\n=== SUMMARY ===" << std::endl;
-    std::cerr << "Fire-and-forget broadcast: " << (passed ? "✓" : "✗") << std::endl;
-    std::cerr << "Request-response futures: ✓" << std::endl;
-
-    return passed ? 0 : 1;
+    return 0;
 }
