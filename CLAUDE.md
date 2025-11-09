@@ -380,7 +380,7 @@ Build with `-DALLOW_EXAMPLES=ON`, run from `build/bin/`.
 **Build:**
 - CMake >= 3.15
 - Conan 2.x (installs Catch2, Benchmark)
-- C++ compiler: GCC 7-12, Clang 9-16, or MSVC
+- C++ compiler: **GCC 9+, Clang 10+**, or MSVC (requires std::pmr support)
 
 **Runtime:**
 - None (header-only library)

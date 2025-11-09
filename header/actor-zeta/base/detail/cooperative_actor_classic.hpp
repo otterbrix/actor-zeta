@@ -9,6 +9,9 @@
 #include <actor-zeta/scheduler/resumable.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
 
+#include <actor-zeta/mailbox/mailbox.hpp>
+#include <actor-zeta/mailbox/default_mailbox.hpp>
+
 namespace actor_zeta { namespace base {
 
     template<class Target>
@@ -17,12 +20,13 @@ namespace actor_zeta { namespace base {
         return ptr;
     }
 
-    template<class Actor, class Traits>
-    class cooperative_actor<Actor, Traits, actor_type::classic>
-         : public actor_abstract_t
-         , public scheduler::resumable_t {
+    template<class Actor, class MailBox>
+    class cooperative_actor<Actor, MailBox, actor_type::classic>
+        : public actor_abstract_t
+        , public scheduler::resumable_t {
     public:
-        using unique_actor = std::unique_ptr<cooperative_actor<Actor, Traits, actor_type::classic>, pmr::deleter_t>;
+        using mailbox_t = MailBox;
+        using unique_actor = std::unique_ptr<cooperative_actor<Actor, MailBox, actor_type::classic>, pmr::deleter_t>;
 
         scheduler::resume_info resume(actor_zeta::scheduler::scheduler_abstract_t* sched, size_t max_throughput) noexcept final {
             detail::ignore_unused(sched);
@@ -41,18 +45,21 @@ namespace actor_zeta { namespace base {
             deref();
         }
 
+        ~cooperative_actor() override {
+
+        }
+
     protected:
-        cooperative_actor(pmr::memory_resource* in_resource)
+        explicit cooperative_actor(pmr::memory_resource* in_resource)
             : actor_abstract_t(check_ptr(in_resource))
-            , inbox_(mailbox::priority_message(),
-                     high_priority_queue(mailbox::high_priority_message()),
-                     normal_priority_queue(mailbox::normal_priority_message())) {
-            inbox().try_block(); //todo: bug
+            , current_message_(nullptr)
+            , mailbox_() {
+            mailbox().try_block();
         }
 
         bool enqueue_impl(mailbox::message_ptr msg) final {
             assert(msg.get() != nullptr);
-            switch (inbox().push_back(std::move(msg))) {
+            switch (mailbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
                     return true;
                 }
@@ -73,81 +80,74 @@ namespace actor_zeta { namespace base {
         class current_msg_guard final {
         public:
             current_msg_guard(cooperative_actor* s, mailbox::message* m) noexcept
-                : self(s), prev(s->current_message_) { self->current_message_ = m; }
+                : self(s)
+                , prev(s->current_message_) { self->current_message_ = m; }
             ~current_msg_guard() noexcept { self->current_message_ = nullptr; }
+
         private:
             cooperative_actor* self;
-            mailbox::message*  prev;
+            mailbox::message* prev;
             current_msg_guard(const current_msg_guard&);
             current_msg_guard& operator=(const current_msg_guard&);
         };
 
         scheduler::resume_info resume_core_(size_t max_throughput) noexcept {
-            const size_t nq = 3u;
-            const size_t hq = nq * 3u;
             size_t handled = 0;
 
             // Check if inbox is closed first (shutdown scenario)
-            if (inbox().closed()) {
+            if (mailbox().closed()) {
                 return scheduler::resume_info(scheduler::resume_result::done, 0);
             }
 
             // Check if inbox is blocked to avoid assertion in empty()
-            if (inbox().blocked()) {
+            if (mailbox().blocked()) {
                 // Inbox is blocked, try to resume (another thread may have enqueued)
                 return scheduler::resume_info(scheduler::resume_result::resume, 0);
             }
 
-            if (inbox().empty()) {
-                auto result = inbox().try_block()
-                              ? scheduler::resume_result::awaiting
-                              : scheduler::resume_result::resume;
+            if (mailbox().empty()) {
+                auto result = mailbox().try_block()
+                                  ? scheduler::resume_result::awaiting
+                                  : scheduler::resume_result::resume;
                 return scheduler::resume_info(result, 0);
             }
 
-            auto handler = [this, &handled, max_throughput](mailbox::message& m) noexcept -> detail::task_result {
-                current_msg_guard guard(this, &m);
-                self()->behavior(current_message_);
-                ++handled;
-                return (handled < max_throughput)
-                       ? detail::task_result::resume
-                       : detail::task_result::stop_all;
-            };
-
             while (handled < max_throughput) {
                 // Check if inbox closed during processing
-                if (inbox().closed()) {
+                if (mailbox().closed()) {
                     return scheduler::resume_info(scheduler::resume_result::done, handled);
                 }
 
-                inbox().fetch_more();
                 const size_t before = handled;
 
-                high(inbox()).new_round(hq, handler);
-                normal(inbox()).new_round(nq, handler);
+                auto msg = mailbox().pop_front();
+                if (msg) {
+                    current_msg_guard guard(this, msg.get());
+                    self()->behavior(current_message_);
+                    ++handled;
+                }
 
                 if (handled == before) {
                     // Check again before try_block
-                    if (inbox().closed()) {
+                    if (mailbox().closed()) {
                         return scheduler::resume_info(scheduler::resume_result::done, handled);
                     }
-                    auto result = inbox().try_block()
-                                  ? scheduler::resume_result::awaiting
-                                  : scheduler::resume_result::resume;
+                    auto result = mailbox().try_block()
+                                      ? scheduler::resume_result::awaiting
+                                      : scheduler::resume_result::resume;
                     return scheduler::resume_info(result, handled);
                 }
             }
 
             // Check before final try_block
-            if (inbox().closed()) {
+            if (mailbox().closed()) {
                 return scheduler::resume_info(scheduler::resume_result::done, handled);
             }
-            auto result = inbox().try_block()
-                          ? scheduler::resume_result::awaiting
-                          : scheduler::resume_result::resume;
+            auto result = mailbox().try_block()
+                              ? scheduler::resume_result::awaiting
+                              : scheduler::resume_result::resume;
             return scheduler::resume_info(result, handled);
         }
-
 
         mailbox::message* current_message() noexcept { return current_message_; }
 
@@ -159,12 +159,12 @@ namespace actor_zeta { namespace base {
             return static_cast<Actor*>(this);
         }
 
-        inline traits::inbox_t& inbox() {
-            return inbox_;
+        mailbox_t& mailbox() noexcept {
+            return mailbox_;
         }
 
         mailbox::message* current_message_;
-        typename Traits::inbox_t inbox_;
+        mailbox_t mailbox_;
     };
 
 }} // namespace actor_zeta::base
