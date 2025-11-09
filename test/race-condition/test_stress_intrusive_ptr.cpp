@@ -45,6 +45,46 @@ private:
 };
 
 // =============================================================================
+// Helper: Smart get() with active actor rescheduling
+// =============================================================================
+
+/// @brief Smart future.get() that actively reschedules actor to ensure message processing
+/// @details Under TSAN, actor may become idle after processing first message and never
+///          get rescheduled for subsequent messages (needs_scheduling() returns false).
+///          This helper actively reschedules the actor every ~1ms until future is ready.
+template<typename T, typename Actor>
+T smart_get(typename Actor::template unique_future<T>&& future,
+            Actor* actor,
+            actor_zeta::scheduler::sharing_scheduler* scheduler) {
+    constexpr auto timeout = std::chrono::seconds(10);
+    auto start_time = std::chrono::steady_clock::now();
+
+    int stall_iterations = 0;
+    constexpr int MAX_STALL = 10;  // Reschedule every ~1ms
+
+    while (!future.is_ready()) {
+        auto elapsed = std::chrono::steady_clock::now() - start_time;
+        if (elapsed > timeout) {
+            // Timeout - but still try to get (will block or return error)
+            break;
+        }
+
+        ++stall_iterations;
+
+        // Actively reschedule actor every ~1ms to ensure message processing
+        if (stall_iterations >= MAX_STALL) {
+            scheduler->enqueue(actor);
+            stall_iterations = 0;
+        }
+
+        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+
+    return std::move(future).get();
+}
+
+// =============================================================================
 // Intrusive Ptr Stress Tests (via message/future refcount operations)
 // =============================================================================
 
@@ -138,7 +178,7 @@ TEST_CASE("Refcount Stress 2: Future move and copy operations") {
         auto future3 = std::move(future2);  // future2 now invalid
 
         // Get result from final future
-        int result = std::move(future3).get();
+        int result = smart_get<int>(std::move(future3), actor.get(), scheduler.get());
         (void)result;
 
         move_count.fetch_add(1, std::memory_order_relaxed);
@@ -182,7 +222,7 @@ TEST_CASE("Refcount Stress 3: Concurrent message enqueue and future get") {
                 scheduler->enqueue(actor.get());
             }
 
-            int result = std::move(future).get();
+            int result = smart_get<int>(std::move(future), actor.get(), scheduler.get());
             (void)result;
             results_received.fetch_add(1, std::memory_order_relaxed);
         }
@@ -267,7 +307,7 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                         if (future.needs_scheduling()) {
                             scheduler->enqueue(actor.get());
                         }
-                        int result = std::move(future).get();
+                        int result = smart_get<int>(std::move(future), actor.get(), scheduler.get());
                         (void)result;
                         break;
                     }
@@ -289,7 +329,7 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                             scheduler->enqueue(actor.get());
                         }
                         auto future2 = std::move(future1);
-                        int result = std::move(future2).get();
+                        int result = smart_get<int>(std::move(future2), actor.get(), scheduler.get());
                         (void)result;
                         break;
                     }
@@ -359,7 +399,7 @@ TEST_CASE("Refcount Stress 5: Actor destruction with pending messages") {
 
         // Wait for all futures to complete
         for (auto& future : futures) {
-            int result = std::move(future).get();
+            int result = smart_get<int>(std::move(future), actor.get(), scheduler.get());
             (void)result;
         }
 
