@@ -73,8 +73,6 @@ public:
     using dispatch_traits = actor_zeta::dispatch_traits<>;
 
     ~storage_t() override = default;
-
-    using dispatch_traits = actor_zeta::dispatch_traits<>;
 };
 
 void dummy_supervisor::create() {

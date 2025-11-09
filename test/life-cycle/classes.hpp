@@ -149,8 +149,6 @@ public:
         destructor_counter++;
     }
 
-    using dispatch_traits = actor_zeta::dispatch_traits<>;
-
 private:
     void init() {
         init_counter++;
