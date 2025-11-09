@@ -147,9 +147,10 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
         // Thread that continuously polls is_ready()
         std::atomic<bool> stop_polling{false};
         std::atomic<int> transitions{0};
-        bool last_state = false;
 
-        std::thread poller([&future, &stop_polling, &transitions, &last_state]() {
+        std::thread poller([&future, &stop_polling, &transitions]() {
+            bool last_state = false;  // Local to poller thread - no data race
+
             while (!stop_polling.load(std::memory_order_acquire)) {
                 bool current_state = future.is_ready();
 
