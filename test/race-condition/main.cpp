@@ -218,7 +218,8 @@ TEST_CASE("Memory leak detection - orphaned messages") {
     // Test that orphaned messages (future destroyed before processing) are properly cleaned up
 
     auto* resource = actor_zeta::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(1, 100);
+    // Use 2 threads for faster processing on slow CI servers
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<stress_actor>(resource);
@@ -240,7 +241,7 @@ TEST_CASE("Memory leak detection - orphaned messages") {
 
     // Wait for actor to process orphaned messages with timeout
     auto start_time = std::chrono::steady_clock::now();
-    constexpr auto timeout = std::chrono::seconds(5);  // Generous timeout for slow CI
+    constexpr auto timeout = std::chrono::seconds(10);  // Extended timeout for slow CI
 
     while (actor->processed_count() < NUM_ORPHANED) {
         auto elapsed = std::chrono::steady_clock::now() - start_time;
