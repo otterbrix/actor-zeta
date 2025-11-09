@@ -128,52 +128,60 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND NOT APPLE) #--------------------
     find_package(LLVM REQUIRED CONFIG)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_LIBRARY_DIRS}")
 
-    find_library(CLANG_LIBCPP
-        NAMES libc++ c++
-        HINTS ${LLVM_LIBRARY_DIRS})
-
-    find_library(CLANG_LIBCPP_ABI
-        NAMES libc++abi c++abi
-        HINTS ${LLVM_LIBRARY_DIRS})
-
-    message(STATUS "Found CLANG_LIBCPP=${CLANG_LIBCPP}")
-    message(STATUS "Found CLANG_LIBCPP_ABI=${CLANG_LIBCPP_ABI}")
-
-    # Linker flags for targets and Conan
-    set(LINKFLAGS "")
-    ### https://stackoverflow.com/questions/43662736/cmake-switch-between-clang-g-and-libc-libstdc
-
-    if (${CLANG_LIBCPP} MATCHES "CLANG_LIBCPP-NOTFOUND")
+    # Check if using Conan toolchain (to avoid stdlib conflicts with dependencies)
+    if (DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "conan")
+        # Conan build: use libstdc++11 to match Conan-built dependencies
         set(LIBCXX "libstdc++11")
+        message(STATUS "Conan build detected: forcing LIBCXX=${LIBCXX} to match dependencies")
     else()
-        # Change compiler library and libunwind from libgcc GCC implementation to LLVM's compiler-rt
-        # See https://clang.llvm.org/docs/Toolchain.html for details
-        # LINKFLAGS variable contains required link flags
-        set(LINKFLAGS "-stdlib=libc++ -rtlib=compiler-rt")
+        # Auto-detect stdlib if not using Conan
+        find_library(CLANG_LIBCPP
+            NAMES libc++ c++
+            HINTS ${LLVM_LIBRARY_DIRS})
 
-        if (NOT APPLE)
-            find_library(
-                LIBUNWIND_LIBRARY
-                NAMES libunwind.a
-                PATH_SUFFIXES lib lib64)
+        find_library(CLANG_LIBCPP_ABI
+            NAMES libc++abi c++abi
+            HINTS ${LLVM_LIBRARY_DIRS})
 
-            if (LIBUNWIND_LIBRARY)
-                message(STATUS "libunwind found: ${LIBUNWIND_LIBRARY}, using libunwind")
-                set(LINKFLAGS "${LINKFLAGS} -unwindlib=libunwind")
-            else()
-                message(STATUS "libunwind not found, using libgcc")
-                set(LINKFLAGS "${LINKFLAGS} -unwindlib=libgcc -lgcc_s")
+        message(STATUS "Found CLANG_LIBCPP=${CLANG_LIBCPP}")
+        message(STATUS "Found CLANG_LIBCPP_ABI=${CLANG_LIBCPP_ABI}")
+
+        # Linker flags for targets and Conan
+        set(LINKFLAGS "")
+        ### https://stackoverflow.com/questions/43662736/cmake-switch-between-clang-g-and-libc-libstdc
+
+        if (${CLANG_LIBCPP} MATCHES "CLANG_LIBCPP-NOTFOUND")
+            set(LIBCXX "libstdc++11")
+        else()
+            # Change compiler library and libunwind from libgcc GCC implementation to LLVM's compiler-rt
+            # See https://clang.llvm.org/docs/Toolchain.html for details
+            # LINKFLAGS variable contains required link flags
+            set(LINKFLAGS "-stdlib=libc++ -rtlib=compiler-rt")
+
+            if (NOT APPLE)
+                find_library(
+                    LIBUNWIND_LIBRARY
+                    NAMES libunwind.a
+                    PATH_SUFFIXES lib lib64)
+
+                if (LIBUNWIND_LIBRARY)
+                    message(STATUS "libunwind found: ${LIBUNWIND_LIBRARY}, using libunwind")
+                    set(LINKFLAGS "${LINKFLAGS} -unwindlib=libunwind")
+                else()
+                    message(STATUS "libunwind not found, using libgcc")
+                    set(LINKFLAGS "${LINKFLAGS} -unwindlib=libgcc -lgcc_s")
+                endif()
             endif()
+            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LINKFLAGS}")
+            set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LINKFLAGS}")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+            set(LIBCXX "libc++")
         endif()
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LINKFLAGS}")
-        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LINKFLAGS}")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
-        set(LIBCXX "libc++")
-    endif()
 
-    if (CLANG_LIBCPP_ABI MATCHES "CLANG_LIBCPP_ABI-NOTFOUND")
-    else()
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++abi")
+        if (CLANG_LIBCPP_ABI MATCHES "CLANG_LIBCPP_ABI-NOTFOUND")
+        else()
+            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++abi")
+        endif()
     endif()
 
 else() #---------------------------------------------------------------------------- GNU
