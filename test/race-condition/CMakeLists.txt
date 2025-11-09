@@ -90,10 +90,3 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-add_executable(tests_minimal_scheduler /tmp/test_minimal_scheduler.cpp)
-target_link_libraries(tests_minimal_scheduler PRIVATE actor-zeta Catch2::Catch2)
-add_test(NAME tests_minimal_scheduler COMMAND tests_minimal_scheduler)
-
-add_executable(tests_aba_minimal /tmp/test_aba_minimal.cpp)
-target_link_libraries(tests_aba_minimal PRIVATE actor-zeta Catch2::Catch2)
-add_test(NAME tests_aba_minimal COMMAND tests_aba_minimal)
