@@ -9,10 +9,10 @@
 namespace actor_zeta {
 
 namespace detail {
-    /// @brief Вспомогательная функция для отправки сообщений
-    /// @tparam Actor Тип актора
-    /// @tparam MethodPtr Указатель на метод
-    /// @tparam ActionId Action ID для метода
+    /// @brief Helper function for sending messages
+    /// @tparam Actor Actor type
+    /// @tparam MethodPtr Method pointer
+    /// @tparam ActionId Action ID for the method
     template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
     inline void dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args) {
         actor->enqueue(
@@ -26,11 +26,11 @@ namespace detail {
     }
 } // namespace detail
 
-    /// @brief Функция send БЕЗ макроса - принимает runtime указатель на метод
-    /// Автоматически ищет action_id в Actor::dispatch_traits
-    /// ActionId генерируется автоматически на основе позиции в списке (0, 1, 2, ...)
+    /// @brief Send function WITHOUT macros - accepts runtime method pointer
+    /// Automatically searches for action_id in Actor::dispatch_traits
+    /// ActionId is generated automatically based on position in the list (0, 1, 2, ...)
     ///
-    /// Пример использования:
+    /// Usage example:
     /// @code
     /// class MyActor {
     ///     struct dispatch_traits {
@@ -49,7 +49,7 @@ namespace detail {
         using Actor = typename type_traits::callable_trait<Method>::class_type;
         using methods = typename Actor::dispatch_traits::methods;
 
-        // Runtime поиск метода и отправка
+        // Runtime method lookup and dispatch
         bool found = runtime_dispatch_helper<Actor, Method, methods>::dispatch(
             method, actor, sender, std::forward<Args>(args)...);
 

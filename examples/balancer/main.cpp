@@ -35,7 +35,7 @@ public:
         ++count_collection_part;
     }
 
-    // Методы для обработки сообщений
+    // Methods for message handling
     void insert(std::string& key, std::string& value) {
         data_.emplace(key, value);
         std::cerr << id() << " " << key << " " << value << std::endl;
