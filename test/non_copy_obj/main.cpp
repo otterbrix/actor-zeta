@@ -41,7 +41,7 @@ public:
 
     void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::make_message_id(command_t::check): {
+            case actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>: {
                 check_(msg);
                 break;
             }
@@ -53,6 +53,10 @@ public:
         behavior(tmp_msg.get());
         return true;
     }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &dummy_supervisor::check
+    >;
 
 private:
     actor_zeta::behavior_t check_;
@@ -74,7 +78,7 @@ TEST_CASE("base move test") {
     auto ptr_data = std::unique_ptr<dummy_data>(new dummy_data);
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), command_t::check, std::move(ptr_data), data);
+    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::move(ptr_data), data);
     REQUIRE(ptr_data == nullptr);
 }
 
@@ -84,5 +88,5 @@ TEST_CASE("construct in place") {
 
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), command_t::check, std::unique_ptr<dummy_data>(new dummy_data), data);
+    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
 }

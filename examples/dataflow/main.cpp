@@ -16,14 +16,6 @@
 
 #include <actor-zeta.hpp>
 
-enum class command_t : uint64_t {
-    add_link,
-    add_address,
-    prepare,
-    send,
-    process_data,
-};
-
 namespace names {
 
     static const std::string actor("storage");
@@ -86,7 +78,12 @@ public:
             for (const auto& addr : address_book_) {
                 packets_a++;
                 data.time_point = std::chrono::system_clock::now();
-                actor_zeta::send(addr.second, address(), command_t::process_data, data);
+                auto msg = actor_zeta::make_message(
+                    resource(),
+                    address(),
+                    actor_zeta::msg_id<actor_test_t, &actor_test_t::process_data>,
+                    data);
+                addr.second.enqueue(std::move(msg));
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(producer_latency_ms_));
             }
@@ -129,7 +126,12 @@ public:
             },
                                     consumer_latency_ms_);
             address_book_.emplace(i, std::move(addr));
-            actor_zeta::send(address_book_.at(i), address(), command_t::add_address, address(), 0);
+            auto msg = actor_zeta::make_message(
+                resource(),
+                address(),
+                actor_zeta::msg_id<actor_test_t, &actor_test_t::add_address>,
+                address(), 0);
+            address_book_.at(i).enqueue(std::move(msg));
         }
     }
 
@@ -184,6 +186,7 @@ private:
 };
 
 class actor_test_t final : public actor_zeta::basic_actor<actor_test_t> {
+private:
     supervisor_test_t* sup_ptr_;
     size_t consumer_latency_ms_;
     std::map<int64_t, int64_t> prev_index_;
@@ -193,18 +196,15 @@ class actor_test_t final : public actor_zeta::basic_actor<actor_test_t> {
     actor_zeta::behavior_t add_address_;
     actor_zeta::behavior_t process_data_;
 
-    auto perform(command_t cmd) -> void {
-        actor_zeta::send(address_book_.begin()->second, address(), cmd);
-    }
-
 public:
+
     actor_test_t(supervisor_test_t* ptr, size_t consumer_latency_ms)
         : actor_zeta::basic_actor<actor_test_t>(ptr)
         , sup_ptr_(ptr)
         , consumer_latency_ms_(consumer_latency_ms)
         , name_(names::actor)
-        , add_address_(actor_zeta::make_behavior(resource(), command_t::add_address, this, &actor_test_t::add_address))
-        , process_data_(actor_zeta::make_behavior(resource(), command_t::process_data, this, &actor_test_t::process_data)) {
+        , add_address_(actor_zeta::make_behavior(resource(), this, &actor_test_t::add_address))
+        , process_data_(actor_zeta::make_behavior(resource(), this, &actor_test_t::process_data)) {
     }
 
     actor_zeta::behavior_t behavior() {
@@ -212,11 +212,11 @@ public:
             resource(),
             [this](actor_zeta::message* msg) -> void {
                 switch (msg->command()) {
-                    case actor_zeta::make_message_id(command_t::add_address): {
+                    case actor_zeta::msg_id<actor_test_t, &actor_test_t::add_address>: {
                         add_address_(msg);
                         break;
                     }
-                    case actor_zeta::make_message_id(command_t::process_data): {
+                    case actor_zeta::msg_id<actor_test_t, &actor_test_t::process_data>: {
                         process_data_(msg);
                         break;
                     }
@@ -250,6 +250,11 @@ public:
         //std::cout << std::this_thread::get_id() << " :: " << __func__ << " :: ms_dur " << ms_dur << " OUT >>>" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(consumer_latency_ms_));
     }
+    
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &actor_test_t::add_address,
+        &actor_test_t::process_data
+    >;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////

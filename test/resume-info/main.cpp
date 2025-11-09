@@ -12,23 +12,31 @@ class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
     explicit test_actor(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_actor>(ptr)
-        , test_(actor_zeta::make_behavior(resource(), [this]() {
-            ++processed_count_;
-        })) {
+        , test_(actor_zeta::make_behavior(resource(), this, &test_actor::test)) {
     }
 
+    void test();
+
     void behavior(actor_zeta::message* msg) {
-        if (msg->command() == actor_zeta::make_message_id(command::test)) {
+        if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
             test_(msg);
         }
     }
 
     size_t processed_count() const { return processed_count_; }
 
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &test_actor::test
+    >;
+
 private:
     actor_zeta::behavior_t test_;
     size_t processed_count_ = 0;
 };
+
+void test_actor::test() {
+    ++processed_count_;
+}
 
 TEST_CASE("resume_info - basic structure") {
     SECTION("Default constructor") {
@@ -63,7 +71,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
     }
 
     SECTION("Single message") {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), command::test);
+        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
 
         auto info = actor->resume(nullptr, 100);
         REQUIRE(info.messages_processed == 1);
@@ -72,7 +80,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
 
     SECTION("Multiple messages") {
         for (int i = 0; i < 5; ++i) {
-            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), command::test);
+            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
         }
 
         auto info = actor->resume(nullptr, 100);
@@ -82,7 +90,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
 
     SECTION("Throughput limit respected") {
         for (int i = 0; i < 10; ++i) {
-            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), command::test);
+            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
         }
 
         auto info = actor->resume(nullptr, 3);
@@ -101,7 +109,7 @@ TEST_CASE("resume_info - backward compatibility with switch") {
     auto* resource = actor_zeta::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
-    actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), command::test);
+    actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
 
     auto info = actor->resume(nullptr, 100);
 

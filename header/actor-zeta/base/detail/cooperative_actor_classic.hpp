@@ -24,6 +24,13 @@ namespace actor_zeta { namespace base {
     class cooperative_actor<Actor, MailBox, actor_type::classic>
         : public actor_abstract_t
         , public scheduler::resumable_t {
+    private:
+        static constexpr bool check_dispatch_traits_exists() {
+            using dispatch_traits_check = typename Actor::dispatch_traits;
+            (void)sizeof(dispatch_traits_check); // Suppress unused warning
+            return true;
+        }
+
     public:
         using mailbox_t = MailBox;
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, MailBox, actor_type::classic>, pmr::deleter_t>;
@@ -54,8 +61,12 @@ namespace actor_zeta { namespace base {
             : actor_abstract_t(check_ptr(in_resource))
             , current_message_(nullptr)
             , mailbox_() {
+            static_assert(check_dispatch_traits_exists(),
+                "Actor must define nested 'struct dispatch_traits { using methods = type_list<...>; }'");
             mailbox().try_block();
         }
+
+    private:
 
         bool enqueue_impl(mailbox::message_ptr msg) final {
             assert(msg.get() != nullptr);
