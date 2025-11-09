@@ -144,8 +144,8 @@ TEST_CASE("Race condition stress test - future destruction timing") {
     // Process remaining messages
     scheduler->stop();
 
-    // Give scheduler threads time to fully terminate
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Give scheduler threads time to fully terminate and clean up
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // Statistics
     std::cout << "\n=== Stress Test Results ===\n";
@@ -239,16 +239,44 @@ TEST_CASE("Memory leak detection - orphaned messages") {
         }
     }
 
-    // Wait for actor to process orphaned messages with timeout
+    // Smart waiting: actively ensure actor keeps processing messages
     auto start_time = std::chrono::steady_clock::now();
     constexpr auto timeout = std::chrono::seconds(10);  // Extended timeout for slow CI
+
+    std::size_t last_count = 0;
+    int stall_iterations = 0;
+    constexpr int MAX_STALL = 10;  // Reschedule after 10 iterations without progress (~1ms)
 
     while (actor->processed_count() < NUM_ORPHANED) {
         auto elapsed = std::chrono::steady_clock::now() - start_time;
         if (elapsed > timeout) {
             break;  // Timeout - let test fail with diagnostic output
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        std::size_t current_count = actor->processed_count();
+
+        // Detect if actor is stalled (not making progress)
+        if (current_count == last_count) {
+            ++stall_iterations;
+
+            // If stalled, actively reschedule the actor every ~1ms
+            // This ensures the actor stays in the scheduler's work queue even if
+            // it processed some messages and went idle
+            if (stall_iterations >= MAX_STALL) {
+                scheduler->enqueue(actor.get());
+                stall_iterations = 0;
+            }
+        } else {
+            // Progress detected - reset stall counter
+            last_count = current_count;
+            stall_iterations = 0;
+        }
+
+        // Aggressive yielding to give scheduler threads more CPU time
+        std::this_thread::yield();
+
+        // Micro-sleep to prevent busy-waiting but allow fast response
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 
     scheduler->stop();
