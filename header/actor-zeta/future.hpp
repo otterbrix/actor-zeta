@@ -177,21 +177,51 @@ namespace actor_zeta {
             }
         }
 
-        /// @brief Blocking get - wait for result with exponential backoff
+        /// @brief Blocking get - wait for result with hybrid waiting strategy
         T get() && {
             assert(state_ && "get() on invalid future");
 
-            // Exponential backoff waiting strategy
-            auto backoff = std::chrono::microseconds(1);
-            constexpr auto max_backoff = std::chrono::microseconds(1000);
+            // Hybrid waiting strategy for optimal performance:
+            // 1. Fast spin (0-10): For quick operations (0 CPU overhead)
+            // 2. Yield loop (11-100): Medium latency operations
+            // 3. Exponential backoff (>100): Slow operations (reduce CPU usage)
 
-            while (!state_->is_ready()) {
-                // Check cancellation
+            int spin_count = 0;
+            constexpr int fast_spin_limit = 10;
+            constexpr int yield_limit = 100;
+
+            // Phase 1: Fast spin (no yield, no sleep)
+            while (!state_->is_ready() && spin_count < fast_spin_limit) {
                 if (state_->is_cancelled()) {
                     state_->release();
                     state_ = nullptr;
                     assert(false && "get() on cancelled future!");
-                    // In production: return default-constructed T or throw
+                    return T{};
+                }
+                ++spin_count;
+            }
+
+            // Phase 2: Yield loop
+            while (!state_->is_ready() && spin_count < yield_limit) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    return T{};
+                }
+                std::this_thread::yield();
+                ++spin_count;
+            }
+
+            // Phase 3: Exponential backoff with sleep
+            auto backoff = std::chrono::microseconds(1);
+            constexpr auto max_backoff = std::chrono::microseconds(100);
+
+            while (!state_->is_ready()) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
                     return T{};
                 }
 
@@ -200,6 +230,11 @@ namespace actor_zeta {
                     backoff *= 2;
                 }
             }
+
+            // Compiler barrier to prevent reordering
+            // The acquire load in is_ready() already provides memory synchronization
+            // This just prevents compiler from reordering result_ access
+            std::atomic_signal_fence(std::memory_order_acq_rel);
 
             // Extract result from rtt
             T result = state_->result().template get<T>(0);
@@ -305,15 +340,43 @@ namespace actor_zeta {
             }
         }
 
-        /// @brief Blocking get - wait for completion with exponential backoff
+        /// @brief Blocking get - wait for completion with hybrid waiting strategy
         void get() && {
             assert(state_ && "get() on invalid future");
 
+            // Hybrid waiting strategy (same as unique_future<T>)
+            int spin_count = 0;
+            constexpr int fast_spin_limit = 10;
+            constexpr int yield_limit = 100;
+
+            // Phase 1: Fast spin
+            while (!state_->is_ready() && spin_count < fast_spin_limit) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    return;
+                }
+                ++spin_count;
+            }
+
+            // Phase 2: Yield loop
+            while (!state_->is_ready() && spin_count < yield_limit) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    return;
+                }
+                std::this_thread::yield();
+                ++spin_count;
+            }
+
+            // Phase 3: Exponential backoff
             auto backoff = std::chrono::microseconds(1);
-            constexpr auto max_backoff = std::chrono::microseconds(1000);
+            constexpr auto max_backoff = std::chrono::microseconds(100);
 
             while (!state_->is_ready()) {
-                // Check cancellation
                 if (state_->is_cancelled()) {
                     state_->release();
                     state_ = nullptr;

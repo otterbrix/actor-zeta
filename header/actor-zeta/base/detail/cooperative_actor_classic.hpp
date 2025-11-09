@@ -154,7 +154,21 @@ namespace actor_zeta { namespace base {
                     auto current = state_.load(std::memory_order_acquire);
                     actor_state desired;
 
+#ifndef NDEBUG
+                    int cas_attempts = 0;
+                    constexpr int MAX_CAS_ATTEMPTS = 100000;  // Failsafe: detect livelock
+#endif
+
                     while (true) {
+#ifndef NDEBUG
+                        assert(++cas_attempts < MAX_CAS_ATTEMPTS && "enqueue_impl: CAS loop - possible livelock/race condition!");
+
+                        // RACE CONDITION DETECTION: Verify current state is valid
+                        // Invalid states that should never occur:
+                        assert(current != actor_state::scheduled_destroying && "enqueue_impl: invalid state scheduled_destroying!");
+                        assert(current != actor_state::running_scheduled_destroying && "enqueue_impl: invalid state running_scheduled_destroying!");
+#endif
+
                         // If already running, don't schedule (will self-reschedule if needed)
                         // If destroying, don't schedule
                         if (is_running(current) || is_destroying(current)) {
@@ -168,8 +182,13 @@ namespace actor_zeta { namespace base {
                             break;
                         }
 
+                        // RACE CONDITION DETECTION: Only idle state is valid here
+                        assert(current == actor_state::idle && "enqueue_impl: expected idle state for scheduling!");
+
                         // Try transition: idle → scheduled
                         desired = set_scheduled(current, true);
+                        assert(desired == actor_state::scheduled && "enqueue_impl: invalid desired state!");
+
                         if (state_.compare_exchange_weak(current, desired,
                                                          std::memory_order_acq_rel,
                                                          std::memory_order_acquire)) {
@@ -236,14 +255,37 @@ namespace actor_zeta { namespace base {
                     while (true) {
 #ifndef NDEBUG
                         assert(++cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard constructor: CAS loop - possible livelock!");
+
+                        // RACE CONDITION DETECTION: Verify current state is valid
+                        // Invalid states that should never occur at resume() entry:
+                        assert(current != actor_state::scheduled_destroying && "resume_guard: invalid state scheduled_destroying!");
+                        assert(current != actor_state::running_scheduled_destroying && "resume_guard: invalid state running_scheduled_destroying!");
 #endif
                         // Detect concurrent resume() - running bit already set
                         if (is_running(current)) {
                             assert(false && "Concurrent resume() detected - scheduler BUG!");
                         }
 
+#ifndef NDEBUG
+                        // RACE CONDITION DETECTION: Verify expected states
+                        // Valid states: idle, scheduled, idle_destroying, (scheduled_destroying already asserted above)
+                        assert((current == actor_state::idle ||
+                                current == actor_state::scheduled ||
+                                current == actor_state::idle_destroying) &&
+                               "resume_guard: unexpected state at entry!");
+#endif
+
                         // Set running bit, preserve scheduled and destroying bits
                         desired = set_running(current, true);
+
+#ifndef NDEBUG
+                        // RACE CONDITION DETECTION: Verify desired state is valid
+                        // Valid transitions: idle→running, scheduled→running_scheduled, idle_destroying→running_destroying
+                        assert((desired == actor_state::running ||
+                                desired == actor_state::running_scheduled ||
+                                desired == actor_state::running_destroying) &&
+                               "resume_guard: invalid desired state!");
+#endif
 
                         if (state_ref_.compare_exchange_weak(current, desired,
                                                              std::memory_order_seq_cst,

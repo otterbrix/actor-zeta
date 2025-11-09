@@ -4,6 +4,7 @@
 //frindle api for boost
 
 #include <utility>
+#include <cassert>
 
 #include <actor-zeta/detail/ref_counted.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
@@ -94,10 +95,20 @@ namespace actor_zeta {
         }
 
         pointer operator->() const noexcept {
+#ifndef NDEBUG
+            // RACE CONDITION DETECTION: Dereferencing null pointer
+            // This can happen if intrusive_ptr was moved/reset in another thread
+            assert(ptr_ != nullptr && "operator->(): dereferencing null intrusive_ptr!");
+#endif
             return ptr_;
         }
 
         reference operator*() const noexcept {
+#ifndef NDEBUG
+            // RACE CONDITION DETECTION: Dereferencing null pointer
+            // This can happen if intrusive_ptr was moved/reset in another thread
+            assert(ptr_ != nullptr && "operator*(): dereferencing null intrusive_ptr!");
+#endif
             return *ptr_;
         }
 

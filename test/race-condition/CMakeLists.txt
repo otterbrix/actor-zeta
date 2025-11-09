@@ -64,3 +64,36 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+
+# ABA Problem Stress Tests: CAS operations and lock-free queue
+set(CURRENT_TEST_NAME tests_aba_problem)
+set(${CURRENT_TEST_NAME}_SOURCES test_aba_problem.cpp)
+add_executable(${CURRENT_TEST_NAME} ${${CURRENT_TEST_NAME}_SOURCES})
+target_link_libraries(${CURRENT_TEST_NAME} PRIVATE actor-zeta Catch2::Catch2)
+set_target_properties(${CURRENT_TEST_NAME}
+        PROPERTIES
+        CXX_STANDARD ${CMAKE_CXX_STANDARD}
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+        )
+add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+
+# Intrusive Ptr Stress Tests: Refcount operations and pointer operations
+set(CURRENT_TEST_NAME tests_stress_intrusive_ptr)
+set(${CURRENT_TEST_NAME}_SOURCES test_stress_intrusive_ptr.cpp)
+add_executable(${CURRENT_TEST_NAME} ${${CURRENT_TEST_NAME}_SOURCES})
+target_link_libraries(${CURRENT_TEST_NAME} PRIVATE actor-zeta Catch2::Catch2)
+set_target_properties(${CURRENT_TEST_NAME}
+        PROPERTIES
+        CXX_STANDARD ${CMAKE_CXX_STANDARD}
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+        )
+add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+add_executable(tests_minimal_scheduler /tmp/test_minimal_scheduler.cpp)
+target_link_libraries(tests_minimal_scheduler PRIVATE actor-zeta Catch2::Catch2)
+add_test(NAME tests_minimal_scheduler COMMAND tests_minimal_scheduler)
+
+add_executable(tests_aba_minimal /tmp/test_aba_minimal.cpp)
+target_link_libraries(tests_aba_minimal PRIVATE actor-zeta Catch2::Catch2)
+add_test(NAME tests_aba_minimal COMMAND tests_aba_minimal)

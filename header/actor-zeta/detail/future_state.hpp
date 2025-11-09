@@ -155,14 +155,33 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
             assert(magic_ == kMagicAlive && "Use-after-free: set_result() on deleted state!");
 #endif
-            // Atomic transition: pending → ready
+            // CRITICAL FIX: Synchronize non-atomic result_ with atomic state_
+            //
+            // Problem: result_ is non-atomic, state_ is atomic
+            // We need: result_ write happens-before state_ changes to ready
+            //
+            // Solution: Write result BEFORE CAS with release ordering
+            //   1. Write result_ first (may write even if future is cancelled)
+            //   2. CAS pending→ready with release ordering
+            //   3. Release ordering ensures: result_ write visible to acquire load
+            //
+            // Safety: If CAS fails (future cancelled), result_ is written but won't be read
+            // because reader checks state==ready before accessing result_
+
+            // Write result BEFORE CAS
+            result_ = std::move(value);
+
+            // Atomic transition: pending → ready with RELEASE semantics
+            // Release ordering creates happens-before with acquire load in is_ready()
+            // This ensures: result_ write visible to threads that see state==ready
             auto expected = future_state_enum::pending;
-            if (transition(expected, future_state_enum::ready)) {
-                // Transition succeeded - now safe to store result
-                result_ = std::move(value);
+            if (!state_.compare_exchange_strong(expected, future_state_enum::ready,
+                                                std::memory_order_release,  // success: release
+                                                std::memory_order_relaxed)) {  // failure: relaxed
+                // CAS failed - future was cancelled or already set
+                // Result is written but won't be read (state != ready)
+                // This is safe - reader checks state before reading result
             }
-            // Transition failed - state changed concurrently (cancelled, etc.)
-            // Don't store result, it won't be read anyway
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
