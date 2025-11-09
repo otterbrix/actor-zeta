@@ -144,6 +144,9 @@ TEST_CASE("Race condition stress test - future destruction timing") {
     // Process remaining messages
     scheduler->stop();
 
+    // Give scheduler threads time to fully terminate
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
     // Statistics
     std::cout << "\n=== Stress Test Results ===\n";
     std::cout << "Futures created:        " << futures_created.load() << "\n";
@@ -198,6 +201,9 @@ TEST_CASE("Race condition stress test - concurrent future destruction") {
 
     scheduler->stop();
 
+    // Give scheduler threads time to fully terminate
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
     std::cout << "\n=== Concurrent Destruction Test ===\n";
     std::cout << "Iterations:             " << iterations.load() << "\n";
     std::cout << "Double deletes detected: " << double_delete_detected.load() << "\n";
@@ -232,8 +238,18 @@ TEST_CASE("Memory leak detection - orphaned messages") {
         }
     }
 
-    // Wait for actor to process orphaned messages
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Wait for actor to process orphaned messages with timeout
+    auto start_time = std::chrono::steady_clock::now();
+    constexpr auto timeout = std::chrono::seconds(5);  // Generous timeout for slow CI
+
+    while (actor->processed_count() < NUM_ORPHANED) {
+        auto elapsed = std::chrono::steady_clock::now() - start_time;
+        if (elapsed > timeout) {
+            break;  // Timeout - let test fail with diagnostic output
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
     scheduler->stop();
 
     std::cout << "\n=== Orphaned Messages Test ===\n";
