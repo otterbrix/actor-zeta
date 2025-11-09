@@ -30,6 +30,10 @@ private:
     size_t processed_count_ = 0;
 };
 
+void test_actor::test() {
+    ++processed_count_;
+}
+
 TEST_CASE("resume_info - basic structure") {
     SECTION("Default constructor") {
         actor_zeta::scheduler::resume_info info;

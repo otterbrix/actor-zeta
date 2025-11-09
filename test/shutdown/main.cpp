@@ -20,13 +20,16 @@ public:
         // Empty handler
     }
 
+    using dispatch_traits = actor_zeta::dispatch_traits<
+                &worker_actor::ping
+            >;
+
+
     void behavior(actor_zeta::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
             ping_(msg);
         }
     }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::ping>;
 
 private:
     actor_zeta::behavior_t ping_;
