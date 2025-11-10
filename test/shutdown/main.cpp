@@ -33,10 +33,13 @@ private:
 };
 
 // Balancer actor that manually enqueues and schedules
-class balancer_actor final : public actor_zeta::actor_abstract_t {
+class balancer_actor final : public actor_zeta::base::actor_mixin<balancer_actor> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::actor_abstract_t(resource)
+        : actor_zeta::base::actor_mixin<balancer_actor>()
+        , resource_(resource)
         , scheduler_(scheduler) {
     }
 
@@ -46,8 +49,10 @@ public:
         workers_.clear();
     }
 
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+
     void add_worker() {
-        auto worker = actor_zeta::spawn<worker_actor>(resource());
+        auto worker = actor_zeta::spawn<worker_actor>(resource_);
         workers_.emplace_back(std::move(worker));
     }
 
@@ -63,6 +68,7 @@ public:
 protected:
 
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
     size_t cursor_ = 0;
     std::vector<worker_actor::unique_actor> workers_;
@@ -75,15 +81,18 @@ TEST_CASE("shutdown - basic test") {
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
-    // Send some messages
+    // Send some messages and collect futures
+    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
     for (int i = 0; i < 3; ++i) {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
+        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
     }
 
     scheduler->start();
 
     // Wait for processing
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Futures are ready after sleep - destructor will clean up
 
     // This should not crash
     scheduler->stop();
@@ -102,10 +111,11 @@ TEST_CASE("shutdown - multiple actors") {
         actors.push_back(actor_zeta::spawn<worker_actor>(resource));
     }
 
-    // Send messages to all actors
+    // Send messages to all actors and collect futures
+    std::vector<decltype(actor_zeta::send(actors[0].get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
     for (auto& actor : actors) {
         for (int i = 0; i < 2; ++i) {
-            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
+            futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
         }
     }
 
@@ -113,6 +123,8 @@ TEST_CASE("shutdown - multiple actors") {
 
     // Wait for processing
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Futures are ready after sleep - destructor will clean up
 
     // This should not crash
     scheduler->stop();
@@ -127,9 +139,10 @@ TEST_CASE("shutdown - immediate stop") {
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
-    // Send messages
+    // Send messages and collect futures
+    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
     for (int i = 0; i < 10; ++i) {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping);
+        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
     }
 
     scheduler->start();
@@ -137,6 +150,8 @@ TEST_CASE("shutdown - immediate stop") {
     // Stop immediately without waiting
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     scheduler->stop();
+
+    // Futures may be cancelled due to immediate stop - destructor will clean up
 
     REQUIRE(true); // If we get here, no crash occurred
 }

@@ -11,8 +11,11 @@
 class storage_t;
 class test_handlers;
 
-class dummy_supervisor final : public actor_zeta::actor_abstract_t {
+class dummy_supervisor final : public actor_zeta::base::actor_mixin<dummy_supervisor> {
 public:
+    template<typename T>
+    using unique_future = actor_zeta::unique_future<T>;
+
     static uint64_t constructor_counter;
     static uint64_t destructor_counter;
     static uint64_t executor_impl_counter;
@@ -21,9 +24,10 @@ public:
     static uint64_t enqueue_base_counter;
 
     dummy_supervisor(actor_zeta::pmr::memory_resource* resource, uint64_t threads, uint64_t throughput)
-        : actor_abstract_t(resource)
-        , create_storage_(actor_zeta::make_behavior(resource, this, &dummy_supervisor::create_storage))
-        , create_test_handlers_(actor_zeta::make_behavior(resource, this, &dummy_supervisor::create_test_handlers))
+        : actor_mixin<dummy_supervisor>()
+        , resource_(resource)
+        , create_storage_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create_storage))
+        , create_test_handlers_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create_test_handlers))
         , executor_(new actor_zeta::test::scheduler_test_t(threads, throughput)) {
         scheduler_test()->start();
         constructor_counter++;
@@ -69,9 +73,14 @@ public:
         &dummy_supervisor::create_test_handlers
     >;
 
+    actor_zeta::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
+
 protected:
 
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::behavior_t create_storage_;
     actor_zeta::behavior_t create_test_handlers_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
@@ -141,7 +150,7 @@ public:
         }
     }
 
-    ~storage_t() override {
+    ~storage_t() {
         destructor_counter++;
     }
 
@@ -248,7 +257,7 @@ public:
         }
     }
 
-    ~test_handlers() override = default;
+    ~test_handlers() = default;
 
     void ptr_0() {
         TRACE("+++");

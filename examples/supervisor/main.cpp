@@ -58,19 +58,24 @@ inline void worker_actor::get_status() {
 }
 
 // Supervisor that manages worker actors with manual scheduling
-class supervisor_actor final : public actor_zeta::actor_abstract_t {
+class supervisor_actor final : public actor_zeta::base::actor_mixin<supervisor_actor> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::actor_abstract_t(ptr)
+        : actor_zeta::base::actor_mixin<supervisor_actor>()
+        , resource_(ptr)
         , scheduler_(scheduler)
-        , create_worker_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::create_worker))
-        , assign_task_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::assign_task))
-        , stop_workers_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::stop_workers))
-        , check_status_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::check_status)) {
+        , create_worker_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::create_worker))
+        , assign_task_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::assign_task))
+        , stop_workers_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::stop_workers))
+        , check_status_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::check_status)) {
     }
 
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+
     void create_worker(const std::string& name) {
-        auto worker = actor_zeta::spawn<worker_actor>(resource(), name);
+        auto worker = actor_zeta::spawn<worker_actor>(resource_, name);
         std::cerr << "[Supervisor] Created worker: " << name << std::endl;
         workers_.emplace_back(std::move(worker));
     }
@@ -87,11 +92,13 @@ public:
 
         std::cerr << "[Supervisor] Assigning task '" << task << "' to " << worker->name() << std::endl;
 
-        // Send task to worker (returns future - can be ignored for fire-and-forget)
+        // Send task to worker (returns future with needs_scheduling flag)
         auto future = actor_zeta::send(worker.get(), address(), &worker_actor::process_task, task);
 
-        // Manual scheduling - IMPORTANT!
-        scheduler_->enqueue(worker.get());
+        // Manual scheduling - only if actor was unblocked (check needs_scheduling)
+        if (future.needs_scheduling()) {
+            scheduler_->enqueue(worker.get());
+        }
     }
 
     void stop_workers() {
@@ -103,10 +110,13 @@ public:
     void check_status() {
         std::cerr << "[Supervisor] Status check - " << workers_.size() << " workers:" << std::endl;
         for (auto& worker : workers_) {
-            // Send status request to worker (returns future - can be ignored for fire-and-forget)
+            // Send status request to worker (returns future with needs_scheduling flag)
             auto future = actor_zeta::send(worker.get(), address(), &worker_actor::get_status);
-            // Manual scheduling
-            scheduler_->enqueue(worker.get());
+
+            // Manual scheduling - only if actor was unblocked (check needs_scheduling)
+            if (future.needs_scheduling()) {
+                scheduler_->enqueue(worker.get());
+            }
         }
     }
 
@@ -140,6 +150,7 @@ public:
 protected:
 
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> workers_;
     size_t next_worker_ = 0;

@@ -80,11 +80,9 @@ namespace actor_zeta { namespace scheduler {
                     }
                     case resume_result::done: {
                         policy_.after_completion(this, job);
-                        job.release();
                         break;
                     }
                     case resume_result::awaiting: {
-                        job.release();
                         break;
                     }
                     case resume_result::shutdown: {

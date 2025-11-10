@@ -31,20 +31,16 @@ namespace actor_zeta { namespace mailbox {
         : sender_(std::move(other.sender_))
         , command_(std::move(other.command_))
         , body_(std::move(other.body_))
-        , result_slot_(other.result_slot_)
-        , error_(other.error_.load(std::memory_order_acquire))
-        , cancelled_(other.cancelled_.load(std::memory_order_acquire))
-        , orphaned_(other.orphaned_.load(std::memory_order_acquire)) {
+        , result_slot_(other.result_slot_) {
+        other.result_slot_ = nullptr;
     }
 
     message::message(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, message&& other) noexcept
            : sender_(std::move(other.sender_))
            , command_(std::move(other.command_))
            , body_(std::allocator_arg, resource, std::move(other.body_))
-           , result_slot_(other.result_slot_)
-           , error_(other.error_.load(std::memory_order_acquire))
-           , cancelled_(other.cancelled_.load(std::memory_order_acquire))
-           , orphaned_(other.orphaned_.load(std::memory_order_acquire)) {
+           , result_slot_(other.result_slot_) {
+        other.result_slot_ = nullptr;
     }
 
     message& message::operator=(message&& other) noexcept {
@@ -54,9 +50,8 @@ namespace actor_zeta { namespace mailbox {
         command_ = std::move(other.command_);
         body_ = std::move(other.body_);
         result_slot_ = other.result_slot_;
-        error_.store(other.error_.load(std::memory_order_acquire), std::memory_order_release);
-        cancelled_.store(other.cancelled_.load(std::memory_order_acquire), std::memory_order_release);
-        orphaned_.store(other.orphaned_.load(std::memory_order_acquire), std::memory_order_release);
+
+        other.result_slot_ = nullptr;
 
         return *this;
     }
@@ -76,22 +71,6 @@ namespace actor_zeta { namespace mailbox {
         swap(command_, other.command_);
         swap(body_, other.body_);
         swap(result_slot_, other.result_slot_);
-
-        // Swap atomic fields
-        auto this_error = error_.load(std::memory_order_acquire);
-        auto other_error = other.error_.load(std::memory_order_acquire);
-        error_.store(other_error, std::memory_order_release);
-        other.error_.store(this_error, std::memory_order_release);
-
-        auto this_cancelled = cancelled_.load(std::memory_order_acquire);
-        auto other_cancelled = other.cancelled_.load(std::memory_order_acquire);
-        cancelled_.store(other_cancelled, std::memory_order_release);
-        other.cancelled_.store(this_cancelled, std::memory_order_release);
-
-        auto this_orphaned = orphaned_.load(std::memory_order_acquire);
-        auto other_orphaned = other.orphaned_.load(std::memory_order_acquire);
-        orphaned_.store(other_orphaned, std::memory_order_release);
-        other.orphaned_.store(this_orphaned, std::memory_order_release);
     }
 
     bool message::is_high_priority() const {

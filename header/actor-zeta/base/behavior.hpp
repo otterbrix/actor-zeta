@@ -11,8 +11,6 @@ namespace actor_zeta { namespace base {
 
     class behavior_t final {
     public:
-        using id = mailbox::message_id;
-
         behavior_t() = delete;
         behavior_t(const behavior_t&) = delete;
         behavior_t& operator=(const behavior_t&) = delete;
