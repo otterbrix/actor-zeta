@@ -15,7 +15,7 @@ public:
         , call_count3_(0) {
     }
 
-    // Определения методов внутри класса
+    // Method definitions inside the class
     void method1(int value) {
         ++call_count1_;
         last_value1_ = value;
@@ -30,7 +30,7 @@ public:
         ++call_count3_;
     }
 
-    // Новый синтаксис dispatch_traits - ПОСЛЕ определения методов!
+    // New dispatch_traits syntax - AFTER method definitions!
     using dispatch_traits = actor_zeta::dispatch_traits<
         &test_actor::method1,
         &test_actor::method2,
@@ -69,12 +69,12 @@ private:
 };
 
 TEST_CASE("dispatch_traits - compile-time msg_id generation") {
-    // Проверка что msg_id является compile-time константой
+    // Verify that msg_id is a compile-time constant
     constexpr auto id1 = actor_zeta::msg_id<test_actor, &test_actor::method1>;
     constexpr auto id2 = actor_zeta::msg_id<test_actor, &test_actor::method2>;
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
 
-    // message_id имеет default priority flag, поэтому проверяем что ActionId в младших битах корректный
+    // message_id has default priority flag, so check that ActionId in lower bits is correct
     REQUIRE((id1.integer_value() & 0xFFFFFFFF) == 0);
     REQUIRE((id2.integer_value() & 0xFFFFFFFF) == 1);
     REQUIRE((id3.integer_value() & 0xFFFFFFFF) == 2);
@@ -91,12 +91,12 @@ TEST_CASE("dispatch_traits - unique message IDs") {
 }
 
 TEST_CASE("dispatch_traits - sequential indexing") {
-    // ActionId должны идти последовательно: 0, 1, 2, ...
+    // ActionId should be sequential: 0, 1, 2, ...
     constexpr auto id1 = actor_zeta::msg_id<test_actor, &test_actor::method1>;
     constexpr auto id2 = actor_zeta::msg_id<test_actor, &test_actor::method2>;
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
 
-    // Извлекаем ActionId из младших битов
+    // Extract ActionId from lower bits
     constexpr uint64_t action1 = id1.integer_value() & 0xFFFFFFFF;
     constexpr uint64_t action2 = id2.integer_value() & 0xFFFFFFFF;
     constexpr uint64_t action3 = id3.integer_value() & 0xFFFFFFFF;
@@ -109,7 +109,7 @@ TEST_CASE("dispatch_traits - sequential indexing") {
 }
 
 TEST_CASE("dispatch_traits - simple one-line syntax") {
-    // Этот тест проверяет что новый синтаксис компилируется
+    // This test verifies that the new syntax compiles
     // using dispatch_traits = actor_zeta::dispatch_traits<&Actor::method1, ...>;
 
     auto* resource = actor_zeta::pmr::get_default_resource();

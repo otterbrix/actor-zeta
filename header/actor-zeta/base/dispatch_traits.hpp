@@ -8,49 +8,37 @@
 namespace actor_zeta {
 
     /// @brief Compile-time map entry: (MethodPtr -> ActionId)
-    /// ActionId генерируется автоматически на основе позиции в списке
     template<auto MethodPtr>
     struct method_map_entry {};
 
-    /// @brief Короткий алиас для method_map_entry
     template<auto MethodPtr>
     using method = method_map_entry<MethodPtr>;
 
-    /// @brief Шаблон dispatch_traits для удобного синтаксиса внутри актора
-    /// Позволяет писать: using dispatch_traits = dispatch_traits<&MyActor::method1, &MyActor::method2>;
     template<auto... MethodPtrs>
     struct dispatch_traits {
         using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
     };
 
-    /// @brief Compile-time поиск action_id по методу через variadic expansion
     namespace detail {
-        // Хелпер для сравнения одного метода (работает только если типы совпадают)
         template<auto SearchPtr, auto CurrentPtr>
         struct is_same_method_ptr : std::false_type {};
 
-        // Специализация для одинаковых типов - можем сравнивать значения
         template<auto Ptr>
         struct is_same_method_ptr<Ptr, Ptr> : std::true_type {};
 
-        // Compile-time поиск через constexpr цикл
         template<auto SearchPtr, auto... MethodPtrs>
         static constexpr uint64_t find_method_index() {
-            // Создаем массив совпадений через pack expansion
             constexpr bool matches[] = {is_same_method_ptr<SearchPtr, MethodPtrs>::value...};
 
-            // Линейный поиск первого совпадения
             for (std::size_t i = 0; i < sizeof...(MethodPtrs); ++i) {
                 if (matches[i]) {
                     return static_cast<uint64_t>(i);
                 }
             }
-            return 0; // Не найден
+            return 0;
         }
     }
 
-    /// @brief Получение action_id для метода из Actor::dispatch_traits (compile-time)
-    /// ActionId генерируется автоматически на основе позиции в списке (0, 1, 2, ...)
     /// @code
     /// class MyActor {
     ///     struct dispatch_traits {
@@ -61,26 +49,21 @@ namespace actor_zeta {
     ///     };
     /// };
     ///
-    /// // Использование:
     /// case msg_id<MyActor, &MyActor::insert>:
     /// @endcode
     template<typename Actor, auto MethodPtr, typename MethodList>
     struct action_id_impl;
 
-    // Специализация для type_list с извлечением всех MethodPtrs
     template<typename Actor, auto SearchPtr, auto... MethodPtrs>
     struct action_id_impl<Actor, SearchPtr, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
         static constexpr uint64_t value = detail::find_method_index<SearchPtr, MethodPtrs...>();
     };
 
-    /// @brief Compile-time constexpr переменная для message_id
-    /// Объединяет make_message_id + action_id для максимально компактного синтаксиса
     template<typename Actor, auto MethodPtr>
     inline constexpr auto msg_id = mailbox::make_message_id(
         action_id_impl<Actor, MethodPtr, typename Actor::dispatch_traits::methods>::value
     );
 
-    /// @brief Runtime поиск метода и отправка сообщения
     template<typename Actor, typename Method, typename MethodList>
     struct runtime_dispatch_helper;
 
@@ -106,7 +89,6 @@ namespace actor_zeta {
         }
     };
 
-    // Нерекурсивная реализация через if-else chain для future
     template<typename Actor, typename Method, typename ActorPtr, typename Sender, typename... Args>
     struct dispatch_one_impl {
         // Base case - no methods left
@@ -146,7 +128,6 @@ namespace actor_zeta {
         }
     };
 
-    // Нерекурсивная реализация через fold expression для future
     template<typename Actor, typename Method, auto... MethodPtrs, typename ActorPtr, typename Sender, typename... Args, std::size_t... Is>
     static auto dispatch_impl(Method method, ActorPtr* actor, Sender sender, std::index_sequence<Is...>, Args&&... args)
         -> typename Actor::template unique_future<
@@ -158,10 +139,8 @@ namespace actor_zeta {
             std::forward<Args>(args)...);
     }
 
-    // Специализация runtime_dispatch_helper с извлечением MethodPtrs из type_list
     template<typename Actor, typename Method, auto... MethodPtrs>
     struct runtime_dispatch_helper<Actor, Method, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
-        // Перегрузка для ActorPtr*
         template<typename ActorPtr, typename Sender, typename... Args>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender, Args&&... args)
             -> typename Actor::template unique_future<
