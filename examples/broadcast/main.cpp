@@ -12,11 +12,6 @@
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
-auto thread_pool_deleter = [](actor_zeta::scheduler::scheduler_abstract_t* ptr) {
-    ptr->stop();
-    delete ptr;
-};
-
 static std::atomic<uint64_t> counter_download_data{0};
 static std::atomic<uint64_t> counter_work_data{0};
 
@@ -74,7 +69,7 @@ public:
         : actor_zeta::actor_abstract_t(ptr)
         , create_(actor_zeta::make_behavior(resource(),  this, &supervisor_lite::create))
         , broadcast_(actor_zeta::make_behavior(resource(), this, &supervisor_lite::broadcast_impl))
-        , e_(actor_zeta::scheduler::make_sharing_scheduler(ptr, 2, 1000)) {
+        , e_(new actor_zeta::scheduler::sharing_scheduler(2, 1000)) {
         e_->start();
     }
 
@@ -163,7 +158,7 @@ private:
 
     actor_zeta::behavior_t create_;
     actor_zeta::behavior_t broadcast_;
-    actor_zeta::scheduler::scheduler_abstract_t* e_;
+    actor_zeta::scheduler::sharing_scheduler* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};
     std::mutex mutex_;

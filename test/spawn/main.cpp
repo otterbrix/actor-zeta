@@ -17,6 +17,14 @@ static std::atomic_int actor_counter{0};
 static std::atomic_int supervisor_counter{0};
 static std::atomic_int supervisor_sub_counter{0};
 
+constexpr static auto update_id = actor_zeta::make_message_id(0);
+constexpr static auto find_id = actor_zeta::make_message_id(1);
+constexpr static auto remove_id = actor_zeta::make_message_id(2);
+
+constexpr static auto create_actor_id = actor_zeta::make_message_id(0);
+constexpr static auto create_supervisor_id = actor_zeta::make_message_id(1);
+constexpr static auto create_supervisor_custom_resource_id = actor_zeta::make_message_id(2);
+
 class dummy_supervisor;
 
 class storage_t final : public actor_zeta::basic_actor<storage_t> {
@@ -25,11 +33,29 @@ public:
 
     ~storage_t() override = default;
 
-    void behavior(actor_zeta::mailbox::message* msg) {}
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case update_id: {
+                update_(msg);
+                break;
+            }
+            case find_id: {
+                find_(msg);
+                break;
+            }
+            case remove_id: {
+                remove_(msg);
+                break;
+            }
+        }
+    }
 
     using dispatch_traits = actor_zeta::dispatch_traits<>;
 
 private:
+    actor_zeta::behavior_t update_;
+    actor_zeta::behavior_t find_;
+    actor_zeta::behavior_t remove_;
 };
 
 class dummy_supervisor_sub final : public actor_zeta::actor_abstract_t {
@@ -100,19 +126,12 @@ public:
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_actor>: {
-                create_actor_(msg);
-                break;
-            }
-            case actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor>: {
-                create_supervisor_(msg);
-                break;
-            }
-            case actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor_custom_resource>: {
-                create_supervisor_custom_resource_(msg);
-                break;
-            }
+        if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_actor>) {
+            create_actor_(msg);
+        } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor>) {
+            create_supervisor_(msg);
+        } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor_custom_resource>) {
+            create_supervisor_custom_resource_(msg);
         }
     }
 
@@ -138,8 +157,10 @@ private:
 };
 
 
-storage_t::storage_t(actor_zeta::pmr::memory_resource* resource_ptr, dummy_supervisor*)
-    : actor_zeta::basic_actor<storage_t>(resource_ptr) {
+ storage_t::storage_t(actor_zeta::pmr::memory_resource* resource_ptr, dummy_supervisor*): actor_zeta::basic_actor<storage_t>(resource_ptr)
+        , update_(actor_zeta::make_behavior(resource(), []() -> void {}))
+        , find_(actor_zeta::make_behavior(resource(), []() -> void {}))
+        , remove_(actor_zeta::make_behavior(resource(), []() -> void {})) {
     actor_counter++;
 }
 

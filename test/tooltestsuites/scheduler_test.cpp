@@ -3,7 +3,7 @@
 #include "scheduler_test.hpp"
 // clang-format on
 
-#include "actor-zeta/scheduler/resumable.hpp"
+#include "actor-zeta/scheduler/job_ptr.hpp"
 
 #include <limits>
 
@@ -17,8 +17,8 @@ namespace actor_zeta { namespace test {
                 : parent_(parent) {
             }
 
-            void execute_later(scheduler::resumable_t* ptr) {
-                parent_->jobs.push_back(ptr);
+            void execute_later(scheduler::job_ptr job) {
+                parent_->jobs.push_back(job);
             }
 
         private:
@@ -28,7 +28,8 @@ namespace actor_zeta { namespace test {
     } // namespace
 
     scheduler_test_t::scheduler_test_t(std::size_t num_worker_threads, std::size_t max_throughput)
-        : scheduler_abstract_t(num_worker_threads, max_throughput) {
+        : max_throughput_(max_throughput)
+        , num_workers_(num_worker_threads) {
     }
 
     void scheduler_test_t::start() {}
@@ -37,8 +38,8 @@ namespace actor_zeta { namespace test {
         while (run() > 0) {}
     }
 
-    void scheduler_test_t::enqueue(scheduler::resumable_t* ptr) {
-        jobs.push_back(ptr);
+    void scheduler_test_t::enqueue(scheduler::job_ptr job) {
+        jobs.push_back(job);
     }
 
     bool scheduler_test_t::run_once() {
@@ -48,13 +49,13 @@ namespace actor_zeta { namespace test {
         auto job = jobs.front();
         jobs.pop_front();
         dummy_worker worker{this};
-        switch (job->resume(this, 1)) {
+        switch (job.resume(1)) {
             case scheduler::resume_result::resume:
                 jobs.push_front(job);
                 break;
             case scheduler::resume_result::done:
             case scheduler::resume_result::awaiting:
-                intrusive_ptr_release(job);
+                job.release();
                 break;
             case scheduler::resume_result::shutdown:
                 break;

@@ -60,7 +60,7 @@ inline void worker_actor::get_status() {
 // Supervisor that manages worker actors with manual scheduling
 class supervisor_actor final : public actor_zeta::actor_abstract_t {
 public:
-    supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
+    supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* scheduler)
         : actor_zeta::actor_abstract_t(ptr)
         , scheduler_(scheduler)
         , create_worker_(actor_zeta::make_behavior(resource(), this, &supervisor_actor::create_worker))
@@ -93,10 +93,12 @@ public:
             address(),
             actor_zeta::msg_id<worker_actor, &worker_actor::process_task>,
             task);
-        worker->enqueue(std::move(msg));
 
         // Manual scheduling - IMPORTANT!
-        scheduler_->enqueue(worker.get());
+        // Only schedule if actor was unblocked (enqueue returns true)
+        if (worker->enqueue(std::move(msg))) {
+            scheduler_->enqueue(worker.get());
+        }
     }
 
     void stop_workers() {
@@ -112,8 +114,10 @@ public:
                 resource(),
                 address(),
                 actor_zeta::msg_id<worker_actor, &worker_actor::get_status>);
-            worker->enqueue(std::move(msg));
-            scheduler_->enqueue(worker.get());
+            // Only schedule if actor was unblocked
+            if (worker->enqueue(std::move(msg))) {
+                scheduler_->enqueue(worker.get());
+            }
         }
     }
 
@@ -148,7 +152,7 @@ protected:
     }
 
 private:
-    actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
+    actor_zeta::scheduler::sharing_scheduler* scheduler_;
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> workers_;
     size_t next_worker_ = 0;
     std::mutex mutex_;
@@ -163,11 +167,12 @@ int main() {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
     // Create scheduler with 2 threads and throughput of 1000 messages per resume
-    auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource, 2, 1000);
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(2, 1000));
     scheduler->start();
 
     // Create supervisor
-    auto supervisor = actor_zeta::spawn<supervisor_actor>(resource, scheduler);
+    auto supervisor = actor_zeta::spawn<supervisor_actor>(resource, scheduler.get());
 
     std::cerr << "=== Supervisor Example: Manual Scheduling ===" << std::endl;
     std::cerr << std::endl;

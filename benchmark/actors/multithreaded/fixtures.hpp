@@ -19,7 +19,7 @@ constexpr size_t NUM_WORKERS = 4;
         using Actor = ping_pong_actor<__VA_ARGS__>;                                         \
         using Supervisor = simple_supervisor<Actor>;                                        \
                                                                                              \
-        std::unique_ptr<actor_zeta::scheduler::scheduler_abstract_t> scheduler_;            \
+        std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler_;            \
         std::unique_ptr<Supervisor, actor_zeta::pmr::deleter_t> supervisor_;                \
         actor_zeta::pmr::memory_resource* resource_;                                        \
                                                                                              \

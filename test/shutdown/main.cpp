@@ -20,16 +20,13 @@ public:
         // Empty handler
     }
 
-    using dispatch_traits = actor_zeta::dispatch_traits<
-                &worker_actor::ping
-            >;
-
-
     void behavior(actor_zeta::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
             ping_(msg);
         }
     }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::ping>;
 
 private:
     actor_zeta::behavior_t ping_;
@@ -38,7 +35,7 @@ private:
 // Balancer actor that manually enqueues and schedules
 class balancer_actor final : public actor_zeta::actor_abstract_t {
 public:
-    balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
+    balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
         : actor_zeta::actor_abstract_t(resource)
         , scheduler_(scheduler) {
     }
@@ -68,14 +65,15 @@ protected:
     }
 
 private:
-    actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
+    actor_zeta::scheduler::sharing_scheduler* scheduler_;
     size_t cursor_ = 0;
     std::vector<worker_actor::unique_actor> workers_;
 };
 
 TEST_CASE("shutdown - basic test") {
     auto* resource = actor_zeta::pmr::get_default_resource();
-    auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource, 1, 100);
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
@@ -97,7 +95,8 @@ TEST_CASE("shutdown - basic test") {
 
 TEST_CASE("shutdown - multiple actors") {
     auto* resource = actor_zeta::pmr::get_default_resource();
-    auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource, 1, 100);
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
     // Create multiple actors
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> actors;
@@ -125,7 +124,8 @@ TEST_CASE("shutdown - multiple actors") {
 
 TEST_CASE("shutdown - immediate stop") {
     auto* resource = actor_zeta::pmr::get_default_resource();
-    auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource, 1, 100);
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 

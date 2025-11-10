@@ -22,8 +22,7 @@ namespace actor_zeta { namespace base {
 
     template<class Actor, class MailBox>
     class cooperative_actor<Actor, MailBox, actor_type::classic>
-        : public actor_abstract_t
-        , public scheduler::resumable_t {
+        : public actor_abstract_t {
     private:
         static constexpr bool check_dispatch_traits_exists() {
             using dispatch_traits_check = typename Actor::dispatch_traits;
@@ -35,76 +34,15 @@ namespace actor_zeta { namespace base {
         using mailbox_t = MailBox;
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, MailBox, actor_type::classic>, pmr::deleter_t>;
 
-        scheduler::resume_info resume(actor_zeta::scheduler::scheduler_abstract_t* sched, size_t max_throughput) noexcept final {
-            detail::ignore_unused(sched);
-            return resume_core_(max_throughput);
-        }
-
+        /// @brief Resume execution - process messages from mailbox
+        /// @param max_throughput Maximum number of messages to process
+        /// @return Resume information with status and messages processed
+        ///
+        /// Flow scenarios:
+        /// A) Scheduled after enqueue: inbox is unblocked, has messages
+        /// B) Batch: many enqueue() calls, then single schedule - inbox unblocked with multiple messages
+        /// C) Synchronous: direct resume() call on fresh actor - inbox may be blocked
         scheduler::resume_info resume(size_t max_throughput) noexcept {
-            return resume_core_(max_throughput);
-        }
-
-        void intrusive_ptr_add_ref_impl() final {
-            ref();
-        }
-
-        void intrusive_ptr_release_impl() final {
-            deref();
-        }
-
-        ~cooperative_actor() override {
-
-        }
-
-    protected:
-        explicit cooperative_actor(pmr::memory_resource* in_resource)
-            : actor_abstract_t(check_ptr(in_resource))
-            , current_message_(nullptr)
-            , mailbox_() {
-            static_assert(check_dispatch_traits_exists(),
-                "Actor must define nested 'struct dispatch_traits { using methods = type_list<...>; }'");
-            mailbox().try_block();
-        }
-
-    private:
-
-        bool enqueue_impl(mailbox::message_ptr msg) final {
-            assert(msg.get() != nullptr);
-            switch (mailbox().push_back(std::move(msg))) {
-                case detail::enqueue_result::unblocked_reader: {
-                    // Actor was blocked, now unblocked - needs to be scheduled!
-                    return true;
-                }
-                case detail::enqueue_result::success: {
-                    // Actor is already active (executing or in queue) - don't schedule again!
-                    return false;
-                }
-                case detail::enqueue_result::queue_closed: {
-                    return false;
-                }
-                default: {
-                    assert(false && "enqueue_result: unreachable");
-                    return false;
-                }
-            }
-        }
-
-    private:
-        class current_msg_guard final {
-        public:
-            current_msg_guard(cooperative_actor* s, mailbox::message* m) noexcept
-                : self(s)
-                , prev(s->current_message_) { self->current_message_ = m; }
-            ~current_msg_guard() noexcept { self->current_message_ = nullptr; }
-
-        private:
-            cooperative_actor* self;
-            mailbox::message* prev;
-            current_msg_guard(const current_msg_guard&);
-            current_msg_guard& operator=(const current_msg_guard&);
-        };
-
-        scheduler::resume_info resume_core_(size_t max_throughput) noexcept {
             size_t handled = 0;
 
             // Check if inbox is closed first (shutdown scenario)
@@ -112,11 +50,10 @@ namespace actor_zeta { namespace base {
                 return scheduler::resume_info(scheduler::resume_result::done, 0);
             }
 
-            // If inbox is blocked, no messages to process
-            // This can happen in legitimate scenarios:
-            // - Synchronous resume() call on newly created actor
-            // - Spurious wakeup from scheduler
-            // - Resume called before any messages arrive
+            // Check if blocked - can happen in:
+            // - Synchronous resume() on fresh actor (Flow C)
+            // - Spurious scheduler wakeup (rare)
+            // For scheduled actors (Flow A, B), inbox is already unblocked by enqueue()
             if (mailbox().blocked()) {
                 return scheduler::resume_info(scheduler::resume_result::awaiting, 0);
             }
@@ -164,6 +101,59 @@ namespace actor_zeta { namespace base {
                               : scheduler::resume_result::resume;
             return scheduler::resume_info(result, handled);
         }
+
+        ~cooperative_actor() override {
+
+        }
+
+    protected:
+        explicit cooperative_actor(pmr::memory_resource* in_resource)
+            : actor_abstract_t(check_ptr(in_resource))
+            , current_message_(nullptr)
+            , mailbox_() {
+            // Проверка наличия dispatch_traits (Actor уже полностью определен здесь)
+            static_assert(check_dispatch_traits_exists(),
+                "Actor must define nested 'struct dispatch_traits { using methods = type_list<...>; }'");
+            mailbox().try_block();
+        }
+
+    private:
+
+        bool enqueue_impl(mailbox::message_ptr msg) final {
+            assert(msg.get() != nullptr);
+            switch (mailbox().push_back(std::move(msg))) {
+                case detail::enqueue_result::unblocked_reader: {
+                    // Actor was blocked, now unblocked - needs to be scheduled!
+                    return true;
+                }
+                case detail::enqueue_result::success: {
+                    // Actor is already active (executing or in queue) - don't schedule again!
+                    return false;
+                }
+                case detail::enqueue_result::queue_closed: {
+                    return false;
+                }
+                default: {
+                    assert(false && "enqueue_result: unreachable");
+                    return false;
+                }
+            }
+        }
+
+    private:
+        class current_msg_guard final {
+        public:
+            current_msg_guard(cooperative_actor* s, mailbox::message* m) noexcept
+                : self(s)
+                , prev(s->current_message_) { self->current_message_ = m; }
+            ~current_msg_guard() noexcept { self->current_message_ = nullptr; }
+
+        private:
+            cooperative_actor* self;
+            mailbox::message* prev;
+            current_msg_guard(const current_msg_guard&);
+            current_msg_guard& operator=(const current_msg_guard&);
+        };
 
         mailbox::message* current_message() noexcept { return current_message_; }
 

@@ -35,7 +35,7 @@ public:
         ++count_collection_part;
     }
 
-    // Methods for message handling
+    // Методы для обработки сообщений
     void insert(std::string& key, std::string& value) {
         data_.emplace(key, value);
         std::cerr << id() << " " << key << " " << value << std::endl;
@@ -98,7 +98,7 @@ private:
 
 class collection_t final : public actor_zeta::actor_abstract_t {
 public:
-    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::scheduler_abstract_t* scheduler)
+    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
         : actor_zeta::actor_abstract_t(resource)
         , e_(scheduler) {
         ++count_collection;
@@ -134,7 +134,7 @@ protected:
     }
 
 private:
-    actor_zeta::scheduler::scheduler_abstract_t* e_;
+    actor_zeta::scheduler::sharing_scheduler* e_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
 };
@@ -147,8 +147,9 @@ static constexpr auto sleep_time = std::chrono::milliseconds(100);
 
 int main() {
     auto* resource = actor_zeta::pmr::get_default_resource();
-    auto scheduler = actor_zeta::scheduler::make_sharing_scheduler(resource,1, 100);
-    auto collection = actor_zeta::spawn<collection_t>(resource, scheduler);
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+    auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());
 
     std::cerr << "=== Creating 3 collection_part actors ===" << std::endl;
     collection->create();

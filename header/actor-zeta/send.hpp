@@ -20,16 +20,13 @@ namespace detail {
             )
         );
     }
-} // namespace detail
-
-
+}
     template<typename ActorPtr, typename Sender, typename Method, typename... Args>
     [[nodiscard]] inline auto send(ActorPtr* actor, Sender sender, Method method, Args&&... args)
         -> std::enable_if_t<std::is_member_function_pointer<Method>::value, bool>
     {
         using Actor = typename type_traits::callable_trait<Method>::class_type;
         using methods = typename Actor::dispatch_traits::methods;
-
 
         return runtime_dispatch_helper<Actor, Method, methods>::dispatch(
             method, actor, sender, std::forward<Args>(args)...);
@@ -44,7 +41,8 @@ namespace detail {
         using Actor = typename type_traits::callable_trait<Method>::class_type;
         using methods = typename Actor::dispatch_traits::methods;
 
-
+        // Runtime поиск метода и отправка
+        // Returns: true if actor was unblocked (needs scheduling), false otherwise
         return runtime_dispatch_helper<Actor, Method, methods>::dispatch(
             method, target, sender, std::forward<Args>(args)...);
     }

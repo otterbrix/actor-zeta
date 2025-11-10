@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cassert>
 #include <condition_variable>
 #include <limits>
@@ -9,21 +10,30 @@
 #include <vector>
 
 #include <actor-zeta/detail/ref_counted.hpp>
-#include <actor-zeta/scheduler/scheduler_abstract.hpp>
 #include <actor-zeta/scheduler/worker.hpp>
+#include <actor-zeta/scheduler/job_ptr.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
     template<class Policy>
-    class scheduler_t : public scheduler_abstract_t {
+    class scheduler_t {
     public:
-        using super = scheduler_abstract_t;
         using policy_data = typename Policy::coordinator_data;
         using worker_type = worker<Policy>;
 
         scheduler_t(size_t num_worker_threads, size_t max_throughput_param)
-            : scheduler_abstract_t(num_worker_threads, max_throughput_param)
+            : next_worker_(0)
+            , max_throughput_(max_throughput_param)
+            , num_workers_(num_worker_threads)
             , data_(this) {
+        }
+
+        inline size_t max_throughput() const {
+            return max_throughput_;
+        }
+
+        inline size_t num_workers() const {
+            return num_workers_;
         }
 
         worker_type* worker_by_id(size_t x) {
@@ -34,8 +44,7 @@ namespace actor_zeta { namespace scheduler {
             return data_;
         }
 
-    protected:
-        void start() override {
+        void start() {
             typename worker_type::policy_data init{this};
             auto num = num_workers();
             workers_.reserve(num);
@@ -50,32 +59,27 @@ namespace actor_zeta { namespace scheduler {
 
         }
 
-        void stop() override {
-            class shutdown_helper
-                : public resumable
-                , public ref_counted {
+        void stop() {
+            class shutdown_helper : public ref_counted {
             public:
-                resume_info resume(scheduler_abstract_t* ptr, size_t) override {
-                    assert(ptr != nullptr);
+                resume_info resume(size_t) {
                     std::unique_lock<std::mutex> guard(mtx);
-                    last_worker = ptr;
+                    ++completed_count;
                     cv.notify_all();
                     return resume_info(resume_result::shutdown, 0);
                 }
 
-                void intrusive_ptr_add_ref_impl() override {
-                    intrusive_ptr_add_ref(this);
+                void wait_for_completion() {
+                    std::unique_lock<std::mutex> guard(mtx);
+                    cv.wait(guard, [this] { return completed_count > 0; });
+                    --completed_count;
                 }
 
-                void intrusive_ptr_release_impl() override {
-                    intrusive_ptr_release(this);
-                }
-
-                shutdown_helper(): last_worker(nullptr) {}
+                shutdown_helper(): completed_count(0) {}
 
                 std::mutex mtx;
                 std::condition_variable cv;
-                scheduler_abstract_t* last_worker;
+                std::atomic<size_t> completed_count;
             };
             // Use a set to keep track of remaining workers.
             shutdown_helper sh;
@@ -87,33 +91,43 @@ namespace actor_zeta { namespace scheduler {
             }
             while (!alive_workers.empty()) {
                 auto it = alive_workers.begin();
-                (*it)->external_enqueue(&sh);
-                { // lifetime scope of guard
-                    std::unique_lock<std::mutex> guard(sh.mtx);
-                    sh.cv.wait(guard, [&] { return sh.last_worker != nullptr; });
-                }
+                auto job = job_ptr::wrap(&sh);
+                (*it)->external_enqueue(job);
+                sh.wait_for_completion();
                 alive_workers.erase(it);
-                sh.last_worker = nullptr;
             }
 
             for (auto& w : workers_) {
                 w->get_thread().join(); /// wait until all workers finish working
             }
 
-            /// run cleanup code for each resumable
-            auto f = &cleanup_and_release;
+            /// run cleanup code for each job
+            auto release_job = [](job_ptr job) { job.release(); };
             for (auto& w : workers_) {
-                policy_.foreach_resumable(w.get(), f);
+                policy_.foreach_resumable(w.get(), release_job);
             }
-            policy_.foreach_central_resumable(this, f);
+            policy_.foreach_central_resumable(this, release_job);
         }
 
-        void enqueue(resumable* ptr) override {
-            intrusive_ptr_add_ref(ptr);  // Take ownership before scheduling
-            policy_.central_enqueue(this, ptr);
+        /// @brief Enqueue a job for execution
+        /// @param job Type-erased job pointer
+        void enqueue(job_ptr job) {
+            job.add_ref();  // Take ownership before scheduling
+            policy_.central_enqueue(this, job);
+        }
+
+        /// @brief Enqueue an actor for execution (convenience template)
+        /// @tparam T Actor type with resume(size_t) method
+        /// @param actor Pointer to actor to schedule
+        template<typename T>
+        void enqueue(T* actor) {
+            enqueue(job_ptr::wrap(actor));
         }
 
     private:
+        std::atomic<size_t> next_worker_;
+        size_t max_throughput_;
+        size_t num_workers_;
         std::vector<std::unique_ptr<worker_type>> workers_;
         policy_data data_;
         Policy policy_;

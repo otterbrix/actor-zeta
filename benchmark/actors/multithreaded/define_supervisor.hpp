@@ -2,6 +2,7 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
+#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <map>
 
 template<typename Actor>
@@ -11,10 +12,10 @@ class simple_supervisor final : public actor_zeta::actor_abstract_t {
 
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_1_;
-    actor_zeta::scheduler::scheduler_abstract_t* scheduler_;
+    actor_zeta::scheduler::sharing_scheduler* scheduler_;
 
 public:
-    explicit simple_supervisor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::scheduler_abstract_t* sched = nullptr)
+    explicit simple_supervisor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : actor_zeta::actor_abstract_t(ptr)
         , prepare_behavior_(actor_zeta::make_behavior(resource(), this, &simple_supervisor::prepare))
         , send_behavior_(actor_zeta::make_behavior(resource(), this, &simple_supervisor::send))
@@ -23,7 +24,7 @@ public:
         , scheduler_(sched) {
     }
 
-    void set_scheduler(actor_zeta::scheduler::scheduler_abstract_t* sched) {
+    void set_scheduler(actor_zeta::scheduler::sharing_scheduler* sched) {
         scheduler_ = sched;
     }
 

@@ -5,7 +5,7 @@
 #include <thread>
 
 #include "actor-zeta/detail/launch_thread.hpp"
-#include "resumable.hpp"
+#include "job_ptr.hpp"
 
 namespace actor_zeta { namespace scheduler {
 
@@ -15,7 +15,6 @@ namespace actor_zeta { namespace scheduler {
     template<class Policy>
     class worker final {
     public:
-        using job_ptr = resumable*;
         using scheduler_ptr = scheduler_t<Policy>*;
         using policy_data = typename Policy::worker_data;
 
@@ -28,7 +27,7 @@ namespace actor_zeta { namespace scheduler {
 
         void start() {
             assert(this_thread_.get_id() == std::thread::id{}); /// TODO: see implement asio
-            this_thread_ = detail::launch_thread("worker", [this] { run(); });
+            this_thread_ = actor_zeta::detail::launch_thread("worker", [this] { run(); });
         }
 
         worker(worker&) = delete;
@@ -37,12 +36,12 @@ namespace actor_zeta { namespace scheduler {
         worker& operator=(const worker&) = delete;
 
         void external_enqueue(job_ptr job) {
-            assert(job != nullptr);
+            assert(job && "Cannot enqueue null job");
             policy_.external_enqueue(this, job);
         }
 
         void execute_later(job_ptr job) {
-            assert(job != nullptr);
+            assert(job && "Cannot enqueue null job");
             policy_.internal_enqueue(this, job);
         }
 
@@ -70,9 +69,9 @@ namespace actor_zeta { namespace scheduler {
         void run() {
             for (;;) {
                 auto job = policy_.dequeue(this);
-                assert(job != nullptr);
+                assert(job && "Dequeued null job");
                 policy_.before_resume(this, job);
-                auto res = job->resume(parent_, max_throughput_);
+                auto res = job.resume(max_throughput_);
                 policy_.after_resume(this, job);
                 switch (res) {
                     case resume_result::resume: {
@@ -81,11 +80,11 @@ namespace actor_zeta { namespace scheduler {
                     }
                     case resume_result::done: {
                         policy_.after_completion(this, job);
-                        intrusive_ptr_release(job);
+                        job.release();
                         break;
                     }
                     case resume_result::awaiting: {
-                        intrusive_ptr_release(job);
+                        job.release();
                         break;
                     }
                     case resume_result::shutdown: {

@@ -28,6 +28,4 @@ namespace actor_zeta {
     using mailbox::message_id;
     using mailbox::make_message_id;
 
-    using scheduler::scheduler_t;
-
 } // namespace actor_zeta
