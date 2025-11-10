@@ -165,46 +165,6 @@ public:
     >;
 
 private:
-    void init() {
-        init_counter++;
-        TRACE("+++");
-    }
-
-    void search(std::string& key) {
-        search_counter++;
-        std::cerr << __func__ << " :: "
-                  << "key: " << key
-                  << std::endl;
-    }
-
-    void add(const std::string& key, const std::string& value) {
-        add_counter++;
-        std::cerr << __func__ << " :: "
-                  << "key: " << key << " | "
-                  << "value: " << value << " | "
-                  << std::endl;
-    }
-
-    void delete_table(const std::string& name, const std::string& path, int type) {
-        delete_table_counter++;
-        std::cerr << __func__ << " :: "
-                  << "table name: " << name << " | "
-                  << "path: " << path << " | "
-                  << "type: " << type << " | "
-                  << std::endl;
-    }
-
-    void create_table(const std::string& name, const std::string& path, int type, int time_sync) {
-        create_table_counter++;
-        std::cerr << __func__ << " :: "
-                  << "table name: " << name << " | "
-                  << "path: " << path << " | "
-                  << "type: " << type << " | "
-                  << "time_sync: " << time_sync << " | "
-                  << std::endl;
-    }
-
-private:
     actor_zeta::behavior_t init_;
     actor_zeta::behavior_t search_;
     actor_zeta::behavior_t add_;
@@ -220,6 +180,45 @@ uint64_t storage_t::search_counter = 0;
 uint64_t storage_t::add_counter = 0;
 uint64_t storage_t::delete_table_counter = 0;
 uint64_t storage_t::create_table_counter = 0;
+
+void storage_t::init() {
+    init_counter++;
+    TRACE("+++");
+}
+
+void storage_t::search(std::string& key) {
+    search_counter++;
+    std::cerr << __func__ << " :: "
+              << "key: " << key
+              << std::endl;
+}
+
+void storage_t::add(const std::string& key, const std::string& value) {
+    add_counter++;
+    std::cerr << __func__ << " :: "
+              << "key: " << key << " | "
+              << "value: " << value << " | "
+              << std::endl;
+}
+
+void storage_t::delete_table(const std::string& name, const std::string& path, int type) {
+    delete_table_counter++;
+    std::cerr << __func__ << " :: "
+              << "table name: " << name << " | "
+              << "path: " << path << " | "
+              << "type: " << type << " | "
+              << std::endl;
+}
+
+void storage_t::create_table(const std::string& name, const std::string& path, int type, int time_sync) {
+    create_table_counter++;
+    std::cerr << __func__ << " :: "
+              << "table name: " << name << " | "
+              << "path: " << path << " | "
+              << "type: " << type << " | "
+              << "time_sync: " << time_sync << " | "
+              << std::endl;
+}
 
 class test_handlers final : public actor_zeta::basic_actor<test_handlers> {
 public:
