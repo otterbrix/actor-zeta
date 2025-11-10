@@ -70,11 +70,6 @@ inline void worker_t::work_data(const std::string& data, const std::string& /*op
 /// non thread safe
 class supervisor_lite final : public actor_zeta::actor_abstract_t {
 public:
-    enum class system_command : std::uint64_t {
-        broadcast = 0x00,
-        create
-    };
-
     supervisor_lite(memory_resource* ptr)
         : actor_zeta::actor_abstract_t(ptr)
         , create_(actor_zeta::make_behavior(resource(),  this, &supervisor_lite::create))
@@ -94,18 +89,38 @@ public:
         ++size_actors_;
     }
 
-    void  behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::make_message_id(system_command::create): {
-                create_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(system_command::broadcast): {
-                broadcast_(msg);
-                break;
-            }
+    void broadcast_impl(std::vector<actor_zeta::message_ptr> msg) {
+        auto msgs = std::move(msg);
+        auto end = size_actor();
+
+        if (end == 0) {
+            std::cerr << "Warning: no actors to broadcast to!" << std::endl;
+            return;
+        }
+
+        // Send all messages first
+        for (std::size_t i = 0; i != end; ++i) {
+            actors_[i]->enqueue(std::move(msgs[i]));
+        }
+        // Then schedule all actors once
+        for (std::size_t i = 0; i != end; ++i) {
+            e_->enqueue(actors_[i].get());
         }
     }
+
+    void  behavior(actor_zeta::mailbox::message* msg) {
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>) {
+            create_(msg);
+        } else if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::broadcast_impl>) {
+            broadcast_(msg);
+        }
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &supervisor_lite::create,
+        &supervisor_lite::broadcast_impl
+    >;
 
     template<class Id = uint64_t, class... Args>
     void broadcast_on_worker(Id id, Args... args) {
@@ -146,25 +161,6 @@ private:
         return size_actors_.load();
     }
 
-    void broadcast_impl(std::vector<actor_zeta::message_ptr> msg) {
-        auto msgs = std::move(msg);
-        auto end = size_actor();
-
-        if (end == 0) {
-            std::cerr << "Warning: no actors to broadcast to!" << std::endl;
-            return;
-        }
-
-        // Send all messages first
-        for (std::size_t i = 0; i != end; ++i) {
-            actors_[i]->enqueue(std::move(msgs[i]));
-        }
-        // Then schedule all actors once
-        for (std::size_t i = 0; i != end; ++i) {
-            e_->enqueue(actors_[i].get());
-        }
-    }
-
     actor_zeta::behavior_t create_;
     actor_zeta::behavior_t broadcast_;
     actor_zeta::scheduler::scheduler_abstract_t* e_;
@@ -184,7 +180,7 @@ int main() {
         auto msg = actor_zeta::make_message(
             mr_ptr,
             actor_zeta::address_t::empty_address(),
-            supervisor_lite::system_command::create);
+            actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>);
         supervisor->enqueue(std::move(msg));
     }
 

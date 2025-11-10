@@ -1,11 +1,12 @@
 #pragma once
 
-#include <actor-zeta/detail/pmr/memory_resource.hpp>
+#include <actor-zeta/core.hpp>
 
 #include <iostream>
 #include <list>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <set>
 #include <string>
 #include <tuple>
@@ -15,10 +16,8 @@
 
 namespace benchmark_messages {
 
-#if HAVE_STD_PMR==1
     std::unique_ptr<unsigned char[]> buffer = std::make_unique<unsigned char[]>(static_cast<size_t>(1073741824) * 1);
     std::unique_ptr<unsigned char[]> backup = std::make_unique<unsigned char[]>(static_cast<size_t>(1073741824) * 2);
-#endif
 
     namespace by_name {
 
@@ -80,11 +79,10 @@ namespace benchmark_messages {
         return getSize<((N + alignof(Head) - 1) & -(alignof(Head))) + sizeof(Head), Args...>();
     }
 
-#if HAVE_STD_PMR==1
 #define DEFINE_FIXTURE_CLASS_MEM_RESOURCE_1(class_name, construct_name)                                                                       \
     template<class P, typename... CustomArgs>                                                                                                 \
     class class_name : public ::benchmark::Fixture {                                                                                          \
-        using monotonic_buffer_resource = actor_zeta::pmr::monotonic_buffer_resource;\
+        using monotonic_buffer_resource = std::pmr::monotonic_buffer_resource;\
                                                                                                                                               \
     public:                                                                                                                                   \
         virtual void                                                                                                                          \
@@ -112,9 +110,6 @@ namespace benchmark_messages {
         monotonic_buffer_resource* upstr;                                                                                                     \
         monotonic_buffer_resource* mr;                                                                                                        \
     }
-#else
-#define DEFINE_FIXTURE_CLASS_MEM_RESOURCE_1(class_name, construct_name) DEFINE_FIXTURE_CLASS_1(class_name, construct_name)
-#endif
 
     namespace by_args {
 
@@ -185,11 +180,10 @@ namespace benchmark_messages {
         static constexpr size_t counter_ = sizeof...(CustomArgs);                                                     \
     }
 
-#if HAVE_STD_PMR==1
 #define DEFINE_FIXTURE_CLASS_MEM_RESOURCE_2(class_name, construct_name, revert_type_seq)                              \
     template<class P, typename... CustomArgs>                                                                         \
     class class_name : public ::benchmark::Fixture {                                                                  \
-        using monotonic_buffer_resource = actor_zeta::pmr::monotonic_buffer_resource;                         \
+        using monotonic_buffer_resource = std::pmr::monotonic_buffer_resource;                         \
                                                                                                                       \
     public:                                                                                                           \
         virtual void                                                                                                  \
@@ -217,9 +211,6 @@ namespace benchmark_messages {
         monotonic_buffer_resource* upstr;                                                                             \
         monotonic_buffer_resource* mr;                                                                                \
     }
-#else
-#define DEFINE_FIXTURE_CLASS_MEM_RESOURCE_2(class_name, construct_name, revert_type_seq) DEFINE_FIXTURE_CLASS_2(class_name, construct_name, revert_type_seq)
-#endif
 
         namespace smart_pointer_args {
 

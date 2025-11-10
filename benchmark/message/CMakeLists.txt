@@ -1,5 +1,7 @@
 PROJECT(benchmark_message CXX)
 
+find_package(benchmark REQUIRED)
+
 set(${PROJECT_NAME}_SOURCES
     message.cpp
 )
@@ -17,8 +19,8 @@ add_executable(${PROJECT_NAME}
 )
 
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC actor-zeta 
-    PUBLIC CONAN_PKG::benchmark
+    PUBLIC actor-zeta
+    PUBLIC benchmark::benchmark
 )
 
 ###########################################################################################
@@ -41,6 +43,6 @@ add_executable(${PROJECT_NAME}
 )
 
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC actor-zeta 
-    PUBLIC CONAN_PKG::benchmark
+    PUBLIC actor-zeta
+    PUBLIC benchmark::benchmark
 )

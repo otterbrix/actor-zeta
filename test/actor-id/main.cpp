@@ -17,10 +17,6 @@ using actor_zeta::pmr::memory_resource;
 class dummy_supervisor;
 class storage_t;
 
-enum class command_t {
-    create = 0x00
-};
-
 class dummy_supervisor final {
 public:
     dummy_supervisor(memory_resource* resource_ptr)
@@ -41,11 +37,9 @@ public:
     void create();
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::make_message_id(command_t::create): {
-                create_(msg);
-                break;
-            }
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create>) {
+            create_(msg);
         }
     }
 
@@ -53,6 +47,10 @@ public:
         auto tmp = std::move(msg);
         behavior(tmp.get());
     }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &dummy_supervisor::create
+    >;
 
 private:
     actor_zeta::pmr::memory_resource* resource_;

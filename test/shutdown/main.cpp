@@ -16,7 +16,14 @@ public:
         , ping_(actor_zeta::make_behavior(resource(), this, &worker_actor::ping)) {
     }
 
-    void ping();
+    void ping() {
+        // Empty handler
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+                &worker_actor::ping
+            >;
+
 
     void behavior(actor_zeta::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
@@ -24,17 +31,9 @@ public:
         }
     }
 
-    using dispatch_traits = actor_zeta::dispatch_traits<
-        &worker_actor::ping
-    >;
-
 private:
     actor_zeta::behavior_t ping_;
 };
-
-void worker_actor::ping() {
-    // Empty handler
-}
 
 // Balancer actor that manually enqueues and schedules
 class balancer_actor final : public actor_zeta::actor_abstract_t {

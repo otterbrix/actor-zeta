@@ -11,11 +11,6 @@
 class storage_t;
 class test_handlers;
 
-enum class dummy_supervisor_command : uint64_t {
-    create_storage = 1,
-    create_test_handlers = 2
-};
-
 class dummy_supervisor final : public actor_zeta::actor_abstract_t {
 public:
     static uint64_t constructor_counter;
@@ -98,14 +93,6 @@ uint64_t dummy_supervisor::add_supervisor_impl_counter = 0;
 
 uint64_t dummy_supervisor::enqueue_base_counter = 0;
 
-enum class storage_names : uint64_t {
-    init = 0x00,
-    search,
-    add,
-    delete_table,
-    create_table
-};
-
 class storage_t final : public actor_zeta::basic_actor<storage_t> {
 public:
     static uint64_t constructor_counter;
@@ -144,27 +131,17 @@ public:
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command().integer_value()) {
-            case actor_zeta::make_message_id(storage_names::init): {
-                init_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::search): {
-                search_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::add): {
-                add_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::delete_table): {
-                delete_table_(msg);
-                break;
-            }
-            case actor_zeta::make_message_id(storage_names::create_table): {
-                create_table_(msg);
-                break;
-            }
+        auto cmd = msg->command();
+        if (cmd == actor_zeta::msg_id<storage_t, &storage_t::init>) {
+            init_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::search>) {
+            search_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::add>) {
+            add_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::delete_table>) {
+            delete_table_(msg);
+        } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::create_table>) {
+            create_table_(msg);
         }
     }
 
@@ -172,48 +149,22 @@ public:
         destructor_counter++;
     }
 
-    using dispatch_traits = actor_zeta::dispatch_traits<>;
+    // Forward declarations for dispatch_traits
+    void init();
+    void search(std::string& key);
+    void add(const std::string& key, const std::string& value);
+    void delete_table(const std::string& name, const std::string& path, int type);
+    void create_table(const std::string& name, const std::string& path, int type, int time_sync);
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &storage_t::init,
+        &storage_t::search,
+        &storage_t::add,
+        &storage_t::delete_table,
+        &storage_t::create_table
+    >;
 
 private:
-    void init() {
-        init_counter++;
-        TRACE("+++");
-    }
-
-    void search(std::string& key) {
-        search_counter++;
-        std::cerr << __func__ << " :: "
-                  << "key: " << key
-                  << std::endl;
-    }
-
-    void add(const std::string& key, const std::string& value) {
-        add_counter++;
-        std::cerr << __func__ << " :: "
-                  << "key: " << key << " | "
-                  << "value: " << value << " | "
-                  << std::endl;
-    }
-
-    void delete_table(const std::string& name, const std::string& path, int type) {
-        delete_table_counter++;
-        std::cerr << __func__ << " :: "
-                  << "table name: " << name << " | "
-                  << "path: " << path << " | "
-                  << "type: " << type << " | "
-                  << std::endl;
-    }
-
-    void create_table(const std::string& name, const std::string& path, int type, int time_sync) {
-        create_table_counter++;
-        std::cerr << __func__ << " :: "
-                  << "table name: " << name << " | "
-                  << "path: " << path << " | "
-                  << "type: " << type << " | "
-                  << "time_sync: " << time_sync << " | "
-                  << std::endl;
-    }
-
     actor_zeta::behavior_t init_;
     actor_zeta::behavior_t search_;
     actor_zeta::behavior_t add_;
@@ -230,13 +181,44 @@ uint64_t storage_t::add_counter = 0;
 uint64_t storage_t::delete_table_counter = 0;
 uint64_t storage_t::create_table_counter = 0;
 
-enum class test_handlers_names : uint64_t {
-    ptr_0 = 0x00,
-    ptr_1,
-    ptr_2,
-    ptr_3,
-    ptr_4,
-}; // namespace test_handlers_names
+void storage_t::init() {
+    init_counter++;
+    TRACE("+++");
+}
+
+void storage_t::search(std::string& key) {
+    search_counter++;
+    std::cerr << __func__ << " :: "
+              << "key: " << key
+              << std::endl;
+}
+
+void storage_t::add(const std::string& key, const std::string& value) {
+    add_counter++;
+    std::cerr << __func__ << " :: "
+              << "key: " << key << " | "
+              << "value: " << value << " | "
+              << std::endl;
+}
+
+void storage_t::delete_table(const std::string& name, const std::string& path, int type) {
+    delete_table_counter++;
+    std::cerr << __func__ << " :: "
+              << "table name: " << name << " | "
+              << "path: " << path << " | "
+              << "type: " << type << " | "
+              << std::endl;
+}
+
+void storage_t::create_table(const std::string& name, const std::string& path, int type, int time_sync) {
+    create_table_counter++;
+    std::cerr << __func__ << " :: "
+              << "table name: " << name << " | "
+              << "path: " << path << " | "
+              << "type: " << type << " | "
+              << "time_sync: " << time_sync << " | "
+              << std::endl;
+}
 
 class test_handlers final : public actor_zeta::basic_actor<test_handlers> {
 public:
@@ -289,7 +271,7 @@ public:
         }
     }
 
-    ~test_handlers() override = default;
+
 
     // Forward declarations for dispatch_traits
     void ptr_0_handler();

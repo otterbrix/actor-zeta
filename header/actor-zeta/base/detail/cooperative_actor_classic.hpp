@@ -72,10 +72,12 @@ namespace actor_zeta { namespace base {
             assert(msg.get() != nullptr);
             switch (mailbox().push_back(std::move(msg))) {
                 case detail::enqueue_result::unblocked_reader: {
+                    // Actor was blocked, now unblocked - needs to be scheduled!
                     return true;
                 }
                 case detail::enqueue_result::success: {
-                    return true;
+                    // Actor is already active (executing or in queue) - don't schedule again!
+                    return false;
                 }
                 case detail::enqueue_result::queue_closed: {
                     return false;
@@ -110,10 +112,13 @@ namespace actor_zeta { namespace base {
                 return scheduler::resume_info(scheduler::resume_result::done, 0);
             }
 
-            // Check if inbox is blocked to avoid assertion in empty()
+            // If inbox is blocked, no messages to process
+            // This can happen in legitimate scenarios:
+            // - Synchronous resume() call on newly created actor
+            // - Spurious wakeup from scheduler
+            // - Resume called before any messages arrive
             if (mailbox().blocked()) {
-                // Inbox is blocked, try to resume (another thread may have enqueued)
-                return scheduler::resume_info(scheduler::resume_result::resume, 0);
+                return scheduler::resume_info(scheduler::resume_result::awaiting, 0);
             }
 
             if (mailbox().empty()) {

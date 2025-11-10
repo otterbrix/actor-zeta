@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 
+find_package(benchmark REQUIRED)
+
 set(project benchmark_actors_singlethreaded)
 if (CMAKE_VERSION VERSION_LESS 3.0)
     PROJECT(${project} CXX)
@@ -19,4 +21,7 @@ message(STATUS "PROJECT_NAME = ${PROJECT_NAME}")
 add_executable(${PROJECT_NAME}
     ${${PROJECT_NAME}_SOURCES}
     ${${PROJECT_NAME}_HEADERS})
-target_link_libraries(${PROJECT_NAME} actor-zeta CONAN_PKG::benchmark)
+target_link_libraries(${PROJECT_NAME}
+    PUBLIC actor-zeta
+    PUBLIC benchmark::benchmark
+)

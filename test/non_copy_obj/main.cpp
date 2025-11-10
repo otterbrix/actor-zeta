@@ -15,10 +15,6 @@ using actor_zeta::pmr::memory_resource;
 class dummy_supervisor;
 class storage_t;
 
-enum class command_t {
-    check = 0x00
-};
-
 struct dummy_data {
     int number{0};
     std::string name{"default_name"};
@@ -40,11 +36,8 @@ public:
     void check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>: {
-                check_(msg);
-                break;
-            }
+        if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
+            check_(msg);
         }
     }
 

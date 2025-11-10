@@ -4,18 +4,12 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
 
-enum class command : uint64_t {
-    test = 0
-};
-
 class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
     explicit test_actor(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_actor>(ptr)
         , test_(actor_zeta::make_behavior(resource(), this, &test_actor::test)) {
     }
-
-    void test();
 
     void behavior(actor_zeta::message* msg) {
         if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
@@ -25,9 +19,10 @@ public:
 
     size_t processed_count() const { return processed_count_; }
 
-    using dispatch_traits = actor_zeta::dispatch_traits<
-        &test_actor::test
-    >;
+    // Forward declaration for dispatch_traits
+    void test();
+
+    using dispatch_traits = actor_zeta::dispatch_traits<&test_actor::test>;
 
 private:
     actor_zeta::behavior_t test_;

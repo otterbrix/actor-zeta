@@ -109,6 +109,7 @@ namespace actor_zeta { namespace scheduler {
         }
 
         void enqueue(resumable* ptr) override {
+            intrusive_ptr_add_ref(ptr);  // Take ownership before scheduling
             policy_.central_enqueue(this, ptr);
         }
 
