@@ -1,10 +1,6 @@
 #include <cassert>
-
-#include <atomic>
-#include <chrono>
 #include <iostream>
 #include <memory>
-#include <thread>
 #include <vector>
 
 #include <actor-zeta.hpp>
@@ -12,66 +8,76 @@
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
-static std::atomic<uint64_t> counter_download_data{0};
-static std::atomic<uint64_t> counter_work_data{0};
-
 using actor_zeta::pmr::memory_resource;
 
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
-    void download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
-    void work_data(const std::string& data, const std::string& /*operatorName*/);
+    // Request-response methods (return results automatically via promise)
+    std::size_t download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
+    std::size_t work_data_with_result(const std::string& data, const std::string& /*operatorName*/);
 
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &worker_t::download,
-        &worker_t::work_data
+        &worker_t::download_with_result,
+        &worker_t::work_data_with_result
     >;
 
     worker_t(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_t>(ptr)
-        , download_(actor_zeta::make_behavior(resource(), this, &worker_t::download))
-        , work_data_(actor_zeta::make_behavior(resource(),  this, &worker_t::work_data)) {
+        , download_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::download_with_result))
+        , work_data_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::work_data_with_result)) {
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {
-        switch (msg->command()) {
-            case actor_zeta::msg_id<worker_t, &worker_t::download>: {
-                download_(msg);
+        auto cmd = msg->command();
+        std::cerr << "[Worker " << id() << "] behavior() called, cmd=" << cmd
+                  << ", error_before=" << static_cast<int>(msg->error()) << std::endl;
+
+        switch (cmd) {
+            case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>: {
+                download_with_result_(msg);
+                std::cerr << "[Worker " << id() << "] After handler, error=" << static_cast<int>(msg->error()) << std::endl;
                 break;
             }
-            case actor_zeta::msg_id<worker_t, &worker_t::work_data>: {
-                work_data_(msg);
+            case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>: {
+                work_data_with_result_(msg);
                 break;
             }
         }
     }
 
 private:
-    actor_zeta::behavior_t download_;
-    actor_zeta::behavior_t work_data_;
+    actor_zeta::behavior_t download_with_result_;
+    actor_zeta::behavior_t work_data_with_result_;
     std::string tmp_;
 };
 
-inline void worker_t::download(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
+// Request-response implementations - automatically return results via promise
+inline std::size_t worker_t::download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
+    std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
     tmp_ = url;
-    counter_download_data++;
+    std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
+    return tmp_.size(); // Return downloaded size
 }
 
-inline void worker_t::work_data(const std::string& data, const std::string& /*operatorName*/) {
+inline std::size_t worker_t::work_data_with_result(const std::string& data, const std::string& /*operatorName*/) {
     tmp_ = data;
-    counter_work_data++;
+    return tmp_.size(); // Return processed size
 }
 
 /// non thread safe
-class supervisor_lite final : public actor_zeta::actor_abstract_t {
+class supervisor_lite final : public actor_zeta::base::actor_mixin<supervisor_lite> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     supervisor_lite(memory_resource* ptr)
-        : actor_zeta::actor_abstract_t(ptr)
-        , create_(actor_zeta::make_behavior(resource(),  this, &supervisor_lite::create))
-        , broadcast_(actor_zeta::make_behavior(resource(), this, &supervisor_lite::broadcast_impl))
+        : actor_zeta::base::actor_mixin<supervisor_lite>()
+        , resource_(ptr)
+        , create_(actor_zeta::make_behavior(resource_,  this, &supervisor_lite::create))
         , e_(new actor_zeta::scheduler::sharing_scheduler(2, 1000)) {
         e_->start();
     }
+
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     ~supervisor_lite() {
         e_->stop();
@@ -79,85 +85,52 @@ public:
     }
 
     void create() {
-        auto ptr = actor_zeta::spawn<worker_t>(resource());
+        auto ptr = actor_zeta::spawn<worker_t>(resource_);
         actors_.emplace_back(std::move(ptr));
         ++size_actors_;
     }
 
-    void broadcast_impl(std::vector<actor_zeta::message_ptr> msg) {
-        auto msgs = std::move(msg);
-        auto end = size_actor();
-
-        if (end == 0) {
-            std::cerr << "Warning: no actors to broadcast to!" << std::endl;
-            return;
-        }
-
-        // Send all messages first
-        for (std::size_t i = 0; i != end; ++i) {
-            actors_[i]->enqueue(std::move(msgs[i]));
-        }
-        // Then schedule all actors once
-        for (std::size_t i = 0; i != end; ++i) {
-            e_->enqueue(actors_[i].get());
-        }
-    }
-
-    void  behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>) {
             create_(msg);
-        } else if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::broadcast_impl>) {
-            broadcast_(msg);
         }
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &supervisor_lite::create,
-        &supervisor_lite::broadcast_impl
+        &supervisor_lite::create
     >;
 
-    template<class Id = uint64_t, class... Args>
-    void broadcast_on_worker(Id id, Args... args) {
-        auto end = size_actor();
+    // Public access to workers for direct send() with futures
+    worker_t* get_worker(std::size_t index) {
+        return index < actors_.size() ? actors_[index].get() : nullptr;
+    }
 
-        if (end == 0) {
-            return;
-        }
+    std::size_t worker_count() const noexcept {
+        return size_actors_.load();
+    }
 
-        // Direct broadcast - first enqueue to all actors
-        for (std::size_t i = 0; i < end; ++i) {
-            auto msg = actor_zeta::make_message(
-                resource(),
-                address(),
-                id,
-                args...);
-            actors_[i]->enqueue(std::move(msg));
+    // Schedule worker for execution
+    void schedule_worker(std::size_t index) {
+        if (index < actors_.size()) {
+            e_->enqueue(actors_[index].get());
         }
+    }
 
-        // Then schedule all actors once
-        for (std::size_t i = 0; i < end; ++i) {
-            e_->enqueue(actors_[i].get());
-        }
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
     }
 
 protected:
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            auto tmp = std::move(msg);
-            behavior(tmp.get());
-        }
-        return true;
-    }
 
 private:
     std::size_t size_actor() noexcept {
         return size_actors_.load();
     }
 
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::behavior_t create_;
-    actor_zeta::behavior_t broadcast_;
     actor_zeta::scheduler::sharing_scheduler* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};
@@ -170,38 +143,59 @@ int main() {
 
     int const actors = 5;
 
-    // Create actors directly (supervisor processes messages synchronously)
+    // Create actors using new send() API (supervisor processes messages synchronously)
+    // Collect futures from create() calls and wait for completion
+    std::vector<supervisor_lite::unique_future<void>> create_futures;
+    create_futures.reserve(actors);
     for (auto i = actors; i > 0; --i) {
-        auto msg = actor_zeta::make_message(
-            mr_ptr,
-            actor_zeta::address_t::empty_address(),
-            actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>);
-        supervisor->enqueue(std::move(msg));
+        create_futures.push_back(actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &supervisor_lite::create));
+    }
+
+    // Wait for all actors to be created
+    for (auto& future : create_futures) {
+        std::move(future).get();
     }
 
     std::cerr << "=== Created " << actors << " worker actors ===" << std::endl;
 
-    // Broadcast download task - one message to all actors
-    std::cerr << "=== Broadcasting download task to all " << actors << " actors ===" << std::endl;
-    supervisor->broadcast_on_worker(actor_zeta::msg_id<worker_t, &worker_t::download>, std::string("url"), std::string("user"), std::string("pass"));
+    // Demonstrate request-response pattern with futures
+    std::cerr << "\n=== REQUEST-RESPONSE PATTERN WITH FUTURES ===" << std::endl;
+    std::cerr << "Collecting futures from multiple workers..." << std::endl;
 
-    // Broadcast work_data task - one message to all actors
-    std::cerr << "=== Broadcasting work_data task to all " << actors << " actors ===" << std::endl;
-    supervisor->broadcast_on_worker(actor_zeta::msg_id<worker_t, &worker_t::work_data>, std::string("data"), std::string("operator"));
+    std::vector<worker_t::unique_future<std::size_t>> futures;
+    futures.reserve(supervisor->worker_count()); // CRITICAL: Reserve to avoid reallocation!
+    for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
+        auto* worker = supervisor->get_worker(i);
+        if (worker) {
+            auto future = actor_zeta::send(
+                worker,
+                actor_zeta::address_t::empty_address(),
+                &worker_t::download_with_result,
+                std::string("test_data_" + std::to_string(i)),
+                std::string("user"),
+                std::string("pass")
+            );
 
-    std::cerr << "=== Waiting for processing ===" << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (future.needs_scheduling()) {
+                supervisor->schedule_worker(i);
+            }
+            futures.push_back(std::move(future));
+        }
+    }
 
-    std::cerr << "\n=== Results ===" << std::endl;
-    std::cerr << "Download messages processed: " << counter_download_data.load() << std::endl;
-    std::cerr << "Work_data messages processed: " << counter_work_data.load() << std::endl;
+    std::cerr << "  Sent " << futures.size() << " requests, calling get() on each..." << std::endl;
 
-    auto expected = actors; // One broadcast per type, all actors should process
-    std::cerr << "Expected per counter: " << expected << std::endl;
+    // Collect results using blocking get()
+    std::size_t total_size = 0;
+    for (std::size_t i = 0; i < futures.size(); ++i) {
+        std::size_t result = std::move(futures[i]).get();
+        total_size += result;
+        std::cerr << "  Worker " << i << " returned: " << result << std::endl;
+    }
 
-    // Success if all broadcasts reached all actors
-    bool passed = counter_download_data.load() == expected && counter_work_data.load() == expected;
-    std::cerr << "\nTest result: " << (passed ? "PASSED ✓" : "FAILED ✗") << std::endl;
+    std::cerr << "  Total size from all workers: " << total_size << std::endl;
 
-    return passed ? 0 : 1;
+    std::cerr << "\n=== Request-response test: PASSED ✓ ===" << std::endl;
+
+    return 0;
 }

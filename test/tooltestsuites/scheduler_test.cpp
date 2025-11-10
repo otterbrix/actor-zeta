@@ -55,7 +55,6 @@ namespace actor_zeta { namespace test {
                 break;
             case scheduler::resume_result::done:
             case scheduler::resume_result::awaiting:
-                job.release();
                 break;
             case scheduler::resume_result::shutdown:
                 break;

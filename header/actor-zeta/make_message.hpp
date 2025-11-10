@@ -60,33 +60,37 @@ namespace actor_zeta {
         template<typename... Args>
         struct all_valid_rtt_types : all_true<is_valid_rtt_type<Args>::value...> {};
 
+        /// @brief Internal API: Create message with message_id (no arguments)
+        /// @note Prefer using send() with method pointers for type-safe messaging
+        template<typename Name>
+        typename std::enable_if<
+            is_valid_name_type<Name>::value,
+            mailbox::message_ptr>::type
+        make_message(actor_zeta::pmr::memory_resource* resource,
+                     base::address_t sender,
+                     Name&& name) {
+            assert(resource);
+            return mailbox::pmr_make_message(resource, resource, std::move(sender),
+                                             to_message_id(std::forward<Name>(name)));
+        }
+
+        /// @brief Internal API: Create message with message_id and arguments
+        /// @note Prefer using send() with method pointers for type-safe messaging
+        template<typename Name, typename... Args>
+        typename std::enable_if<
+            is_valid_name_type<Name>::value &&
+                all_valid_rtt_types<Args...>::value,
+            mailbox::message_ptr>::type
+        make_message(actor_zeta::pmr::memory_resource* resource,
+                     base::address_t sender,
+                     Name&& name,
+                     Args... args) {
+            assert(resource);
+            return mailbox::pmr_make_message(resource, resource, std::move(sender),
+                                             to_message_id(std::forward<Name>(name)),
+                                             rtt(resource, std::move(args)...));
+        }
+
     } // namespace detail
-
-    template<typename Name>
-    typename std::enable_if<
-        detail::is_valid_name_type<Name>::value,
-        mailbox::message_ptr>::type
-    make_message(actor_zeta::pmr::memory_resource* resource,
-                 base::address_t sender,
-                 Name&& name) {
-        assert(resource);
-        return mailbox::pmr_make_message(resource, resource, std::move(sender),
-                                         detail::to_message_id(std::forward<Name>(name)));
-    }
-
-    template<typename Name, typename... Args>
-    typename std::enable_if<
-        detail::is_valid_name_type<Name>::value &&
-            detail::all_valid_rtt_types<Args...>::value,
-        mailbox::message_ptr>::type
-    make_message(actor_zeta::pmr::memory_resource* resource,
-                 base::address_t sender,
-                 Name&& name,
-                 Args... args) {
-        assert(resource);
-        return mailbox::pmr_make_message(resource, resource, std::move(sender),
-                                         detail::to_message_id(std::forward<Name>(name)),
-                                         detail::rtt(resource, std::move(args)...));
-    }
 
 } // namespace actor_zeta

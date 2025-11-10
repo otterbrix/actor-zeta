@@ -136,12 +136,12 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND NOT APPLE) #--------------------
     else()
         # Auto-detect stdlib if not using Conan
         find_library(CLANG_LIBCPP
-                NAMES libc++ c++
-                HINTS ${LLVM_LIBRARY_DIRS})
+            NAMES libc++ c++
+            HINTS ${LLVM_LIBRARY_DIRS})
 
         find_library(CLANG_LIBCPP_ABI
-                NAMES libc++abi c++abi
-                HINTS ${LLVM_LIBRARY_DIRS})
+            NAMES libc++abi c++abi
+            HINTS ${LLVM_LIBRARY_DIRS})
 
         message(STATUS "Found CLANG_LIBCPP=${CLANG_LIBCPP}")
         message(STATUS "Found CLANG_LIBCPP_ABI=${CLANG_LIBCPP_ABI}")
@@ -160,9 +160,9 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND NOT APPLE) #--------------------
 
             if (NOT APPLE)
                 find_library(
-                        LIBUNWIND_LIBRARY
-                        NAMES libunwind.a
-                        PATH_SUFFIXES lib lib64)
+                    LIBUNWIND_LIBRARY
+                    NAMES libunwind.a
+                    PATH_SUFFIXES lib lib64)
 
                 if (LIBUNWIND_LIBRARY)
                     message(STATUS "libunwind found: ${LIBUNWIND_LIBRARY}, using libunwind")

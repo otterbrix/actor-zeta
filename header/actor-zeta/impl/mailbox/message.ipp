@@ -18,18 +18,29 @@ namespace actor_zeta { namespace mailbox {
     message::message(actor_zeta::pmr::memory_resource* resource, address_t sender, message_id name)
         : sender_(std::move(sender))
         , command_(std::move(name))
-        , body_(resource) {}
+        , body_(resource)
+        , result_slot_(nullptr) {}
 
     message::message(actor_zeta::pmr::memory_resource* resource, address_t sender, message_id name, actor_zeta::detail::rtt&& body)
         : sender_(std::move(sender))
         , command_(std::move(name))
-        , body_(std::allocator_arg, resource, std::move(body)) {}
+        , body_(std::allocator_arg, resource, std::move(body))
+        , result_slot_(nullptr) {}
 
+    message::message(message&& other) noexcept
+        : sender_(std::move(other.sender_))
+        , command_(std::move(other.command_))
+        , body_(std::move(other.body_))
+        , result_slot_(other.result_slot_) {
+        other.result_slot_ = nullptr;
+    }
 
     message::message(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, message&& other) noexcept
            : sender_(std::move(other.sender_))
            , command_(std::move(other.command_))
-           , body_(std::allocator_arg, resource, std::move(other.body_)) {
+           , body_(std::allocator_arg, resource, std::move(other.body_))
+           , result_slot_(other.result_slot_) {
+        other.result_slot_ = nullptr;
     }
 
     message& message::operator=(message&& other) noexcept {
@@ -38,6 +49,9 @@ namespace actor_zeta { namespace mailbox {
         sender_ = std::move(other.sender_);
         command_ = std::move(other.command_);
         body_ = std::move(other.body_);
+        result_slot_ = other.result_slot_;
+
+        other.result_slot_ = nullptr;
 
         return *this;
     }
@@ -46,7 +60,8 @@ namespace actor_zeta { namespace mailbox {
         : singly_linked(nullptr)
         , prev(nullptr)
         , sender_(address_t::empty_address())
-        , body_(resource) {}
+        , body_(resource)
+        , result_slot_(nullptr) {}
 
     message::~message() noexcept {}
 
@@ -55,6 +70,7 @@ namespace actor_zeta { namespace mailbox {
         swap(sender_, other.sender_);
         swap(command_, other.command_);
         swap(body_, other.body_);
+        swap(result_slot_, other.result_slot_);
     }
 
     bool message::is_high_priority() const {

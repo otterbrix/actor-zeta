@@ -1,27 +1,41 @@
 #pragma once
 
 #include <cassert>
+#include <atomic>
 
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/mailbox/priority.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/detail/rtt.hpp>
+#include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include "actor-zeta/detail/memory.hpp"
 
 namespace actor_zeta { namespace mailbox {
 
-    ///
-    /// @brief
-    ///
+    /// @brief Unified slot status - combines state and error code
+    /// Values 0-1: Normal states (pending, ready)
+    /// Values 2+: Error states with specific error reasons
+    enum class slot_error_code : int {
+        pending = 0,            // Awaiting processing (initial state)
+        ok = 1,                 // Result is ready (success)
+        slot_pool_exhausted = 2,
+        mailbox_full = 3,
+        broken_promise = 4,     // Actor destroyed with pending futures
+        cancelled = 5,          // Cancelled via future.cancel()
+        orphaned = 6            // Future destroyed (forced cancellation)
+    };
+
+    /// @brief Message with optional async result support
 
     class message final : public actor_zeta::detail::singly_linked<message> {
     public:
         message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;
-        message(message&& other) noexcept = default;
+        message(message&& other) noexcept;  // Cannot be default due to atomic fields
         message& operator=(message&& other) noexcept;
         explicit message(actor_zeta::pmr::memory_resource* /* resource */);
         message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/);
@@ -42,10 +56,69 @@ namespace actor_zeta { namespace mailbox {
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
+        /// @brief Get future state (result slot)
+        actor_zeta::detail::future_state_base* result_slot() const noexcept { return result_slot_; }
+
+        /// @brief Set future state (result slot)
+        void set_result_slot(actor_zeta::detail::future_state_base* slot) noexcept { result_slot_ = slot; }
+
+        /// @brief Check if cancelled (via result_slot state)
+        bool is_cancelled() const noexcept {
+            return result_slot_ && result_slot_->is_cancelled();
+        }
+
+        /// @brief Request cancellation (sets state in result_slot)
+        void cancel() noexcept {
+            if (result_slot_) {
+                result_slot_->set_state(actor_zeta::detail::future_state_enum::cancelled);
+            }
+        }
+
+        /// @brief Get current state from result_slot
+        [[nodiscard]] actor_zeta::detail::future_state_enum state() const noexcept {
+            return result_slot_ ? result_slot_->state() : actor_zeta::detail::future_state_enum::invalid;
+        }
+
+        // DEPRECATED: Kept for backward compatibility, will be removed in future versions
+        slot_error_code error() const noexcept {
+            auto s = state();
+            if (s == actor_zeta::detail::future_state_enum::ready) return slot_error_code::ok;
+            if (s == actor_zeta::detail::future_state_enum::cancelled) return slot_error_code::cancelled;
+            return slot_error_code::pending;
+        }
+
+        void set_error(slot_error_code e) noexcept {
+            // Map legacy error codes to new state enum
+            if (!result_slot_) return;
+
+            switch (e) {
+                case slot_error_code::ok:
+                    result_slot_->set_state(actor_zeta::detail::future_state_enum::ready);
+                    break;
+                case slot_error_code::cancelled:
+                case slot_error_code::orphaned:
+                    result_slot_->set_state(actor_zeta::detail::future_state_enum::cancelled);
+                    break;
+                case slot_error_code::broken_promise:
+                case slot_error_code::mailbox_full:
+                case slot_error_code::slot_pool_exhausted:
+                    result_slot_->set_state(actor_zeta::detail::future_state_enum::error);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        void mark_orphaned() noexcept { cancel(); }  // Orphaned = cancelled
+        bool is_orphaned() const noexcept { return is_cancelled(); }
+
     private:
         base::address_t sender_;
         message_id command_;
         actor_zeta::detail::rtt body_;
+
+        // Future state for request-response pattern
+        actor_zeta::detail::future_state_base* result_slot_{nullptr};
     };
 
     static_assert(std::is_move_constructible<message>::value, "");

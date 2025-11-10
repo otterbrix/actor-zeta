@@ -65,7 +65,7 @@ public:
         &collection_part_t::find
     >;
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>: {
                 insert_(msg);
@@ -96,44 +96,100 @@ private:
 
 
 
-class collection_t final : public actor_zeta::actor_abstract_t {
+class collection_t final : public actor_zeta::base::actor_mixin<collection_t> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::actor_abstract_t(resource)
+        : actor_zeta::base::actor_mixin<collection_t>()
+        , resource_(resource)
         , e_(scheduler) {
         ++count_collection;
     }
 
-    void create() {
-        auto ptr = actor_zeta::spawn<collection_part_t> (resource());
-        actors_.emplace_back(std::move(ptr));
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
 
+    void create() {
+        auto ptr = actor_zeta::spawn<collection_part_t> (resource_);
+        actors_.emplace_back(std::move(ptr));
+    }
+
+    // Dummy methods - just for dispatch_traits, never actually called
+    void insert(std::string&, std::string&) {}
+    void remove(std::string&) {}
+    void update(std::string&, std::string&) {}
+    std::string find(std::string&) { return ""; }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &collection_t::insert,
+        &collection_t::remove,
+        &collection_t::update,
+        &collection_t::find
+    >;
+
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        // Balancer logic: forward message to child actor using round-robin
+        switch (msg->command()) {
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
+                auto index = cursor_ % actors_.size();
+                ++cursor_;
+                ++count_balancer;
+
+                // Forward the message to the selected actor
+                auto child_future = actors_[index]->enqueue_impl<R>(std::move(msg));
+
+                // Execute child immediately if needed (inline execution to avoid deadlock)
+                if (child_future.needs_scheduling()) {
+                    // Process child's message immediately on this thread
+                    auto& child = actors_[index];
+                    while (!child_future.is_ready()) {
+                        child->resume(1);  // Process one message
+                    }
+                }
+
+                // Extract result from child future
+                if constexpr (std::is_same_v<R, void>) {
+                    std::move(child_future).get();  // Wait for completion
+                } else {
+                    // For non-void: get result but we'll return it via future_state below
+                }
+
+                // Create future_state<R> for balancer's return value (already ready)
+                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                                                 alignof(actor_zeta::detail::future_state<R>));
+                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
+
+                // Set result immediately (balancer executed synchronously)
+                if constexpr (std::is_same_v<R, void>) {
+                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, int{0}));
+                } else {
+                    R result = std::move(child_future).get();  // Get result from child
+                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, std::move(result)));
+                }
+
+                // Return async future (already in ready state)
+                return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
+            }
+            default: {
+                std::cerr << "unknown command" << std::endl;
+                // Return invalid future for unknown commands
+                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                                                 alignof(actor_zeta::detail::future_state<R>));
+                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
+                state->set_state(actor_zeta::detail::future_state_enum::error);
+                return unique_future<R>(state, false);
+            }
+        }
     }
 
 protected:
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp = std::move(msg);
-            switch (tmp->command()) {
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
-                case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
-                    auto index = cursor_ % actors_.size();
-                    actors_[index]->enqueue(std::move(tmp));
-                    e_->enqueue(actors_[index].get());
-                    ++cursor_;
-                    ++count_balancer;
-                    return true;
-                }
-                default: {
-                    std::cerr << "unknown command" << std::endl;
-                    return false;
-                }
-            }
-
-    }
 
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* e_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
@@ -157,16 +213,16 @@ int main() {
     collection->create();
 
     std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key1"), std::string("value1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key2"), std::string("value2"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::insert, std::string("key3"), std::string("value3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key1"), std::string("value1")).get();
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key2"), std::string("value2")).get();
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key3"), std::string("value3")).get();
 
     std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::update, std::string("key1"), std::string("updated1"));
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::update, std::string("key2"), std::string("updated2"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key1"), std::string("updated1")).get();
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key2"), std::string("updated2")).get();
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_part_t::remove, std::string("key3"));
+    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::remove, std::string("key3")).get();
 
     scheduler->start();
 

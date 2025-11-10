@@ -20,14 +20,19 @@ struct dummy_data {
     std::string name{"default_name"};
 };
 
-class dummy_supervisor final : public actor_zeta::actor_abstract_t {
+class dummy_supervisor final : public actor_zeta::base::actor_mixin<dummy_supervisor> {
 public:
+    template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
     dummy_supervisor(memory_resource* ptr)
-        : actor_abstract_t(ptr)
-        , check_(actor_zeta::make_behavior(resource(), this, &dummy_supervisor::check))
+        : actor_zeta::base::actor_mixin<dummy_supervisor>()
+        , resource_(ptr)
+        , check_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::check))
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
     }
+
+    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
         return executor_.get();
@@ -41,17 +46,19 @@ public:
         }
     }
 
-    bool enqueue_impl(actor_zeta::message_ptr msg) override {
-        auto tmp_msg = std::move(msg);
-        behavior(tmp_msg.get());
-        return true;
+    template<typename R>
+    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &dummy_supervisor::check
     >;
 
+protected:
+
 private:
+    actor_zeta::pmr::memory_resource* resource_;
     actor_zeta::behavior_t check_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::set<int64_t> ids_;
@@ -71,8 +78,9 @@ TEST_CASE("base move test") {
     auto ptr_data = std::unique_ptr<dummy_data>(new dummy_data);
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::move(ptr_data), data);
+    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::move(ptr_data), data);
     REQUIRE(ptr_data == nullptr);
+    std::move(fut).get();
 }
 
 TEST_CASE("construct in place") {
@@ -81,5 +89,6 @@ TEST_CASE("construct in place") {
 
     auto data = dummy_data();
 
-    actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
+    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
+    std::move(fut).get();
 }

@@ -15,7 +15,7 @@ public:
         ++processed_count_;
     }
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
             test_(msg);
         }
@@ -63,26 +63,30 @@ TEST_CASE("resume_info - actor returns correct message count") {
     }
 
     SECTION("Single message") {
-        actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
+        auto fut = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
 
         auto info = actor->resume(100);
+        // Future is ready after resume() - no need to call get()
         REQUIRE(info.messages_processed == 1);
         REQUIRE(actor->processed_count() == 1);
     }
 
     SECTION("Multiple messages") {
+        std::vector<test_actor::template unique_future<void>> futures;
         for (int i = 0; i < 5; ++i) {
-            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
+            futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test));
         }
 
         auto info = actor->resume(100);
+        // Futures are ready after resume() - no need to call get()
         REQUIRE(info.messages_processed == 5);
         REQUIRE(actor->processed_count() == 5);
     }
 
     SECTION("Throughput limit respected") {
+        std::vector<test_actor::template unique_future<void>> futures;
         for (int i = 0; i < 10; ++i) {
-            actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
+            futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test));
         }
 
         auto info = actor->resume(3);
@@ -94,6 +98,8 @@ TEST_CASE("resume_info - actor returns correct message count") {
         auto info2 = actor->resume(3);
         REQUIRE(info2.messages_processed == 3);
         REQUIRE(actor->processed_count() == 6);
+
+        // Futures are ready after resume() - destructor will clean up
     }
 }
 
@@ -101,9 +107,10 @@ TEST_CASE("resume_info - backward compatibility with switch") {
     auto* resource = actor_zeta::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
-    actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
+    auto fut = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
 
     auto info = actor->resume(100);
+    // Future is ready after resume() - no need to call get()
 
     // Should be able to switch on resume_info directly
     bool switched = false;

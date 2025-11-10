@@ -1,0 +1,267 @@
+#pragma once
+
+#include <actor-zeta/detail/memory_resource.hpp>
+#include <actor-zeta/detail/rtt.hpp>
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+
+namespace actor_zeta { namespace detail {
+
+    /// @brief Unified future state - replaces multiple atomic bools
+    /// Values are ordered to allow range checks (e.g., is_ready = state >= ready)
+    enum class future_state_enum : uint8_t {
+        invalid = 0,           // Moved-from or uninitialized
+        pending = 1,           // Awaiting result (initial state)
+        ready = 2,             // Result available (success)
+        error = 3,             // Error occurred (broken promise, mailbox closed, etc.)
+        consumed = 4,          // get() called, result moved out
+        cancelled = 5          // Explicitly cancelled
+    };
+
+    /// @brief Base class for future state (type-erased part)
+    class future_state_base {
+    public:
+        explicit future_state_base(pmr::memory_resource* res) noexcept
+            : resource_(res)
+            , state_(future_state_enum::pending)
+            , refcount_(2)  // Initial: 1 for message, 1 for future
+#ifndef NDEBUG
+            , magic_(kMagicAlive)
+            , generation_(next_generation())
+#endif
+        {}
+
+        future_state_base(const future_state_base&) = delete;
+        future_state_base& operator=(const future_state_base&) = delete;
+
+        virtual ~future_state_base() noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Double delete detected!");
+            magic_ = kMagicDead;
+#endif
+        }
+
+        /// @brief Increment reference count
+        void add_ref() noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Use-after-free: add_ref() on deleted state!");
+            // Use fetch_add result to check ACTUAL old value in concurrent scenario
+            // This prevents race where multiple threads read stale value before increment
+            int old_value = refcount_.fetch_add(1, std::memory_order_relaxed);
+            assert(old_value > 0 && "Refcount underflow!");
+            // Increased limit to 1000000 - 10000 was too low for stress tests with many concurrent threads
+            assert(old_value < 1000000 && "Refcount overflow!");
+#else
+            refcount_.fetch_add(1, std::memory_order_relaxed);
+#endif
+        }
+
+        /// @brief Decrement reference count and deallocate if zero
+        void release() noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Double release detected!");
+#endif
+            // Use fetch_sub result - it returns the OLD value before decrement
+            int old_value = refcount_.fetch_sub(1, std::memory_order_acq_rel);
+#ifndef NDEBUG
+            assert(old_value > 0 && "Refcount underflow!");
+#endif
+            if (old_value == 1) {
+                destroy();
+            }
+        }
+
+        /// @brief Get current state (atomic read)
+        [[nodiscard]] future_state_enum state() const noexcept {
+            return state_.load(std::memory_order_acquire);
+        }
+
+        /// @brief Check if result is ready (ready or error)
+        [[nodiscard]] bool is_ready() const noexcept {
+            auto s = state_.load(std::memory_order_acquire);
+            return s == future_state_enum::ready || s == future_state_enum::error;
+        }
+
+        /// @brief Check if cancelled
+        [[nodiscard]] bool is_cancelled() const noexcept {
+            return state_.load(std::memory_order_acquire) == future_state_enum::cancelled;
+        }
+
+        /// @brief Check if consumed (result already taken)
+        [[nodiscard]] bool is_consumed() const noexcept {
+            return state_.load(std::memory_order_acquire) == future_state_enum::consumed;
+        }
+
+        /// @brief Atomic state transition with validation
+        /// @return true if transition successful, false if current state != expected
+        bool transition(future_state_enum expected, future_state_enum desired) noexcept {
+            return state_.compare_exchange_strong(expected, desired,
+                std::memory_order_acq_rel, std::memory_order_acquire);
+        }
+
+        /// @brief Force state change (for internal use, bypasses validation)
+        void set_state(future_state_enum new_state) noexcept {
+            state_.store(new_state, std::memory_order_release);
+        }
+
+        /// @brief Get memory resource
+        [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
+            return resource_;
+        }
+
+        /// @brief Set result from type-erased rtt (virtual, for handler compatibility)
+        /// This is called from handler.ipp which doesn't know the concrete type T
+        virtual void set_result_rtt(rtt&& value) noexcept = 0;
+
+#ifndef NDEBUG
+        [[nodiscard]] uint64_t generation() const noexcept { return generation_; }
+#endif
+
+    protected:
+        /// @brief Virtual destruction - derived class implements actual deallocation
+        virtual void destroy() noexcept = 0;
+
+        pmr::memory_resource* resource_;
+        std::atomic<future_state_enum> state_;
+        std::atomic<int> refcount_;
+
+#ifndef NDEBUG
+        static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
+        static constexpr uint32_t kMagicDead = 0xDEADC0DE;
+
+        uint32_t magic_;
+        uint64_t generation_;
+
+        static uint64_t next_generation() {
+            static std::atomic<uint64_t> counter{0};
+            return counter.fetch_add(1, std::memory_order_relaxed);
+        }
+#endif
+    };
+
+    /// @brief Typed future state with result storage
+    template<typename T>
+    class future_state final : public future_state_base {
+    public:
+        explicit future_state(pmr::memory_resource* res) noexcept
+            : future_state_base(res)
+            , result_(res) {}
+
+        ~future_state() noexcept override = default;
+
+        /// @brief Set successful result
+        void set_result(rtt&& value) noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Use-after-free: set_result() on deleted state!");
+#endif
+            // CRITICAL FIX: Synchronize non-atomic result_ with atomic state_
+            //
+            // Problem: result_ is non-atomic, state_ is atomic
+            // We need: result_ write happens-before state_ changes to ready
+            //
+            // Solution: Write result BEFORE CAS with release ordering
+            //   1. Write result_ first (may write even if future is cancelled)
+            //   2. CAS pending→ready with release ordering
+            //   3. Release ordering ensures: result_ write visible to acquire load
+            //
+            // Safety: If CAS fails (future cancelled), result_ is written but won't be read
+            // because reader checks state==ready before accessing result_
+
+            // Write result BEFORE CAS
+            result_ = std::move(value);
+
+            // Atomic transition: pending → ready with RELEASE semantics
+            // Release ordering creates happens-before with acquire load in is_ready()
+            // This ensures: result_ write visible to threads that see state==ready
+            auto expected = future_state_enum::pending;
+            if (!state_.compare_exchange_strong(expected, future_state_enum::ready,
+                                                std::memory_order_release,  // success: release
+                                                std::memory_order_relaxed)) {  // failure: relaxed
+                // CAS failed - future was cancelled or already set
+                // Result is written but won't be read (state != ready)
+                // This is safe - reader checks state before reading result
+            }
+        }
+
+        /// @brief Virtual method for type-erased rtt (called from handler.ipp)
+        void set_result_rtt(rtt&& value) noexcept override {
+            set_result(std::move(value));
+        }
+
+        /// @brief Get result reference (caller must ensure is_ready())
+        [[nodiscard]] rtt& result() noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Use-after-free: result() on deleted state!");
+            auto s = state_.load(std::memory_order_relaxed);
+            assert((s == future_state_enum::ready || s == future_state_enum::consumed)
+                   && "result() called before set_result()!");
+#endif
+            return result_;
+        }
+
+        /// @brief Get const result reference
+        [[nodiscard]] const rtt& result() const noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Use-after-free: result() on deleted state!");
+            auto s = state_.load(std::memory_order_relaxed);
+            assert((s == future_state_enum::ready || s == future_state_enum::consumed)
+                   && "result() called before set_result()!");
+#endif
+            return result_;
+        }
+
+        /// @brief Take result (move out, mark as consumed)
+        [[nodiscard]] rtt take_result() noexcept {
+            auto expected = future_state_enum::ready;
+            bool transitioned = transition(expected, future_state_enum::consumed);
+            assert(transitioned && "take_result() called on non-ready state!");
+            (void)transitioned;
+
+            return std::move(result_);
+        }
+
+    protected:
+        void destroy() noexcept override {
+            this->~future_state();
+            resource_->deallocate(this, sizeof(future_state<T>), alignof(future_state<T>));
+        }
+
+    private:
+        rtt result_;
+    };
+
+    /// @brief Specialization for void (no result storage needed)
+    template<>
+    class future_state<void> final : public future_state_base {
+    public:
+        explicit future_state(pmr::memory_resource* res) noexcept
+            : future_state_base(res) {}
+
+        ~future_state() noexcept override = default;
+
+        /// @brief Mark as ready (void has no result to store)
+        void set_ready() noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Use-after-free: set_ready() on deleted state!");
+#endif
+            auto expected = future_state_enum::pending;
+            // Try transition - if it fails, future was cancelled or already processed
+            // This is safe - no result to store, so no harm done
+            (void)transition(expected, future_state_enum::ready);
+        }
+
+        /// @brief Virtual method for type-erased rtt (called from handler.ipp)
+        /// For void specialization, we just mark as ready and ignore the value
+        void set_result_rtt(rtt&& /* value */) noexcept override {
+            set_ready();
+        }
+
+    protected:
+        void destroy() noexcept override {
+            this->~future_state();
+            resource_->deallocate(this, sizeof(future_state<void>), alignof(future_state<void>));
+        }
+    };
+
+}} // namespace actor_zeta::detail

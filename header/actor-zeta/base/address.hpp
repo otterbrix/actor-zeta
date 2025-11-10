@@ -11,9 +11,9 @@ namespace actor_zeta { namespace base {
     ///
 
     template<class Target>
-    actor_abstract_t* safe_cast_ptr(Target* ptr) {
+    void* safe_cast_ptr(Target* ptr) {
         assert(ptr != nullptr);
-        return ptr;
+        return static_cast<void*>(ptr);
     }
 
     class address_t final {
@@ -30,7 +30,7 @@ namespace actor_zeta { namespace base {
 
         static auto empty_address() -> address_t;
 
-        inline actor_abstract_t* operator->() const noexcept {
+        inline void* operator->() const noexcept {
             return ptr_;
         }
 
@@ -40,7 +40,7 @@ namespace actor_zeta { namespace base {
 
     private:
         address_t() noexcept;
-        actor_abstract_t* ptr_;
+        void* ptr_;
     };
 
     static_assert(!std::is_default_constructible<address_t>::value, "");

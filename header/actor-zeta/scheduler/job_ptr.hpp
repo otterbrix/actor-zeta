@@ -17,22 +17,6 @@ namespace actor_zeta { namespace scheduler {
             return static_cast<T*>(ptr)->resume(max_throughput);
         }
 
-        template<class T>
-        void add_ref_impl(void* ptr) {
-            assert(ptr != nullptr);
-            // ADL will find the right intrusive_ptr_add_ref in T's namespace
-            T* typed_ptr = static_cast<T*>(ptr);
-            intrusive_ptr_add_ref(typed_ptr);
-        }
-
-        template<class T>
-        void release_impl(void* ptr) {
-            assert(ptr != nullptr);
-            // ADL will find the right intrusive_ptr_release in T's namespace
-            T* typed_ptr = static_cast<T*>(ptr);
-            intrusive_ptr_release(typed_ptr);
-        }
-
         // SFINAE check for resume method
         template<class T>
         struct has_resume_method {
@@ -60,12 +44,10 @@ namespace actor_zeta { namespace scheduler {
     struct job_ptr {
         void* ptr;
         resume_info (*resume_fn)(void*, size_t);
-        void (*add_ref_fn)(void*);
-        void (*release_fn)(void*);
 
         /// @brief Create type-erased job pointer from typed pointer
-        /// @tparam T Type that has resume(size_t) method and intrusive_ptr support
-        /// @param p Pointer to object to wrap
+        /// @tparam T Type that has resume(size_t) method
+        /// @param p Pointer to object to wrap (not owned by job_ptr)
         /// @return Type-erased job_ptr
         template<class T>
         static job_ptr wrap(T* p) {
@@ -76,9 +58,7 @@ namespace actor_zeta { namespace scheduler {
 
             return job_ptr{
                 p,
-                &detail::resume_impl<T>,
-                &detail::add_ref_impl<T>,
-                &detail::release_impl<T>
+                &detail::resume_impl<T>
             };
         }
 
@@ -91,20 +71,6 @@ namespace actor_zeta { namespace scheduler {
             return resume_fn(ptr, max_throughput);
         }
 
-        /// @brief Increment reference count
-        void add_ref() const {
-            assert(ptr != nullptr && "Cannot add_ref null job");
-            assert(add_ref_fn != nullptr && "add_ref function is null");
-            add_ref_fn(ptr);
-        }
-
-        /// @brief Decrement reference count (may destroy object)
-        void release() const {
-            assert(ptr != nullptr && "Cannot release null job");
-            assert(release_fn != nullptr && "release function is null");
-            release_fn(ptr);
-        }
-
         /// @brief Check if job_ptr is valid (not null)
         explicit operator bool() const noexcept {
             return ptr != nullptr;
@@ -115,14 +81,5 @@ namespace actor_zeta { namespace scheduler {
             return ptr;
         }
     };
-
-    // Inline function definitions for intrusive_ptr support on job_ptr itself
-    inline void intrusive_ptr_add_ref(const job_ptr& job) {
-        job.add_ref();
-    }
-
-    inline void intrusive_ptr_release(const job_ptr& job) {
-        job.release();
-    }
 
 }} // namespace actor_zeta::scheduler

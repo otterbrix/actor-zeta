@@ -105,6 +105,15 @@ namespace actor_zeta { namespace detail {
             , data_(nullptr)
             , objects_(nullptr)
             , objects_idx_(0) {
+
+            // Empty optimization - if no arguments, don't allocate
+            if constexpr (sizeof...(Args) == 0) {
+#ifdef __ENABLE_TESTS_MEASUREMENTS__
+                rtt_test::templated_ctor_++;
+#endif
+                return;
+            }
+
             constexpr std::size_t sz = getSize<0, Args...>();
             capacity_ = sz;
             allocation = memory_resource_->allocate(capacity_ + capacity_ * sizeof(objects_t));
@@ -310,6 +319,12 @@ namespace actor_zeta { namespace detail {
 
         bool empty() const {
             return objects_idx_ == 0;
+        }
+
+        /// @brief Get memory resource used by this rtt
+        /// @return Pointer to memory resource, or nullptr if rtt was moved-from
+        actor_zeta::pmr::memory_resource* memory_resource() const noexcept {
+            return memory_resource_;
         }
     };
 

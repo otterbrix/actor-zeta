@@ -1,4 +1,4 @@
-PROJECT(tests_rtt CXX)
+PROJECT(tests_slot_refcount CXX)
 
 file(GLOB ${PROJECT_NAME}_HEADERS
     ./*.hpp
@@ -27,10 +27,4 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}.
 
 include(CTest)
 include(Catch)
-
-# Increase timeout for all tests in this executable (especially rt_tuple with sanitizers)
-# ASan makes test ~10x slower due to debug output
-# TSan makes test ~100x slower due to instrumentation
-catch_discover_tests(${PROJECT_NAME}
-    PROPERTIES TIMEOUT 300
-)
+catch_discover_tests(${PROJECT_NAME})

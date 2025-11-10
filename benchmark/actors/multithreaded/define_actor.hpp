@@ -24,7 +24,7 @@ public:
         , pong_behavior_(actor_zeta::make_behavior(resource, this, &ping_pong_actor::pong)) {
     }
 
-    ~ping_pong_actor() override = default;
+    ~ping_pong_actor() = default;
 
     void set_partner(ping_pong_actor* p) {
         partner_ = p;
@@ -37,8 +37,9 @@ public:
     void start() {
         // Send ping to partner and schedule only if needed
         if (partner_ && scheduler_) {
-            // send() returns true if actor was unblocked - needs scheduling
-            if (actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...)) {
+            auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
+            // Only enqueue if actor was unblocked by this message
+            if (future.needs_scheduling()) {
                 scheduler_->enqueue(partner_);
             }
         }
@@ -47,8 +48,9 @@ public:
     void ping(Args...) {
         // Receive ping, send pong back
         if (partner_ && scheduler_) {
-            // send() returns true if actor was unblocked - needs scheduling
-            if (actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...)) {
+            auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
+            // Only enqueue if actor was unblocked by this message
+            if (future.needs_scheduling()) {
                 scheduler_->enqueue(partner_);
             }
         }
@@ -58,7 +60,7 @@ public:
         // Receive pong, do nothing (end of exchange)
     }
 
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::start>) {
             start_behavior_(msg);

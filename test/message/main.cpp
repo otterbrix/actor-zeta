@@ -18,10 +18,10 @@ using actor_zeta::mailbox::message;
 using actor_zeta::mailbox::message_id;
 using actor_zeta::detail::rtt;
 
-constexpr static auto zero  = actor_zeta::make_message_id(0);
-constexpr static auto one   = actor_zeta::make_message_id(1);
-constexpr static auto two   = actor_zeta::make_message_id(2);
-constexpr static auto three = actor_zeta::make_message_id(3);
+constexpr static auto zero  = actor_zeta::mailbox::make_message_id(0);
+constexpr static auto one   = actor_zeta::mailbox::make_message_id(1);
+constexpr static auto two   = actor_zeta::mailbox::make_message_id(2);
+constexpr static auto three = actor_zeta::mailbox::make_message_id(3);
 
 namespace {
 
@@ -137,9 +137,9 @@ TEST_CASE("message (no move/copy of message/rtt)") {
 
     SECTION("simple") {
         // 1) simple message via make_message
-        auto msg = actor_zeta::make_message(resource, address_t::empty_address(), one);
+        auto msg = actor_zeta::detail::make_message(resource, address_t::empty_address(), one);
         REQUIRE( static_cast<bool>(msg) ); // message_ptr has operator bool
-        REQUIRE( msg->command() == actor_zeta::make_message_id(1) );
+        REQUIRE( msg->command() == actor_zeta::mailbox::make_message_id(1) );
 
         // 2) separate payload - use specialized rtt move constructor
         rtt body(resource, int(1));
@@ -153,21 +153,21 @@ TEST_CASE("message (no move/copy of message/rtt)") {
 
         msg1.swap(msg2);
 
-        REQUIRE( msg1.command() == actor_zeta::make_message_id(2) );
-        REQUIRE( msg2.command() == actor_zeta::make_message_id(1) );
+        REQUIRE( msg1.command() == actor_zeta::mailbox::make_message_id(2) );
+        REQUIRE( msg2.command() == actor_zeta::mailbox::make_message_id(1) );
     }
 
     SECTION("allocator-extended move constructor") {
         message msg1(resource, address_t::empty_address(), three);
-        REQUIRE( msg1.command() == actor_zeta::make_message_id(3) );
+        REQUIRE( msg1.command() == actor_zeta::mailbox::make_message_id(3) );
 
         // Use allocator-extended move constructor (PMR migration)
         message msg2(std::allocator_arg, resource, std::move(msg1));
-        REQUIRE( msg2.command() == actor_zeta::make_message_id(3) );
+        REQUIRE( msg2.command() == actor_zeta::mailbox::make_message_id(3) );
     }
 
     SECTION("message with multiple payload values") {
-        auto msg = actor_zeta::make_message(resource, address_t::empty_address(), one,
+        auto msg = actor_zeta::detail::make_message(resource, address_t::empty_address(), one,
                                            int(42), std::string("test"), double(3.14));
         REQUIRE( msg->body().get<int>(0) == 42 );
         REQUIRE( msg->body().get<std::string>(1) == "test" );
@@ -187,7 +187,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
 
     SECTION("zero message id") {
         message msg(resource, address_t::empty_address(), zero);
-        REQUIRE( msg.command() == actor_zeta::make_message_id(0) );
+        REQUIRE( msg.command() == actor_zeta::mailbox::make_message_id(0) );
     }
 
     // NOTE: Cross-arena RTT migration is not supported for type-erased containers
