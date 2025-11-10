@@ -149,6 +149,14 @@ public:
         destructor_counter++;
     }
 
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &storage_t::init,
+        &storage_t::search,
+        &storage_t::add,
+        &storage_t::delete_table,
+        &storage_t::create_table
+    >;
+
 private:
     void init() {
         init_counter++;
@@ -188,14 +196,6 @@ private:
                   << "time_sync: " << time_sync << " | "
                   << std::endl;
     }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<
-        &storage_t::init,
-        &storage_t::search,
-        &storage_t::add,
-        &storage_t::delete_table,
-        &storage_t::create_table
-    >;
 
 private:
     actor_zeta::behavior_t init_;
