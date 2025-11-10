@@ -52,7 +52,6 @@ public:
         &ping_pong_actor::pong
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>:
                 ping_behavior_(msg);
@@ -68,7 +67,6 @@ public:
 class PingPongFixture_0 : public benchmark::Fixture {
     using Actor = ping_pong_actor<>;
 
-    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor1_;
     actor_zeta::pmr::memory_resource* resource_;

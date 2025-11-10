@@ -29,7 +29,6 @@ namespace actor_zeta { namespace base {
     class cooperative_actor<Actor, MailBox, actor_type::classic>
         : public actor_abstract_t {
     private:
-        // Ленивая проверка dispatch_traits - инстанцируется только при вызове
         static constexpr bool check_dispatch_traits_exists() {
             using dispatch_traits_check = typename Actor::dispatch_traits;
             (void)sizeof(dispatch_traits_check); // Suppress unused warning
