@@ -149,6 +149,13 @@ public:
         destructor_counter++;
     }
 
+    // Forward declarations for dispatch_traits
+    void init();
+    void search(std::string& key);
+    void add(const std::string& key, const std::string& value);
+    void delete_table(const std::string& name, const std::string& path, int type);
+    void create_table(const std::string& name, const std::string& path, int type, int time_sync);
+
     using dispatch_traits = actor_zeta::dispatch_traits<
         &storage_t::init,
         &storage_t::search,
