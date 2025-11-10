@@ -11,10 +11,6 @@ public:
         , test_(actor_zeta::make_behavior(resource(), this, &test_actor::test)) {
     }
 
-    void test() {
-        ++processed_count_;
-    }
-
     void behavior(actor_zeta::message* msg) {
         if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
             test_(msg);
@@ -22,6 +18,9 @@ public:
     }
 
     size_t processed_count() const { return processed_count_; }
+
+    // Forward declaration for dispatch_traits
+    void test();
 
     using dispatch_traits = actor_zeta::dispatch_traits<&test_actor::test>;
 
