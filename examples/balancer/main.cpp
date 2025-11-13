@@ -36,26 +36,30 @@ public:
     }
 
     // Методы для обработки сообщений
-    void insert(std::string& key, std::string& value) {
+    actor_zeta::unique_future<void> insert(std::string& key, std::string& value) {
         data_.emplace(key, value);
         std::cerr << id() << " " << key << " " << value << std::endl;
         ++count_insert;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void remove(std::string& key) {
+    actor_zeta::unique_future<void> remove(std::string& key) {
         data_.erase(key);
         std::cerr << id() << " remove " << key << std::endl;
         ++count_remove;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void update(std::string& key, std::string& value) {
+    actor_zeta::unique_future<void> update(std::string& key, std::string& value) {
         data_[key] = value;
         std::cerr << id() << " update " << key << " = " << value << std::endl;
         ++count_update;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    std::string find(std::string& key) {
-        return data_[key];
+    actor_zeta::unique_future<std::string> find(std::string& key) {
+        std::string result = data_[key];
+        return actor_zeta::make_ready_future<std::string>(resource(), result);
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -115,10 +119,10 @@ public:
     }
 
     // Dummy methods - just for dispatch_traits, never actually called
-    void insert(std::string&, std::string&) {}
-    void remove(std::string&) {}
-    void update(std::string&, std::string&) {}
-    std::string find(std::string&) { return ""; }
+    actor_zeta::unique_future<void> insert(std::string&, std::string&) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> remove(std::string&) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> update(std::string&, std::string&) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<std::string> find(std::string&) { return actor_zeta::make_ready_future<std::string>(resource_, std::string("")); }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &collection_t::insert,

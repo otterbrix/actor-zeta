@@ -34,7 +34,7 @@ public:
         return executor_.get();
     }
 
-    void create();
+    actor_zeta::unique_future<void> create();
 
     void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
@@ -75,12 +75,13 @@ public:
     using dispatch_traits = actor_zeta::dispatch_traits<>;
 };
 
-void dummy_supervisor::create() {
+actor_zeta::unique_future<void> dummy_supervisor::create() {
     auto uptr = actor_zeta::spawn<storage_t>(resource_, reinterpret_cast<dummy_supervisor*>(this));
     REQUIRE(ids_.find(reinterpret_cast<int64_t>(uptr.get())) == ids_.end());
     ids_.insert(reinterpret_cast<int64_t>(uptr.get()));
     ///scheduler_test()->enqueue(uptr.get());
     storage_.emplace_back(std::move(uptr));
+    return actor_zeta::make_ready_future_void(resource_);
 }
 
 TEST_CASE("actor id match") {

@@ -124,19 +124,22 @@ public:
         return executor_.get();
     }
 
-    void create_actor() {
+    actor_zeta::unique_future<void> create_actor() {
         auto uptr = actor_zeta::spawn<storage_t>(resource_, this);
         actors_.emplace_back(std::move(uptr));
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void create_supervisor() {
+    actor_zeta::unique_future<void> create_supervisor() {
         auto uptr = actor_zeta::spawn<dummy_supervisor_sub>(resource_, this);
         supervisor_.emplace_back(std::move(uptr));
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void create_supervisor_custom_resource() {
+    actor_zeta::unique_future<void> create_supervisor_custom_resource() {
         auto uptr = actor_zeta::spawn<dummy_supervisor_sub>(resource_);
         supervisor_.emplace_back(std::move(uptr));
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

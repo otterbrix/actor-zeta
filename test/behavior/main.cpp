@@ -52,26 +52,31 @@ public:
     int args_n_counter{0};
 
     class_method() = default;
-    void class_method_args_0() {
+
+    actor_zeta::unique_future<void> class_method_args_0() {
         args_0_counter = 1;
+        return actor_zeta::make_ready_future_void(actor_zeta::pmr::get_default_resource());
     }
 
-    void class_method_args_1(int arg_0) {
+    actor_zeta::unique_future<void> class_method_args_1(int arg_0) {
         args_1_counter = 1;
         REQUIRE(arg_0 == 42);
+        return actor_zeta::make_ready_future_void(actor_zeta::pmr::get_default_resource());
     }
 
-    void class_method_args_ptr(foo_t* arg_ptr) {
+    actor_zeta::unique_future<void> class_method_args_ptr(foo_t* arg_ptr) {
         args_1_ptr_counter = 1;
         REQUIRE(arg_ptr->d1 == 42);
         REQUIRE(arg_ptr->d2 == 420);
         REQUIRE(arg_ptr->d3 == 4200);
+        return actor_zeta::make_ready_future_void(actor_zeta::pmr::get_default_resource());
     }
 
-    void class_method_args_n(const std::string& arg_0, int arg_1) {
+    actor_zeta::unique_future<void> class_method_args_n(const std::string& arg_0, int arg_1) {
         args_n_counter = 1;
         REQUIRE(arg_0 == "42");
         REQUIRE(arg_1 == 42);
+        return actor_zeta::make_ready_future_void(actor_zeta::pmr::get_default_resource());
     }
 };
 

@@ -462,6 +462,14 @@ namespace actor_zeta {
                 state_->set_result(std::move(result));
             }
 
+            void return_value(unique_future<T>&& ready_future) noexcept {
+                assert(state_ && "return_value() with null state");
+                assert(ready_future.valid() && "return_value() with invalid future");
+                T value = std::move(ready_future).get();
+                detail::rtt result(resource_, std::move(value));
+                state_->set_result(std::move(result));
+            }
+
             void unhandled_exception() noexcept {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
@@ -715,6 +723,24 @@ namespace actor_zeta {
         detail::future_state<void>* state_;
         bool needs_scheduling_;
     };
+
+    template<typename T>
+    inline unique_future<T> make_ready_future(pmr::memory_resource* resource, T&& value) {
+        return unique_future<T>(std::forward<T>(value));
+    }
+
+    template<typename T>
+    inline unique_future<T> make_ready_future(pmr::memory_resource* resource, const T& value) {
+        return unique_future<T>(value);
+    }
+
+    inline unique_future<void> make_ready_future_void(pmr::memory_resource* resource) {
+        void* mem = resource->allocate(sizeof(detail::future_state<void>),
+                                       alignof(detail::future_state<void>));
+        auto* state = new (mem) detail::future_state<void>(resource);
+        state->set_ready();
+        return unique_future<void>(state, false);
+    }
 
 }
 

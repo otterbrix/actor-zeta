@@ -12,8 +12,8 @@
 // Simple worker actor that processes tasks
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
-    void process_task(const std::string& task);
-    void get_status();
+    actor_zeta::unique_future<void> process_task(const std::string& task);
+    actor_zeta::unique_future<void> get_status();
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &worker_actor::process_task,
@@ -48,13 +48,15 @@ private:
     actor_zeta::behavior_t get_status_;
 };
 
-inline void worker_actor::process_task(const std::string& task) {
+inline actor_zeta::unique_future<void> worker_actor::process_task(const std::string& task) {
     std::cerr << "[" << name_ << "] Processing task: " << task << std::endl;
     ++tasks_processed_;
+    return actor_zeta::make_ready_future_void(resource());
 }
 
-inline void worker_actor::get_status() {
+inline actor_zeta::unique_future<void> worker_actor::get_status() {
     std::cerr << "[" << name_ << "] Processed " << tasks_processed_ << " tasks" << std::endl;
+    return actor_zeta::make_ready_future_void(resource());
 }
 
 // Supervisor that manages worker actors with manual scheduling
@@ -74,16 +76,17 @@ public:
 
     actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
 
-    void create_worker(const std::string& name) {
+    actor_zeta::unique_future<void> create_worker(const std::string& name) {
         auto worker = actor_zeta::spawn<worker_actor>(resource_, name);
         std::cerr << "[Supervisor] Created worker: " << name << std::endl;
         workers_.emplace_back(std::move(worker));
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void assign_task(const std::string& task) {
+    actor_zeta::unique_future<void> assign_task(const std::string& task) {
         if (workers_.empty()) {
             std::cerr << "[Supervisor] No workers available!" << std::endl;
-            return;
+            return actor_zeta::make_ready_future_void(resource_);
         }
 
         // Round-robin task distribution
@@ -99,15 +102,17 @@ public:
         if (future.needs_scheduling()) {
             scheduler_->enqueue(worker.get());
         }
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void stop_workers() {
+    actor_zeta::unique_future<void> stop_workers() {
         std::cerr << "[Supervisor] Stopping all workers..." << std::endl;
         // Workers will be automatically destroyed when supervisor is destroyed
         // In real system, you'd send shutdown messages and wait
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void check_status() {
+    actor_zeta::unique_future<void> check_status() {
         std::cerr << "[Supervisor] Status check - " << workers_.size() << " workers:" << std::endl;
         for (auto& worker : workers_) {
             // Send status request to worker (returns future with needs_scheduling flag)
@@ -118,6 +123,7 @@ public:
                 scheduler_->enqueue(worker.get());
             }
         }
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

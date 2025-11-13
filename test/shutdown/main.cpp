@@ -16,8 +16,9 @@ public:
         , ping_(actor_zeta::make_behavior(resource(), this, &worker_actor::ping)) {
     }
 
-    void ping() {
+    actor_zeta::unique_future<void> ping() {
         // Empty handler
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

@@ -55,8 +55,8 @@ public:
     }
 
 
-    void create_storage();
-    void create_test_handlers();
+    actor_zeta::unique_future<void> create_storage();
+    actor_zeta::unique_future<void> create_test_handlers();
 
     auto actors_count() const -> size_t {
         return storages_.size()+test_handlers_.size();
@@ -154,36 +154,40 @@ public:
         destructor_counter++;
     }
 
-    void init() {
+    actor_zeta::unique_future<void> init() {
         init_counter++;
         TRACE("+++");
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void search(std::string& key) {
+    actor_zeta::unique_future<void> search(std::string& key) {
         search_counter++;
         std::cerr << __func__ << " :: "
                   << "key: " << key
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void add(const std::string& key, const std::string& value) {
+    actor_zeta::unique_future<void> add(const std::string& key, const std::string& value) {
         add_counter++;
         std::cerr << __func__ << " :: "
                   << "key: " << key << " | "
                   << "value: " << value << " | "
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void delete_table(const std::string& name, const std::string& path, int type) {
+    actor_zeta::unique_future<void> delete_table(const std::string& name, const std::string& path, int type) {
         delete_table_counter++;
         std::cerr << __func__ << " :: "
                   << "table name: " << name << " | "
                   << "path: " << path << " | "
                   << "type: " << type << " | "
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void create_table(const std::string& name, const std::string& path, int type, int time_sync) {
+    actor_zeta::unique_future<void> create_table(const std::string& name, const std::string& path, int type, int time_sync) {
         create_table_counter++;
         std::cerr << __func__ << " :: "
                   << "table name: " << name << " | "
@@ -191,6 +195,7 @@ public:
                   << "type: " << type << " | "
                   << "time_sync: " << time_sync << " | "
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -259,31 +264,36 @@ public:
 
     ~test_handlers() = default;
 
-    void ptr_0() {
+    actor_zeta::unique_future<void> ptr_0() {
         TRACE("+++");
         ptr_0_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_1() {
+    actor_zeta::unique_future<void> ptr_1() {
         TRACE("+++");
         ptr_1_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_2(int&) {
+    actor_zeta::unique_future<void> ptr_2(int&) {
         TRACE("+++");
         ptr_2_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_3(int data_1, int& data_2) {
+    actor_zeta::unique_future<void> ptr_3(int data_1, int& data_2) {
         TRACE("+++");
         std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
         ptr_3_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_4(int data_1, int& data_2, const std::string& data_3) {
+    actor_zeta::unique_future<void> ptr_4(int data_1, int& data_2, const std::string& data_3) {
         TRACE("+++");
         std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
         ptr_4_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -316,17 +326,18 @@ uint64_t test_handlers::ptr_3_counter = 0;
 uint64_t test_handlers::ptr_4_counter = 0;
 
 
-void dummy_supervisor::create_storage() {
+actor_zeta::unique_future<void> dummy_supervisor::create_storage() {
     TRACE("+++");
     auto uptr = actor_zeta::spawn<storage_t>(resource());
     storages_.emplace_back(std::move(uptr));
     add_actor_impl_counter++;
+    return actor_zeta::make_ready_future_void(resource());
 }
 
-void dummy_supervisor::create_test_handlers() {
+actor_zeta::unique_future<void> dummy_supervisor::create_test_handlers() {
     TRACE("+++");
     auto uptr = actor_zeta::spawn<test_handlers>(resource());
     test_handlers_.emplace_back(std::move(uptr));
     add_actor_impl_counter++;
-
+    return actor_zeta::make_ready_future_void(resource());
 }
