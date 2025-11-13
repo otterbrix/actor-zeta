@@ -149,10 +149,16 @@ namespace actor_zeta { namespace base {
 
             // Blocking get() - instant for IMMEDIATE mode, blocks for STATE mode
             // Note: get() is move-only rvalue-ref qualified method
-            T value = std::move(future).get();
-
-            if (msg->result_slot()) {
-                msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+            if constexpr (std::is_void<T>::value) {
+                std::move(future).get();
+                if (msg->result_slot()) {
+                    msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                }
+            } else {
+                T value = std::move(future).get();
+                if (msg->result_slot()) {
+                    msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                }
             }
             msg->set_error(mailbox::slot_error_code::ok);
         }
@@ -204,10 +210,16 @@ namespace actor_zeta { namespace base {
                     using T = typename type_traits::is_unique_future<result_type>::value_type;
 
                     result_type future = (ptr->*func)();
-                    T value = std::move(future).get();
-
-                    if (msg->result_slot()) {
-                        msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                    if constexpr (std::is_void<T>::value) {
+                        std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                        }
+                    } else {
+                        T value = std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                        }
                     }
                     msg->set_error(mailbox::slot_error_code::ok);
                 }
@@ -252,10 +264,16 @@ namespace actor_zeta { namespace base {
                     using T = typename type_traits::is_unique_future<result_type>::value_type;
 
                     result_type future = (ptr->*func)(std::forward<original_arg_type_0>(static_cast<original_arg_type_0>(tmp.get<decay_arg_type_0>(0))));
-                    T value = std::move(future).get();
-
-                    if (msg->result_slot()) {
-                        msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                    if constexpr (std::is_void<T>::value) {
+                        std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                        }
+                    } else {
+                        T value = std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                        }
                     }
                     msg->set_error(mailbox::slot_error_code::ok);
                 }
