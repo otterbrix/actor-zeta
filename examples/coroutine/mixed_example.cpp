@@ -1,5 +1,8 @@
 // Mixed Sync/Async Actor Example
 // Demonstrates that actor can have BOTH sync and async methods with unified interface
+//
+// ⚠️ PHASE 1 LIMITATION: Recursive/nested coroutines NOT supported
+// This example uses only non-recursive async methods
 
 #if HAVE_STD_COROUTINES
 
@@ -20,8 +23,7 @@ public:
         : actor_zeta::coroutine_actor<calculator_actor>(ptr)
         , add_(actor_zeta::make_behavior(resource(), this, &calculator_actor::add))
         , multiply_(actor_zeta::make_behavior(resource(), this, &calculator_actor::multiply))
-        , power_(actor_zeta::make_behavior(resource(), this, &calculator_actor::power))
-        , factorial_(actor_zeta::make_behavior(resource(), this, &calculator_actor::factorial)) {
+        , square_(actor_zeta::make_behavior(resource(), this, &calculator_actor::square)) {
         std::cout << "[Calculator " << id() << "] Created\n";
     }
 
@@ -51,71 +53,32 @@ public:
     // ASYNC METHODS - coroutines with co_await and co_return
     // ========================================
 
-    /// @brief Power function - asynchronous coroutine method
-    /// Uses co_await to call other methods without blocking
-    actor_zeta::unique_future<int> power(int base, int exponent) {
-        std::cout << "[Calculator] ASYNC power(" << base << ", " << exponent << ") - START\n";
-
-        if (exponent == 0) {
-            std::cout << "[Calculator] ASYNC power - base case\n";
-            co_return 1;
-        }
+    /// @brief Square function - asynchronous coroutine method
+    /// Uses co_await to call multiply() without blocking
+    /// NOTE: This is NON-RECURSIVE - safe in Phase 1
+    actor_zeta::unique_future<int> square(int x) {
+        std::cout << "[Calculator] ASYNC square(" << x << ") - START\n";
 
         // Call multiply() asynchronously - this will suspend without blocking!
-        auto future = actor_zeta::send(this, address(), &calculator_actor::multiply, base, base);
+        auto future = actor_zeta::send(this, address(), &calculator_actor::multiply, x, x);
 
-        std::cout << "[Calculator] ASYNC power - awaiting multiply...\n";
-        int squared = co_await future;  // ✅ Suspend here, thread is free for other actors
-        std::cout << "[Calculator] ASYNC power - multiply completed: " << squared << "\n";
+        std::cout << "[Calculator] ASYNC square - awaiting multiply...\n";
+        int result = co_await future;  // ✅ Suspend here, thread is free for other actors
+        std::cout << "[Calculator] ASYNC square - multiply completed: " << result << "\n";
 
-        if (exponent == 2) {
-            co_return squared;
-        }
-
-        // Recursively call power for higher exponents
-        auto power_future = actor_zeta::send(this, address(), &calculator_actor::power, base, exponent - 1);
-        int prev_power = co_await power_future;
-
-        auto result_future = actor_zeta::send(this, address(), &calculator_actor::multiply, base, prev_power);
-        int result = co_await result_future;
-
-        std::cout << "[Calculator] ASYNC power - DONE: " << result << "\n";
-        co_return result;
-    }
-
-    /// @brief Factorial - asynchronous coroutine method
-    /// Demonstrates multiple async calls in sequence
-    actor_zeta::unique_future<int> factorial(int n) {
-        std::cout << "[Calculator] ASYNC factorial(" << n << ") - START\n";
-
-        if (n <= 1) {
-            std::cout << "[Calculator] ASYNC factorial - base case\n";
-            co_return 1;
-        }
-
-        // Recursive call
-        auto factorial_future = actor_zeta::send(this, address(), &calculator_actor::factorial, n - 1);
-        int prev_factorial = co_await factorial_future;  // ✅ Suspend without blocking
-
-        // Multiply result
-        auto multiply_future = actor_zeta::send(this, address(), &calculator_actor::multiply, n, prev_factorial);
-        int result = co_await multiply_future;  // ✅ Another suspend point
-
-        std::cout << "[Calculator] ASYNC factorial - DONE: " << result << "\n";
         co_return result;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &calculator_actor::add,
         &calculator_actor::multiply,
-        &calculator_actor::power,
-        &calculator_actor::factorial
+        &calculator_actor::square
     >;
 
     void behavior(actor_zeta::mailbox::message* msg) override {
         // ✅ NEW: Resume any suspended coroutines before processing message
         // This enables STATE mode - coroutines can suspend and resume later
-        actor_zeta::resume_all(power_, factorial_);  // Only async behaviors need resume
+        actor_zeta::resume_all(square_);  // Only async behaviors need resume
 
         switch (msg->command()) {
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::add>: {
@@ -126,12 +89,8 @@ public:
                 multiply_(msg);
                 break;
             }
-            case actor_zeta::msg_id<calculator_actor, &calculator_actor::power>: {
-                power_(msg);
-                break;
-            }
-            case actor_zeta::msg_id<calculator_actor, &calculator_actor::factorial>: {
-                factorial_(msg);
+            case actor_zeta::msg_id<calculator_actor, &calculator_actor::square>: {
+                square_(msg);
                 break;
             }
             default:
@@ -143,8 +102,7 @@ public:
 private:
     actor_zeta::behavior_t add_;
     actor_zeta::behavior_t multiply_;
-    actor_zeta::behavior_t power_;
-    actor_zeta::behavior_t factorial_;
+    actor_zeta::behavior_t square_;
 };
 
 int main() {
@@ -174,22 +132,14 @@ int main() {
         std::cout << "Result: 7 * 8 = " << result << "\n\n";
     }
 
-    std::cout << "--- Testing ASYNC methods (coroutines) ---\n\n";
+    std::cout << "--- Testing ASYNC method (coroutine) ---\n\n";
 
-    // Call async method - power (will use co_await internally)
+    // Call async method - square (will use co_await internally)
     {
         auto future = actor_zeta::send(calculator.get(), actor_zeta::address_t{},
-                                       &calculator_actor::power, 3, 2);
+                                       &calculator_actor::square, 5);
         int result = std::move(future).get();
-        std::cout << "Result: 3^2 = " << result << "\n\n";
-    }
-
-    // Call async method - factorial (will use co_await internally)
-    {
-        auto future = actor_zeta::send(calculator.get(), actor_zeta::address_t{},
-                                       &calculator_actor::factorial, 5);
-        int result = std::move(future).get();
-        std::cout << "Result: 5! = " << result << "\n\n";
+        std::cout << "Result: 5^2 = " << result << "\n\n";
     }
 
     std::cout << "--- Key observations ---\n";
@@ -197,7 +147,9 @@ int main() {
     std::cout << "2. Caller uses SAME code: send() and get()\n";
     std::cout << "3. Sync methods use 'return T' - implicit conversion\n";
     std::cout << "4. Async methods use 'co_await' and 'co_return'\n";
-    std::cout << "5. No difference from caller's perspective!\n\n";
+    std::cout << "5. No difference from caller's perspective!\n";
+    std::cout << "\n⚠️ NOTE: Recursive coroutines (like factorial, power) are NOT supported in Phase 1\n";
+    std::cout << "   Use iterative algorithms instead, or wait for Phase 5.\n\n";
 
     std::cout << "--- Cleanup ---\n\n";
 

@@ -169,7 +169,11 @@ namespace actor_zeta { namespace base {
                         assert(current != actor_state::running_scheduled_destroying && "enqueue_impl: invalid state running_scheduled_destroying!");
 #endif
 
-                        // If already running, don't schedule (will self-reschedule if needed)
+                        // If already running, don't schedule
+                        // IMPORTANT: This means recursive coroutines (send(this, ...) from within
+                        // a coroutine method) will DEADLOCK because the actor won't be rescheduled.
+                        // This is a known architectural limitation - use iterative algorithms instead.
+                        //
                         // If destroying, don't schedule
                         if (is_running(current) || is_destroying(current)) {
                             needs_sched = false;
@@ -390,27 +394,20 @@ namespace actor_zeta { namespace base {
             }
 
             while (handled < max_throughput) {
-                std::cout << "[RESUME_CORE] Loop iteration, handled=" << handled << " max=" << max_throughput << "\n";
-                std::cout.flush();
-
                 // Check if inbox closed during processing
                 if (mailbox().closed()) {
-                    std::cout << "[RESUME_CORE] Inbox closed, exiting\n";
                     return finalize(scheduler::resume_result::done, handled, false);
                 }
 
                 // CRITICAL: Check if blocked before pop_front() to avoid assertion
                 // Can happen in multithreaded scenario with concurrent enqueue()
                 if (mailbox().blocked()) {
-                    std::cout << "[RESUME_CORE] Inbox blocked, exiting\n";
                     return finalize(scheduler::resume_result::awaiting, handled, false);
                 }
 
                 const size_t before = handled;
 
                 auto msg = mailbox().pop_front();
-                std::cout << "[RESUME_CORE] pop_front() returned msg=" << (msg ? "valid" : "null") << "\n";
-                std::cout.flush();
                 if (msg) {
                     // RAII guard for message processing
                     struct message_guard {
@@ -451,18 +448,10 @@ namespace actor_zeta { namespace base {
                     // Similar to future_state magic_ check pattern
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
                         // Safe to call behavior() - actor not being destroyed
-                        std::cout << "[RESUME_CORE] Before behavior() call\n";
-                        std::cout.flush();
                         self()->behavior(guard.get());
-                        std::cout << "[RESUME_CORE] After behavior() call\n";
-                        std::cout.flush();
-                    } else {
-                        std::cout << "[RESUME_CORE] Skipping behavior() - actor destroying\n";
                     }
 
                     ++handled;
-                    std::cout << "[RESUME_CORE] After ++handled, handled=" << handled << "\n";
-                    std::cout.flush();
                 }
 
                 if (handled == before) {

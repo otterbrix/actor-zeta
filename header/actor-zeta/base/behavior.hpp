@@ -45,7 +45,12 @@ namespace actor_zeta { namespace base {
         /// @brief Link this behavior with a future_state (for coroutine resumption)
         /// @param state Pointer to future_state that may contain a suspended coroutine
         /// @note Called from make_behavior when message has a result_slot
+        /// @warning PHASE 1 LIMITATION: Nested/recursive coroutines NOT supported
         void set_linked_state(detail::future_state_base* state) noexcept {
+            // CRITICAL: Detect nested/recursive coroutines (send(this, ...) from within coroutine)
+            // This will DEADLOCK because actor is in "running" state and won't reschedule.
+            // See COROUTINE_DESIGN.md section 4.7.8 for details.
+            assert(!linked_state_ && "NESTED COROUTINES NOT SUPPORTED: Recursive send(this, ...) from coroutine will deadlock!");
             linked_state_ = state;
         }
 

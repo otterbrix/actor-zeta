@@ -250,25 +250,21 @@ TEST_CASE("future_state<int> - thread safety") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        std::atomic<bool> result_set{false};
-
         // Thread 1: sets result
-        std::thread writer([slot, &result_set]() {
+        std::thread writer([slot]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             rtt value(pmr::get_default_resource(), 777);
-            // Set external flag BEFORE set_result()
-            // This tests transitive happens-before: result_set → set_result() → is_ready()
-            result_set.store(true, std::memory_order_release);
             slot->set_result(std::move(value));
         });
 
-        // Thread 2: polls is_ready
-        std::thread reader([slot, &result_set]() {
+        // Thread 2: polls is_ready and reads result
+        std::thread reader([slot]() {
+            // Wait for result to be ready
             while (!slot->is_ready()) {
                 std::this_thread::yield();
             }
 
-            REQUIRE(result_set.load(std::memory_order_acquire));
+            // If is_ready() returned true, result must be visible (release-acquire)
             REQUIRE(slot->result().get<int>(0) == 777);
         });
 

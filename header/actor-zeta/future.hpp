@@ -557,21 +557,15 @@ namespace actor_zeta {
 
             /// @brief Create future from this promise
             unique_future<T> get_return_object() {
-                std::cout << "[GET_RETURN_OBJECT] Called\n";
-                std::cout.flush();
 
                 // Allocate future_state<T>
                 void* mem = resource_->allocate(sizeof(detail::future_state<T>),
                                                 alignof(detail::future_state<T>));
                 state_ = new (mem) detail::future_state<T>(resource_);
 
-                // TEMPORARILY DISABLED: Store coroutine_handle in state
-                // Testing if this is causing the hang
-                // auto handle = detail::coroutine_handle<promise_type>::from_promise(*this);
-                // state_->set_coroutine(handle);
-
-                std::cout << "[GET_RETURN_OBJECT] Returning future (WITHOUT set_coroutine)\n";
-                std::cout.flush();
+                // Store coroutine_handle in state (type erasure: promise_type → void)
+                auto handle = detail::coroutine_handle<promise_type>::from_promise(*this);
+                state_->set_coroutine(handle);
 
                 // Return future with state ownership
                 return unique_future<T>(state_, false);
@@ -579,15 +573,11 @@ namespace actor_zeta {
 
             /// @brief Initial suspend - start executing immediately (IMMEDIATE mode)
             detail::suspend_never initial_suspend() noexcept {
-                std::cout << "[INITIAL_SUSPEND] Called\n";
-                std::cout.flush();
                 return {};
             }
 
             /// @brief Final suspend - must suspend to prevent coroutine destruction before set_result
             detail::suspend_always final_suspend() noexcept {
-                std::cout << "[FINAL_SUSPEND] Called\n";
-                std::cout.flush();
                 return {};
             }
 
@@ -620,8 +610,6 @@ namespace actor_zeta {
             promise_type() noexcept
                 : resource_(pmr::get_default_resource())
                 , state_(nullptr) {
-                std::cout << "[PROMISE_TYPE CTOR] Simple constructor (default resource)\n";
-                std::cout.flush();
             }
 
             /// @brief Constructor - variadic (ignores all parameters, uses default resource)
@@ -629,14 +617,10 @@ namespace actor_zeta {
             promise_type(Args&&...) noexcept
                 : resource_(pmr::get_default_resource())
                 , state_(nullptr) {
-                std::cout << "[PROMISE_TYPE CTOR] Variadic constructor (default resource)\n";
-                std::cout.flush();
             }
 
             /// @brief Destructor - DEBUG
             ~promise_type() noexcept {
-                std::cout << "[PROMISE_TYPE DTOR] Destroyed\n";
-                std::cout.flush();
             }
 
         private:
@@ -969,8 +953,6 @@ namespace actor_zeta {
 
         explicit future_awaiter(detail::future_state<T>* s, pmr::memory_resource* res) noexcept
             : state_(s), resource_(res) {
-            std::cout << "[FUTURE_AWAITER CTOR] state=" << state_ << " resource=" << resource_ << "\n";
-            std::cout.flush();
         }
 
         // TRIVIAL copy/move - just pointer!
@@ -980,23 +962,16 @@ namespace actor_zeta {
         future_awaiter& operator=(future_awaiter&&) = default;
 
         ~future_awaiter() noexcept {
-            std::cout << "[FUTURE_AWAITER DTOR] state=" << state_ << "\n";
-            std::cout.flush();
         }
 
         /// @brief Check if future is ready (fast path - no suspend needed)
         [[nodiscard]] bool await_ready() const noexcept {
-            std::cout << "[AWAIT_READY] Called, state=" << state_ << "\n";
-            std::cout.flush();
 
             if (!state_) {
-                std::cout << "[AWAIT_READY] Null state, ready=true\n";
                 return true;  // Invalid future - don't suspend
             }
 
             bool ready = state_->is_ready();
-            std::cout << "[AWAIT_READY] ready=" << ready << "\n";
-            std::cout.flush();
             return ready;
         }
 
@@ -1004,59 +979,41 @@ namespace actor_zeta {
         /// @return false = resume immediately, true = suspend and wait
         /// @note SIMPLIFIED: Direct state pointer access
         bool await_suspend(std::coroutine_handle<> handle) noexcept {
-            std::cout << "[AWAIT_SUSPEND] Called, state=" << state_ << "\n";
-            std::cout.flush();
 
             if (!state_) {
-                std::cout << "[AWAIT_SUSPEND] Null state, not suspending\n";
                 return false;  // Invalid - don't suspend
             }
 
             // Check again after potential race
             if (state_->is_ready()) {
-                std::cout << "[AWAIT_SUSPEND] State already ready, not suspending\n";
                 return false;  // Don't suspend, resume immediately
             }
 
             // Register continuation that will resume this coroutine
-            std::cout << "[AWAIT_SUSPEND] Registering continuation\n";
-            std::cout.flush();
 
             state_->add_continuation(detail::unique_function<void()>(resource_, [handle]() mutable {
                 // Resume coroutine when future becomes ready
-                std::cout << "[CONTINUATION] Resuming coroutine\n";
-                std::cout.flush();
                 handle.resume();
-                std::cout << "[CONTINUATION] Coroutine resumed\n";
-                std::cout.flush();
             }));
 
             // Suspend coroutine - it will be resumed by the continuation
-            std::cout << "[AWAIT_SUSPEND] Suspending coroutine\n";
-            std::cout.flush();
             return true;
         }
 
         /// @brief Get result when coroutine resumes
         /// @note SIMPLIFIED: Direct state access
         T await_resume() {
-            std::cout << "[AWAIT_RESUME] Called, state=" << state_ << "\n";
-            std::cout.flush();
 
             assert(state_ && "await_resume() with null state");
             assert(state_->is_ready() && "await_resume() called but state not ready!");
 
             // Extract value from state
-            std::cout << "[AWAIT_RESUME] Extracting value from state\n";
             T result = state_->result().template get<T>(0);
 
             // Release state
-            std::cout << "[AWAIT_RESUME] Releasing state\n";
             state_->release();
             state_ = nullptr;
 
-            std::cout << "[AWAIT_RESUME] Returning result\n";
-            std::cout.flush();
             return result;
         }
     };
@@ -1111,12 +1068,9 @@ namespace actor_zeta {
     /// @note This is a free function, NOT a member function
     template<typename T>
     auto operator co_await(unique_future<T>&& f) noexcept {
-        std::cout << "[FREE OPERATOR CO_AWAIT] Called with rvalue\n";
-        std::cout.flush();
 
         // Handle IMMEDIATE mode - these are always ready
         if (f.is_immediate()) {
-            std::cout << "[FREE OPERATOR CO_AWAIT] IMMEDIATE mode - ERROR! Cannot co_await immediate value\n";
             // IMMEDIATE mode can't be awaited - must extract value directly
             // Return awaiter with null state (await_ready will return true)
             return future_awaiter<T>{nullptr, pmr::get_default_resource()};
@@ -1128,8 +1082,6 @@ namespace actor_zeta {
         // Extract state pointer (transfers ownership)
         auto* state = std::move(f).take_state();
 
-        std::cout << "[FREE OPERATOR CO_AWAIT] Extracted state=" << state << " resource=" << resource << "\n";
-        std::cout.flush();
 
         // Return awaiter with state pointer
         return future_awaiter<T>{state, resource};
@@ -1138,12 +1090,9 @@ namespace actor_zeta {
     /// @brief Lvalue overload - also needed
     template<typename T>
     auto operator co_await(unique_future<T>& f) noexcept {
-        std::cout << "[FREE OPERATOR CO_AWAIT] Called with lvalue\n";
-        std::cout.flush();
 
         // Handle IMMEDIATE mode
         if (f.is_immediate()) {
-            std::cout << "[FREE OPERATOR CO_AWAIT] IMMEDIATE mode - ERROR! Cannot co_await immediate value\n";
             return future_awaiter<T>{nullptr, pmr::get_default_resource()};
         }
 
@@ -1152,8 +1101,6 @@ namespace actor_zeta {
 
         auto* state = std::move(f).take_state();
 
-        std::cout << "[FREE OPERATOR CO_AWAIT] Extracted state=" << state << " resource=" << resource << "\n";
-        std::cout.flush();
 
         return future_awaiter<T>{state, resource};
     }

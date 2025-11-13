@@ -9,7 +9,6 @@
 #include <cassert>
 #include <cstdint>
 #include <vector>
-#include <iostream>
 
 namespace actor_zeta { namespace detail {
 
@@ -214,22 +213,16 @@ namespace actor_zeta { namespace detail {
 #if HAVE_STD_COROUTINES
             // PHASE 4: Invoke all continuations after result is set
             if (transitioned && !continuations_.empty()) {
-                std::cout << "[SET_RESULT] Invoking " << continuations_.size() << " continuations\n";
                 // Move continuations out to invoke (avoids issues if continuation adds more continuations)
                 auto conts = std::move(continuations_);
                 continuations_.clear();
 
                 // Invoke all registered continuations
                 for (size_t i = 0; i < conts.size(); ++i) {
-                    std::cout << "[SET_RESULT] Invoking continuation #" << i << "\n";
                     if (conts[i]) {
                         conts[i]();
-                        std::cout << "[SET_RESULT] Continuation #" << i << " completed\n";
                     }
                 }
-                std::cout << "[SET_RESULT] All continuations invoked\n";
-            } else if (transitioned) {
-                std::cout << "[SET_RESULT] Transitioned but no continuations registered\n";
             }
 #else
             (void)transitioned;  // Suppress unused warning when coroutines disabled
@@ -303,7 +296,6 @@ namespace actor_zeta { namespace detail {
         void add_continuation(unique_function<void()>&& continuation) {
             // Check if already ready - if so, invoke immediately
             if (is_ready()) {
-                std::cout << "[ADD_CONTINUATION] Future already ready, invoking immediately\n";
                 if (continuation) {
                     continuation();
                 }
@@ -311,7 +303,6 @@ namespace actor_zeta { namespace detail {
             }
 
             // Otherwise, store for later invocation in set_result()
-            std::cout << "[ADD_CONTINUATION] Storing continuation for later (count=" << continuations_.size() << ")\n";
             continuations_.push_back(std::move(continuation));
         }
 #endif // HAVE_STD_COROUTINES
