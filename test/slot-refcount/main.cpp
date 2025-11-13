@@ -256,8 +256,10 @@ TEST_CASE("future_state<int> - thread safety") {
         std::thread writer([slot, &result_set]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             rtt value(pmr::get_default_resource(), 777);
-            slot->set_result(std::move(value));
+            // Set external flag BEFORE set_result()
+            // This tests transitive happens-before: result_set → set_result() → is_ready()
             result_set.store(true, std::memory_order_release);
+            slot->set_result(std::move(value));
         });
 
         // Thread 2: polls is_ready

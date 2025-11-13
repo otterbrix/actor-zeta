@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <actor-zeta/detail/type_list.hpp>
+#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/base/forwards.hpp>
 
@@ -20,6 +21,14 @@ namespace actor_zeta {
     };
 
     namespace detail {
+        // Helper: unwrap unique_future<T> to T (for PHASE 3 handler integration)
+        template<typename T>
+        using unwrap_future_t = typename std::conditional_t<
+            type_traits::is_unique_future_v<T>,
+            typename type_traits::is_unique_future<T>::value_type,
+            T
+        >;
+
         template<auto SearchPtr, auto CurrentPtr>
         struct is_same_method_ptr : std::false_type {};
 
@@ -72,7 +81,7 @@ namespace actor_zeta {
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
         auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
             -> typename Actor::template unique_future<
-                typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
+                unwrap_future_t<typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>>;
     }
 
     // Базовый случай - метод не найден
@@ -95,7 +104,7 @@ namespace actor_zeta {
         template<std::size_t... Is>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender, std::index_sequence<>, Args&&... args)
             -> typename Actor::template unique_future<
-                typename type_traits::callable_trait<Method>::result_type>
+                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
         {
             using result_type = typename type_traits::callable_trait<Method>::result_type;
             (void)method; (void)actor; (void)sender; (void)sizeof...(args);
@@ -109,7 +118,7 @@ namespace actor_zeta {
         static auto dispatch(Method method, ActorPtr* actor, Sender sender,
                             std::index_sequence<FirstIndex, RestIndices...>, Args&&... args)
             -> typename Actor::template unique_future<
-                typename type_traits::callable_trait<Method>::result_type>
+                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
         {
             // Check if this method matches
             if constexpr (std::is_same<Method, decltype(FirstMethod)>::value) {
@@ -131,7 +140,7 @@ namespace actor_zeta {
     template<typename Actor, typename Method, auto... MethodPtrs, typename ActorPtr, typename Sender, typename... Args, std::size_t... Is>
     static auto dispatch_impl(Method method, ActorPtr* actor, Sender sender, std::index_sequence<Is...>, Args&&... args)
         -> typename Actor::template unique_future<
-            typename type_traits::callable_trait<Method>::result_type>
+            detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
     {
         return dispatch_one_impl<Actor, Method, ActorPtr, Sender, Args...>::template dispatch<MethodPtrs...>(
             method, actor, sender,
@@ -144,7 +153,7 @@ namespace actor_zeta {
         template<typename ActorPtr, typename Sender, typename... Args>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender, Args&&... args)
             -> typename Actor::template unique_future<
-                typename type_traits::callable_trait<Method>::result_type>
+                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
         {
             return dispatch_impl<Actor, Method, MethodPtrs...>(
                 method, actor, sender,
@@ -156,7 +165,7 @@ namespace actor_zeta {
         template<typename Sender, typename... Args>
         static auto dispatch(Method method, base::address_t target, Sender sender, Args&&... args)
             -> typename Actor::template unique_future<
-                typename type_traits::callable_trait<Method>::result_type>
+                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
         {
             auto* actor = static_cast<Actor*>(target.operator->());
             return dispatch_impl<Actor, Method, MethodPtrs...>(

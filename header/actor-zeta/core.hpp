@@ -21,6 +21,10 @@ namespace actor_zeta {
     using base::behavior_t;
     using base::make_behavior;
 
+#if HAVE_STD_COROUTINES
+    using base::coroutine_actor;
+#endif
+
     using mailbox::message;
     using mailbox::message_ptr;
     using mailbox::message_id;
