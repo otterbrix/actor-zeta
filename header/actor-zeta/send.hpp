@@ -36,7 +36,7 @@ namespace detail {
         using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
         using method_result_type = typename callable_trait::result_type;
 
-        // PHASE 3: Unwrap unique_future<T> returns to T for handler integration
+        // Unwrap unique_future<T> returns to T for handler integration
         // When method returns unique_future<T>, handler calls get() and stores T in result_slot
         // So send() should create future<T>, not future<unique_future<T>>
         using actual_result_type = unwrap_future_t<method_result_type>;

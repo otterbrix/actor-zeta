@@ -21,7 +21,7 @@ namespace actor_zeta {
     };
 
     namespace detail {
-        // Helper: unwrap unique_future<T> to T (for PHASE 3 handler integration)
+        // Helper: unwrap unique_future<T> to T (for handler integration)
         template<typename T>
         using unwrap_future_t = typename std::conditional_t<
             type_traits::is_unique_future_v<T>,

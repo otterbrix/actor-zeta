@@ -603,7 +603,6 @@ namespace actor_zeta {
             }
 
             /// @brief await_transform REMOVED - let compiler call operator co_await directly!
-            /// Testing if await_transform returning future reference is the problem
 
             /// @brief Constructor - SIMPLE VERSION (no SFINAE, just use default resource)
             /// For now, always use default resource to eliminate template complexity
@@ -619,9 +618,7 @@ namespace actor_zeta {
                 , state_(nullptr) {
             }
 
-            /// @brief Destructor - DEBUG
-            ~promise_type() noexcept {
-            }
+            ~promise_type() noexcept = default;
 
         private:
             pmr::memory_resource* resource_;

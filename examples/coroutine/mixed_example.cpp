@@ -1,7 +1,7 @@
 // Mixed Sync/Async Actor Example
 // Demonstrates that actor can have BOTH sync and async methods with unified interface
 //
-// ⚠️ PHASE 1 LIMITATION: Recursive/nested coroutines NOT supported
+// Recursive/nested coroutines NOT supported
 // This example uses only non-recursive async methods
 
 #if HAVE_STD_COROUTINES
@@ -55,7 +55,7 @@ public:
 
     /// @brief Square function - asynchronous coroutine method
     /// Uses co_await to call multiply() without blocking
-    /// NOTE: This is NON-RECURSIVE - safe in Phase 1
+    /// NOTE: This is NON-RECURSIVE
     actor_zeta::unique_future<int> square(int x) {
         std::cout << "[Calculator] ASYNC square(" << x << ") - START\n";
 
@@ -148,8 +148,8 @@ int main() {
     std::cout << "3. Sync methods use 'return T' - implicit conversion\n";
     std::cout << "4. Async methods use 'co_await' and 'co_return'\n";
     std::cout << "5. No difference from caller's perspective!\n";
-    std::cout << "\n⚠️ NOTE: Recursive coroutines (like factorial, power) are NOT supported in Phase 1\n";
-    std::cout << "   Use iterative algorithms instead, or wait for Phase 5.\n\n";
+    std::cout << "\n NOTE: Recursive coroutines (like factorial, power) are NOT supported\n";
+    std::cout << "   Use iterative algorithms instead.\n\n";
 
     std::cout << "--- Cleanup ---\n\n";
 

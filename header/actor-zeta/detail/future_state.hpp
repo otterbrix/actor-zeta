@@ -211,7 +211,7 @@ namespace actor_zeta { namespace detail {
                                                 std::memory_order_relaxed);  // failure: relaxed
 
 #if HAVE_STD_COROUTINES
-            // PHASE 4: Invoke all continuations after result is set
+            // Invoke all continuations after result is set
             if (transitioned && !continuations_.empty()) {
                 // Move continuations out to invoke (avoids issues if continuation adds more continuations)
                 auto conts = std::move(continuations_);
@@ -292,7 +292,7 @@ namespace actor_zeta { namespace detail {
         /// @brief Add continuation callback to be invoked when future becomes ready
         /// @param continuation Callback to invoke when result is set
         /// @note If future is already ready, continuation is invoked immediately
-        /// @note PHASE 4: Enables non-blocking co_await and then() chains
+        /// @note Enables non-blocking co_await and then() chains
         void add_continuation(unique_function<void()>&& continuation) {
             // Check if already ready - if so, invoke immediately
             if (is_ready()) {
@@ -317,7 +317,7 @@ namespace actor_zeta { namespace detail {
         rtt result_;
 #if HAVE_STD_COROUTINES
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
-        std::vector<unique_function<void()>, pmr::polymorphic_allocator<unique_function<void()>>> continuations_;  // PHASE 4: Continuation callbacks
+        std::vector<unique_function<void()>, pmr::polymorphic_allocator<unique_function<void()>>> continuations_;  // Continuation callbacks
 #endif
     };
 
@@ -352,7 +352,7 @@ namespace actor_zeta { namespace detail {
             bool transitioned = transition(expected, future_state_enum::ready);
 
 #if HAVE_STD_COROUTINES
-            // PHASE 4: Invoke all continuations after becoming ready
+            // Invoke all continuations after becoming ready
             if (transitioned && !continuations_.empty()) {
                 // Move continuations out to invoke (avoids issues if continuation adds more continuations)
                 auto conts = std::move(continuations_);
@@ -402,7 +402,7 @@ namespace actor_zeta { namespace detail {
         /// @brief Add continuation callback to be invoked when future becomes ready
         /// @param continuation Callback to invoke when ready
         /// @note If future is already ready, continuation is invoked immediately
-        /// @note PHASE 4: Enables non-blocking co_await and then() chains
+        /// @note Enables non-blocking co_await and then() chains
         void add_continuation(unique_function<void()>&& continuation) {
             // Check if already ready - if so, invoke immediately
             if (is_ready()) {
@@ -426,7 +426,7 @@ namespace actor_zeta { namespace detail {
     private:
 #if HAVE_STD_COROUTINES
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
-        std::vector<unique_function<void()>, pmr::polymorphic_allocator<unique_function<void()>>> continuations_;  // PHASE 4: Continuation callbacks
+        std::vector<unique_function<void()>, pmr::polymorphic_allocator<unique_function<void()>>> continuations_;  // Continuation callbacks
 #endif
     };
 
