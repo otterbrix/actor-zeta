@@ -140,7 +140,7 @@ namespace actor_zeta { namespace base {
             }
             msg->set_error(mailbox::slot_error_code::ok);
         }
-        // Case 2: unique_future<T> return type (Phase 2-3 support)
+        // Case 2: unique_future<T> return type
         else if constexpr (type_traits::is_unique_future<result_type>::value) {
             using T = typename type_traits::is_unique_future<result_type>::value_type;
 
