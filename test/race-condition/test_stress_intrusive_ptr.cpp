@@ -16,12 +16,13 @@ public:
         , get_value_behavior_(actor_zeta::make_behavior(resource, this, &refcount_stress_actor::get_value)) {
     }
 
-    void increment(int delta) {
+    actor_zeta::unique_future<void> increment(int delta) {
         value_.fetch_add(delta, std::memory_order_relaxed);
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    int get_value() const {
-        return value_.load(std::memory_order_relaxed);
+    actor_zeta::unique_future<int> get_value() const {
+        return actor_zeta::make_ready_future<int>(resource(), value_.load(std::memory_order_relaxed));
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

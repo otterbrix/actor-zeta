@@ -3,7 +3,7 @@
 
 #include <actor-zeta.hpp>
 
-// ✅ Good actor - uses void (fire-and-forget) and other types (request-response)
+// Good actor - uses void (fire-and-forget) and other types (request-response)
 class good_actor final : public actor_zeta::basic_actor<good_actor> {
 public:
     explicit good_actor(actor_zeta::pmr::memory_resource* ptr)
@@ -14,25 +14,26 @@ public:
         , get_name_(actor_zeta::make_behavior(resource(), this, &good_actor::get_name)) {
     }
 
-    // ✅ ALLOWED: void - fire-and-forget
-    void ping() {
+    // ALLOWED: void - fire-and-forget
+    actor_zeta::unique_future<void> ping() {
         ping_count_++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    // ✅ ALLOWED: int - returns result via future
-    int calculate() {
-        return 42;
+    // ALLOWED: int - returns result via future
+    actor_zeta::unique_future<int> calculate() {
+        return actor_zeta::make_ready_future<int>(resource(), 42);
     }
 
-    // ✅ ALLOWED: enum for status instead of bool
+    // ALLOWED: enum for status instead of bool
     enum class status { ok, error };
-    status check_status() {
-        return status::ok;
+    actor_zeta::unique_future<status> check_status() {
+        return actor_zeta::make_ready_future<status>(resource(), status::ok);
     }
 
-    // ✅ ALLOWED: std::string - returns result via future
-    std::string get_name() {
-        return "good_actor";
+    // ALLOWED: std::string - returns result via future
+    actor_zeta::unique_future<std::string> get_name() {
+        return actor_zeta::make_ready_future<std::string>(resource(), std::string("good_actor"));
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

@@ -15,8 +15,8 @@ public:
         , echo_behavior_(actor_zeta::make_behavior(resource, this, &refcount_test_actor::echo)) {
     }
 
-    int echo(int value) {
-        return value;
+    actor_zeta::unique_future<int> echo(int value) {
+        return actor_zeta::make_ready_future<int>(resource(), value);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

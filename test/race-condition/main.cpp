@@ -19,10 +19,11 @@ public:
 
     ~stress_actor() = default;
 
-    int compute(int value) {
+    actor_zeta::unique_future<int> compute(int value) {
         // Simulate some work
         processed_count_.fetch_add(1, std::memory_order_relaxed);
-        return value * 2;
+        int result = value * 2;
+        return actor_zeta::make_ready_future<int>(resource(), result);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

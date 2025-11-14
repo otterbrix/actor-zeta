@@ -57,6 +57,16 @@ namespace actor_zeta {
 #define HAVE_STD_PMR 0
 #endif
 
+#if CPP20_OR_GREATER && defined(__has_include)
+#if __has_include(<coroutine>) && defined(__cpp_impl_coroutine)
+#define HAVE_STD_COROUTINES 1
+#else
+#define HAVE_STD_COROUTINES 0
+#endif
+#else
+#define HAVE_STD_COROUTINES 0
+#endif
+
 #define CACHE_LINE_SIZE 64
 
 #ifndef NODISCARD

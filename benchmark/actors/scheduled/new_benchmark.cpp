@@ -34,17 +34,19 @@ public:
     void set_partner(ping_pong_actor* p) { partner_ = p; }
 
     // Receives PING, increments counter, sends PONG back to partner
-    void ping(Args...) {
+    actor_zeta::unique_future<void> ping(Args...) {
         ++ping_pong_counter;
         if (partner_) {
             actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
         }
+        return actor_zeta::make_ready_future_void(this->resource());
     }
 
     // Receives PONG, increments counter (end of exchange)
-    void pong(Args...) {
+    actor_zeta::unique_future<void> pong(Args...) {
         ++ping_pong_counter;
         ping_pong_done.store(true, std::memory_order_release);
+        return actor_zeta::make_ready_future_void(this->resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

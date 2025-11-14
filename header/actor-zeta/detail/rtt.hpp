@@ -85,10 +85,21 @@ namespace actor_zeta { namespace detail {
             for (std::size_t i = 0; i < objects_idx_; ++i) {
                 objects_[i].destroyer(tmp + objects_[i].offset);
             }
+
+            // Note: capacity_ stores the actual data size, not aligned size
+            // So we need to recalculate aligned size for deallocation
+            // However, the actual allocated size is implementation-defined
+            // For simplicity, we'll use the formula that matches allocation
+            if (allocation) {
+                // Align capacity to objects_t boundary
+                constexpr std::size_t objects_alignment = alignof(objects_t);
+                std::size_t aligned_capacity = (capacity_ + objects_alignment - 1) & ~(objects_alignment - 1);
+                std::size_t allocated_size = aligned_capacity + objects_idx_ * sizeof(objects_t);
+                memory_resource_->deallocate(allocation, allocated_size);
+            }
+
             volume_ = 0;
             objects_idx_ = 0;
-            if (allocation)
-                memory_resource_->deallocate(allocation, capacity_ + capacity_ * sizeof(objects_t));
             allocation = nullptr;
             data_ = nullptr;
             objects_ = nullptr;
@@ -116,11 +127,16 @@ namespace actor_zeta { namespace detail {
 
             constexpr std::size_t sz = getSize<0, Args...>();
             capacity_ = sz;
-            allocation = memory_resource_->allocate(capacity_ + capacity_ * sizeof(objects_t));
+
+            // Align capacity to objects_t boundary to prevent misaligned access
+            constexpr std::size_t objects_alignment = alignof(objects_t);
+            std::size_t aligned_capacity = (capacity_ + objects_alignment - 1) & ~(objects_alignment - 1);
+
+            allocation = memory_resource_->allocate(aligned_capacity + sizeof...(Args) * sizeof(objects_t));
             assert(allocation);
             data_ = static_cast<char*>(allocation);
             assert(data_);
-            objects_ = static_cast<objects_t*>(static_cast<void*>(data_ + capacity_));
+            objects_ = static_cast<objects_t*>(static_cast<void*>(data_ + aligned_capacity));
             assert(objects_);
 
             EXPAND_VARIADIC(push_back_no_realloc(std::forward<Args>(args)));

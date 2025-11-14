@@ -16,18 +16,21 @@ public:
     }
 
     // Method definitions inside the class
-    void method1(int value) {
+    actor_zeta::unique_future<void> method1(int value) {
         ++call_count1_;
         last_value1_ = value;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void method2(std::string text) {
+    actor_zeta::unique_future<void> method2(std::string text) {
         ++call_count2_;
         last_value2_ = text;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void method3() {
+    actor_zeta::unique_future<void> method3() {
         ++call_count3_;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     // New dispatch_traits syntax - AFTER method definitions!

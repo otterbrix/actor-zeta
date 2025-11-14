@@ -38,7 +38,7 @@ public:
         return executor_.get();
     }
 
-    void check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
+    actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
 
     void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
@@ -64,11 +64,12 @@ private:
     std::set<int64_t> ids_;
 };
 
-void dummy_supervisor::check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data) {
+actor_zeta::unique_future<void> dummy_supervisor::check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data) {
     REQUIRE(data != nullptr);
     REQUIRE(data->number == expected_data.number);
     REQUIRE(data->name.size() == expected_data.name.size());
     REQUIRE(data->name == expected_data.name);
+    return actor_zeta::make_ready_future_void(resource());
 }
 
 TEST_CASE("base move test") {

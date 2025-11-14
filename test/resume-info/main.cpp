@@ -11,8 +11,9 @@ public:
         , test_(actor_zeta::make_behavior(resource(), this, &test_actor::test)) {
     }
 
-    void test() {
+    actor_zeta::unique_future<void> test() {
         ++processed_count_;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

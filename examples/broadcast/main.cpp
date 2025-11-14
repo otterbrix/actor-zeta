@@ -13,8 +13,8 @@ using actor_zeta::pmr::memory_resource;
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
     // Request-response methods (return results automatically via promise)
-    std::size_t download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
-    std::size_t work_data_with_result(const std::string& data, const std::string& /*operatorName*/);
+    actor_zeta::unique_future<std::size_t> download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
+    actor_zeta::unique_future<std::size_t> work_data_with_result(const std::string& data, const std::string& /*operatorName*/);
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &worker_t::download_with_result,
@@ -52,16 +52,18 @@ private:
 };
 
 // Request-response implementations - automatically return results via promise
-inline std::size_t worker_t::download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
+inline actor_zeta::unique_future<std::size_t> worker_t::download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
     std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
     tmp_ = url;
     std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
-    return tmp_.size(); // Return downloaded size
+    std::size_t result = tmp_.size(); // Return downloaded size
+    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
 }
 
-inline std::size_t worker_t::work_data_with_result(const std::string& data, const std::string& /*operatorName*/) {
+inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(const std::string& data, const std::string& /*operatorName*/) {
     tmp_ = data;
-    return tmp_.size(); // Return processed size
+    std::size_t result = tmp_.size(); // Return processed size
+    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
 }
 
 /// non thread safe
@@ -84,10 +86,11 @@ public:
         delete e_;
     }
 
-    void create() {
+    actor_zeta::unique_future<void> create() {
         auto ptr = actor_zeta::spawn<worker_t>(resource_);
         actors_.emplace_back(std::move(ptr));
         ++size_actors_;
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

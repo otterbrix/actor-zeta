@@ -17,15 +17,15 @@ public:
         , fast_task_behavior_(actor_zeta::make_behavior(resource, this, &state_test_actor::fast_task)) {
     }
 
-    int compute(int value) {
+    actor_zeta::unique_future<int> compute(int value) {
         // Simulate some processing
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        return value * 2;
+        return actor_zeta::make_ready_future<int>(resource(), value * 2);
     }
 
-    int fast_task(int value) {
+    actor_zeta::unique_future<int> fast_task(int value) {
         // Immediate processing (no delay)
-        return value + 1;
+        return actor_zeta::make_ready_future<int>(resource(), value + 1);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

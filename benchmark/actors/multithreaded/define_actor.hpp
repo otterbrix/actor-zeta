@@ -34,7 +34,7 @@ public:
         scheduler_ = sched;
     }
 
-    void start() {
+    actor_zeta::unique_future<void> start() {
         // Send ping to partner and schedule only if needed
         if (partner_ && scheduler_) {
             auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
@@ -43,9 +43,10 @@ public:
                 scheduler_->enqueue(partner_);
             }
         }
+        return actor_zeta::make_ready_future_void(this->resource());
     }
 
-    void ping(Args...) {
+    actor_zeta::unique_future<void> ping(Args...) {
         // Receive ping, send pong back
         if (partner_ && scheduler_) {
             auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
@@ -54,10 +55,12 @@ public:
                 scheduler_->enqueue(partner_);
             }
         }
+        return actor_zeta::make_ready_future_void(this->resource());
     }
 
-    void pong(Args...) {
+    actor_zeta::unique_future<void> pong(Args...) {
         // Receive pong, do nothing (end of exchange)
+        return actor_zeta::make_ready_future_void(this->resource());
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

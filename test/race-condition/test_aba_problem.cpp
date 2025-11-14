@@ -15,9 +15,9 @@ public:
         , process_behavior_(actor_zeta::make_behavior(resource, this, &aba_test_actor::process)) {
     }
 
-    int process(int value) {
+    actor_zeta::unique_future<int> process(int value) {
         // Simulate some work
-        return value * 2;
+        return actor_zeta::make_ready_future<int>(resource(), value * 2);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {
