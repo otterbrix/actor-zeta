@@ -27,7 +27,15 @@ namespace actor_zeta { namespace detail {
         explicit future_state_base(pmr::memory_resource* res) noexcept
             : resource_(res)
             , state_(future_state_enum::pending)
-            , refcount_(2)  // Initial: 1 for message, 1 for future
+            // Initial refcount = 2:
+            //   Ref #1: Owned by message (released when message processed or mailbox destroyed)
+            //   Ref #2: Owned by future (released when future.get() called or future destroyed)
+            //
+            // Lifetime scenarios:
+            //   Normal:    message processed → ref=1, future.get() → ref=0 → destroy
+            //   Orphaned:  future destroyed → ref=1, message processed → ref=0 → destroy
+            //   Cancelled: future destroyed early → ref=1, message sets error → ref=0 → destroy
+            , refcount_(2)
 #ifndef NDEBUG
             , magic_(kMagicAlive)
             , generation_(next_generation())

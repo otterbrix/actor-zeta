@@ -51,11 +51,23 @@ namespace actor_zeta {
 
         void set_value(T&& value) {
             assert(slot_ && "set_value() on moved-from promise");
+
+            if (slot_->is_cancelled()) {
+                assert(false && "set_value() on orphaned/cancelled promise");
+                return;
+            }
+
             slot_->set_result_rtt(detail::rtt(resource_, std::forward<T>(value)));
         }
 
         void set_value(const T& value) {
             assert(slot_ && "set_value() on moved-from promise");
+
+            if (slot_->is_cancelled()) {
+                assert(false && "set_value() on orphaned/cancelled promise");
+                return;
+            }
+
             slot_->set_result_rtt(detail::rtt(resource_, value));
         }
 
@@ -102,7 +114,13 @@ namespace actor_zeta {
 
         void set_value() {
             assert(slot_ && "set_value() on moved-from promise<void>");
-            slot_->set_result_rtt(detail::rtt(resource_, int{0}));
+
+            if (slot_->is_cancelled()) {
+                assert(false && "set_value() on orphaned/cancelled promise");
+                return;
+            }
+
+            slot_->set_result_rtt(detail::rtt(resource_));  // Empty rtt for void
         }
 
         [[nodiscard]] bool is_valid() const noexcept {
@@ -220,7 +238,7 @@ namespace actor_zeta {
                     storage_.state_ = nullptr;
                     mode_ = storage_mode::invalid;
                     assert(false && "get() on cancelled future!");
-                    return T{};
+                    std::terminate();
                 }
                 ++spin_count;
             }
@@ -231,7 +249,7 @@ namespace actor_zeta {
                     storage_.state_ = nullptr;
                     mode_ = storage_mode::invalid;
                     assert(false && "get() on cancelled future!");
-                    return T{};
+                    std::terminate();
                 }
                 std::this_thread::yield();
                 ++spin_count;
@@ -246,7 +264,7 @@ namespace actor_zeta {
                     storage_.state_ = nullptr;
                     mode_ = storage_mode::invalid;
                     assert(false && "get() on cancelled future!");
-                    return T{};
+                    std::terminate();
                 }
 
                 std::this_thread::sleep_for(backoff);

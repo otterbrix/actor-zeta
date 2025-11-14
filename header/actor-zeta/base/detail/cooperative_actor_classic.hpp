@@ -106,6 +106,7 @@ namespace actor_zeta { namespace base {
         using unique_future = actor_zeta::unique_future<T>;
 
         template<typename R>
+        [[nodiscard("Check needs_scheduling() and call schedule() if needed")]]
         unique_future<R> enqueue_impl(mailbox::message_ptr msg) {
             assert(msg.get() != nullptr);
 
