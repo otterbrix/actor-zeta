@@ -72,9 +72,14 @@ elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES 
                 message(STATUS "C++17 detected - GCC ${CMAKE_CXX_COMPILER_VERSION} doesn't support coroutines, skipping")
             endif()
         elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-            # Clang uses -fcoroutines-ts for C++17
-            message(STATUS "C++17 detected - enabling experimental coroutines support (Clang: -fcoroutines-ts)")
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines-ts")
+            # Clang < 16: -fcoroutines-ts for C++17
+            # Clang >= 16: -fcoroutines-ts removed, coroutines available without flag in C++20 only
+            if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16.0)
+                message(STATUS "C++17 detected - enabling experimental coroutines support (Clang ${CMAKE_CXX_COMPILER_VERSION}: -fcoroutines-ts)")
+                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines-ts")
+            else()
+                message(STATUS "C++17 detected - Clang ${CMAKE_CXX_COMPILER_VERSION} doesn't support C++17 coroutines (use C++20)")
+            endif()
         endif()
     endif()
 endif()
