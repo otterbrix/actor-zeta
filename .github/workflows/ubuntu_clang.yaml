@@ -17,6 +17,7 @@ jobs:
         build_type: ["Release", "Debug"]
         configuration: [
           {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"14"},
+          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"15"},
           {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"16"},
           {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"17"},
           {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"18"}
