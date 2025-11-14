@@ -725,12 +725,12 @@ namespace actor_zeta {
     };
 
     template<typename T>
-    inline unique_future<T> make_ready_future(pmr::memory_resource* resource, T&& value) {
+    unique_future<T> make_ready_future(pmr::memory_resource* resource, T&& value) {
         return unique_future<T>(std::forward<T>(value));
     }
 
     template<typename T>
-    inline unique_future<T> make_ready_future(pmr::memory_resource* resource, const T& value) {
+    unique_future<T> make_ready_future(pmr::memory_resource* resource, const T& value) {
         return unique_future<T>(value);
     }
 
@@ -740,6 +740,15 @@ namespace actor_zeta {
         auto* state = new (mem) detail::future_state<void>(resource);
         state->set_ready();
         return unique_future<void>(state, false);
+    }
+
+    template<typename T>
+    unique_future<T> make_error_future(pmr::memory_resource* resource) {
+        void* mem = resource->allocate(sizeof(detail::future_state<T>),
+                                       alignof(detail::future_state<T>));
+        auto* state = new (mem) detail::future_state<T>(resource);
+        state->set_state(detail::future_state_enum::error);
+        return unique_future<T>(state, false);
     }
 
 }

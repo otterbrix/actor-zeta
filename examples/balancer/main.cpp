@@ -36,30 +36,35 @@ public:
     }
 
     // Методы для обработки сообщений
-    actor_zeta::unique_future<void> insert(std::string& key, std::string& value) {
+    actor_zeta::unique_future<void> insert(const std::string& key, const std::string& value) {
         data_.emplace(key, value);
         std::cerr << id() << " " << key << " " << value << std::endl;
         ++count_insert;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> remove(std::string& key) {
+    actor_zeta::unique_future<void> remove(const std::string& key) {
         data_.erase(key);
         std::cerr << id() << " remove " << key << std::endl;
         ++count_remove;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> update(std::string& key, std::string& value) {
+    actor_zeta::unique_future<void> update(const std::string& key, const std::string& value) {
         data_[key] = value;
         std::cerr << id() << " update " << key << " = " << value << std::endl;
         ++count_update;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<std::string> find(std::string& key) {
-        std::string result = data_[key];
-        return actor_zeta::make_ready_future<std::string>(resource(), result);
+    actor_zeta::unique_future<std::string> find(const std::string& key) {
+        auto it = data_.find(key);
+        ++count_find;
+        if (it != data_.end()) {
+            return actor_zeta::make_ready_future<std::string>(resource(), it->second);
+        } else {
+            return actor_zeta::make_ready_future<std::string>(resource(), std::string{});
+        }
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -104,10 +109,9 @@ class collection_t final : public actor_zeta::base::actor_mixin<collection_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
+    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler*)
         : actor_zeta::base::actor_mixin<collection_t>()
-        , resource_(resource)
-        , e_(scheduler) {
+        , resource_(resource) {
         ++count_collection;
     }
 
@@ -119,10 +123,10 @@ public:
     }
 
     // Dummy methods - just for dispatch_traits, never actually called
-    actor_zeta::unique_future<void> insert(std::string&, std::string&) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<void> remove(std::string&) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<void> update(std::string&, std::string&) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<std::string> find(std::string&) { return actor_zeta::make_ready_future<std::string>(resource_, std::string("")); }
+    actor_zeta::unique_future<void> insert(const std::string&, const std::string&) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> remove(const std::string&) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> update(const std::string&, const std::string&) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<std::string> find(const std::string&) { return actor_zeta::make_ready_future<std::string>(resource_, std::string("")); }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &collection_t::insert,
@@ -133,6 +137,12 @@ public:
 
     template<typename R>
     unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        // Check if we have any child actors
+        if (actors_.empty()) {
+            std::cerr << "Error: No child actors available" << std::endl;
+            return actor_zeta::make_error_future<R>(resource_);
+        }
+
         // Balancer logic: forward message to child actor using round-robin
         switch (msg->command()) {
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
@@ -179,13 +189,8 @@ public:
                 return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
             }
             default: {
-                std::cerr << "unknown command" << std::endl;
-                // Return invalid future for unknown commands
-                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
-                                                 alignof(actor_zeta::detail::future_state<R>));
-                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
-                state->set_state(actor_zeta::detail::future_state_enum::error);
-                return unique_future<R>(state, false);
+                std::cerr << "Error: Unknown command" << std::endl;
+                return actor_zeta::make_error_future<R>(resource_);
             }
         }
     }
@@ -194,7 +199,6 @@ protected:
 
 private:
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::scheduler::sharing_scheduler* e_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
 };
@@ -243,7 +247,7 @@ int main() {
 
     // Verify round-robin distribution
     bool success = (count_balancer == 6) && (count_insert == 3) && (count_update == 2) && (count_remove == 1);
-    std::cerr << "\nTest result: " << (success ? "PASSED ✓" : "FAILED ✗") << std::endl;
+    std::cerr << "\nTest result: " << (success ? "PASSED" : "FAILED") << std::endl;
 
     scheduler->stop();
     return success ? 0 : 1;

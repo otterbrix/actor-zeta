@@ -34,5 +34,6 @@ namespace actor_zeta {
     using actor_zeta::unique_future;
     using actor_zeta::make_ready_future;
     using actor_zeta::make_ready_future_void;
+    using actor_zeta::make_error_future;
 
 } // namespace actor_zeta
