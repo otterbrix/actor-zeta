@@ -1,5 +1,6 @@
 #pragma once
 
+#include <actor-zeta/config.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
@@ -326,107 +327,6 @@ namespace actor_zeta {
         }
 
 #if HAVE_STD_COROUTINES
-        template<typename F>
-        auto then(F&& callback) -> unique_future<
-            typename std::conditional_t<
-                type_traits::is_unique_future_v<typename std::invoke_result<F, T>::type>,
-                typename type_traits::is_unique_future<typename std::invoke_result<F, T>::type>::value_type,
-                typename std::invoke_result<F, T>::type
-            >
-        > {
-            using R = typename std::invoke_result<F, T>::type;
-
-            using unwrapped_result_t = typename std::conditional_t<
-                type_traits::is_unique_future_v<R>,
-                typename type_traits::is_unique_future<R>::value_type,
-                R
-            >;
-
-            pmr::memory_resource* resource = nullptr;
-            if (mode_ == storage_mode::state && storage_.state_) {
-                resource = storage_.state_->memory_resource();
-            } else {
-                resource = pmr::get_default_resource();
-            }
-
-            if (mode_ == storage_mode::immediate) {
-                T value = std::move(storage_.value_);
-                storage_.value_.~T();
-                mode_ = storage_mode::invalid;
-
-                if constexpr (std::is_void_v<R>) {
-                    callback(std::move(value));
-                    return unique_future<unwrapped_result_t>(resource);
-                } else if constexpr (type_traits::is_unique_future_v<R>) {
-                    R inner_future = callback(std::move(value));
-                    return inner_future;
-                } else {
-                    R result = callback(std::move(value));
-                    return unique_future<unwrapped_result_t>(std::move(result));
-                }
-            }
-
-            assert(mode_ == storage_mode::state && "then() on invalid future");
-            assert(storage_.state_ && "then() with null state");
-
-            void* mem = resource->allocate(sizeof(detail::future_state<unwrapped_result_t>),
-                                          alignof(detail::future_state<unwrapped_result_t>));
-            auto* new_state = new (mem) detail::future_state<unwrapped_result_t>(resource);
-            new_state->add_ref();
-
-            auto* current_state = storage_.state_;
-            current_state->add_ref();
-
-            current_state->add_continuation(detail::unique_function<void()>(resource, [current_state, new_state, callback = std::forward<F>(callback), resource]() mutable {
-                assert(current_state->is_ready() && "Continuation called before future ready");
-
-                T value = current_state->result().template get<T>(0);
-
-                if constexpr (std::is_void_v<R>) {
-                    callback(std::move(value));
-                    new_state->set_ready();
-                } else if constexpr (type_traits::is_unique_future_v<R>) {
-                    R inner_future = callback(std::move(value));
-
-                    if (inner_future.is_immediate()) {
-                        unwrapped_result_t inner_value = std::move(inner_future).take_immediate_value();
-                        detail::rtt result_rtt(resource, std::move(inner_value));
-                        new_state->set_result(std::move(result_rtt));
-                    } else if (inner_future.is_state()) {
-                        auto* inner_state = std::move(inner_future).take_state();
-                        inner_state->add_ref();
-
-                        inner_state->add_continuation(detail::unique_function<void()>(resource, [inner_state, new_state, resource]() mutable {
-                            assert(inner_state->is_ready() && "Inner continuation called before ready");
-
-                            unwrapped_result_t final_value = inner_state->result().template get<unwrapped_result_t>(0);
-                            detail::rtt final_rtt(resource, std::move(final_value));
-                            new_state->set_result(std::move(final_rtt));
-
-                            inner_state->release();
-                        }));
-
-                        inner_state->release();
-                    } else {
-                        new_state->set_state(detail::future_state_enum::cancelled);
-                    }
-                } else {
-                    R result = callback(std::move(value));
-                    detail::rtt result_rtt(resource, std::move(result));
-                    new_state->set_result(std::move(result_rtt));
-                }
-
-                current_state->release();
-            }));
-
-            storage_.state_ = nullptr;
-            mode_ = storage_mode::invalid;
-
-            return unique_future<unwrapped_result_t>(new_state, false);
-        }
-#endif
-
-#if HAVE_STD_COROUTINES
         struct promise_type {
             using value_type = T;
 
@@ -638,50 +538,6 @@ namespace actor_zeta {
         }
 
 #if HAVE_STD_COROUTINES
-        template<typename F>
-        auto then(F&& callback) -> unique_future<typename std::invoke_result<F>::type> {
-            using R = typename std::invoke_result<F>::type;
-
-            pmr::memory_resource* resource = nullptr;
-            if (state_) {
-                resource = state_->memory_resource();
-            } else {
-                resource = pmr::get_default_resource();
-            }
-
-            if (!state_) {
-                return unique_future<R>(resource);
-            }
-
-            void* mem = resource->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
-            auto* new_state = new (mem) detail::future_state<R>(resource);
-            new_state->add_ref();
-
-            auto* current_state = state_;
-            current_state->add_ref();
-
-            current_state->add_continuation(detail::unique_function<void()>(resource, [current_state, new_state, callback = std::forward<F>(callback), resource]() mutable {
-                assert(current_state->is_ready() && "Continuation called before future ready");
-
-                if constexpr (std::is_void_v<R>) {
-                    callback();
-                    new_state->set_ready();
-                } else {
-                    R result = callback();
-                    detail::rtt result_rtt(resource, std::move(result));
-                    new_state->set_result(std::move(result_rtt));
-                }
-
-                current_state->release();
-            }));
-
-            state_ = nullptr;
-
-            return unique_future<R>(new_state, false);
-        }
-#endif
-
-#if HAVE_STD_COROUTINES
         struct promise_type {
             using value_type = void;
 
@@ -796,9 +652,10 @@ namespace actor_zeta {
                 return false;
             }
 
-            state_->add_continuation(detail::unique_function<void()>(resource_, [handle]() mutable {
-                handle.resume();
-            }));
+            // ✅ CRITICAL: Save coroutine handle in future_state
+            // Resume will be called from actor's behavior() via resume_all()
+            // This ensures coroutine runs in CORRECT thread (actor's thread, not sender's)
+            state_->set_coroutine(handle);
 
             return true;
         }
@@ -837,10 +694,10 @@ namespace actor_zeta {
                 return false;
             }
 
-            auto* resource = state->memory_resource();
-            state->add_continuation(detail::unique_function<void()>(resource, [handle]() mutable {
-                handle.resume();
-            }));
+            // ✅ CRITICAL: Save coroutine handle in future_state
+            // Resume will be called from actor's behavior() via resume_all()
+            // This ensures coroutine runs in CORRECT thread (actor's thread, not sender's)
+            state->set_coroutine(handle);
 
             return true;
         }

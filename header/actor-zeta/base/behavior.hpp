@@ -53,10 +53,11 @@ namespace actor_zeta { namespace base {
             linked_state_ = state;
         }
 
-        /// @brief Resume suspended coroutine if present
+        /// @brief Resume suspended coroutine if present AND ready
         /// @note Called from behavior() before switch/dispatch
+        /// @note Only resumes if future is ready to avoid blocking
         void resume_if_suspended() noexcept {
-            if (linked_state_) {
+            if (linked_state_ && linked_state_->is_ready()) {
                 linked_state_->resume_coroutine();
             }
         }

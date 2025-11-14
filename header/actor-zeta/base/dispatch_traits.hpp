@@ -113,7 +113,7 @@ namespace actor_zeta {
             std::abort();  // Unreachable, but satisfies return type
         }
 
-        // Recursive case - try first method, then rest
+        // Recursive case - try first method, if not found continue with rest
         template<auto FirstMethod, auto... RestMethods, std::size_t FirstIndex, std::size_t... RestIndices>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender,
                             std::index_sequence<FirstIndex, RestIndices...>, Args&&... args)

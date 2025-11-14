@@ -3,12 +3,10 @@
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 #include <actor-zeta/detail/coroutine.hpp>
-#include <actor-zeta/detail/unique_function.hpp>
 #include <actor-zeta/config.hpp>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
-#include <vector>
 
 namespace actor_zeta { namespace detail {
 
@@ -168,7 +166,6 @@ namespace actor_zeta { namespace detail {
             , result_(res)
 #if HAVE_STD_COROUTINES
             , coro_handle_()
-            , continuations_(pmr::polymorphic_allocator<unique_function<void()>>(res))
 #endif
         {}
 
@@ -206,27 +203,12 @@ namespace actor_zeta { namespace detail {
             // Release ordering creates happens-before with acquire load in is_ready()
             // This ensures: result_ write visible to threads that see state==ready
             auto expected = future_state_enum::pending;
-            bool transitioned = state_.compare_exchange_strong(expected, future_state_enum::ready,
-                                                std::memory_order_release,  // success: release
-                                                std::memory_order_relaxed);  // failure: relaxed
+            state_.compare_exchange_strong(expected, future_state_enum::ready,
+                                          std::memory_order_release,  // success: release
+                                          std::memory_order_relaxed);  // failure: relaxed
 
-#if HAVE_STD_COROUTINES
-            // Invoke all continuations after result is set
-            if (transitioned && !continuations_.empty()) {
-                // Move continuations out to invoke (avoids issues if continuation adds more continuations)
-                auto conts = std::move(continuations_);
-                continuations_.clear();
-
-                // Invoke all registered continuations
-                for (size_t i = 0; i < conts.size(); ++i) {
-                    if (conts[i]) {
-                        conts[i]();
-                    }
-                }
-            }
-#else
-            (void)transitioned;  // Suppress unused warning when coroutines disabled
-#endif
+            // NOTE: Coroutine resumption happens later in actor's behavior()
+            // via resume_all() → resume_if_suspended() → resume_coroutine()
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
@@ -288,23 +270,6 @@ namespace actor_zeta { namespace detail {
         void set_coroutine(coroutine_handle<void> handle) noexcept {
             coro_handle_ = handle;
         }
-
-        /// @brief Add continuation callback to be invoked when future becomes ready
-        /// @param continuation Callback to invoke when result is set
-        /// @note If future is already ready, continuation is invoked immediately
-        /// @note Enables non-blocking co_await and then() chains
-        void add_continuation(unique_function<void()>&& continuation) {
-            // Check if already ready - if so, invoke immediately
-            if (is_ready()) {
-                if (continuation) {
-                    continuation();
-                }
-                return;
-            }
-
-            // Otherwise, store for later invocation in set_result()
-            continuations_.push_back(std::move(continuation));
-        }
 #endif // HAVE_STD_COROUTINES
 
     protected:
@@ -317,7 +282,6 @@ namespace actor_zeta { namespace detail {
         rtt result_;
 #if HAVE_STD_COROUTINES
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
-        std::vector<unique_function<void()>, pmr::polymorphic_allocator<unique_function<void()>>> continuations_;  // Continuation callbacks
 #endif
     };
 
@@ -329,7 +293,6 @@ namespace actor_zeta { namespace detail {
             : future_state_base(res)
 #if HAVE_STD_COROUTINES
             , coro_handle_()
-            , continuations_(pmr::polymorphic_allocator<unique_function<void()>>(res))
 #endif
         {}
 
@@ -349,25 +312,10 @@ namespace actor_zeta { namespace detail {
 #endif
             auto expected = future_state_enum::pending;
             // Try transition - if it fails, future was cancelled or already processed
-            bool transitioned = transition(expected, future_state_enum::ready);
+            transition(expected, future_state_enum::ready);
 
-#if HAVE_STD_COROUTINES
-            // Invoke all continuations after becoming ready
-            if (transitioned && !continuations_.empty()) {
-                // Move continuations out to invoke (avoids issues if continuation adds more continuations)
-                auto conts = std::move(continuations_);
-                continuations_.clear();
-
-                // Invoke all registered continuations
-                for (auto& cont : conts) {
-                    if (cont) {
-                        cont();
-                    }
-                }
-            }
-#else
-            (void)transitioned;  // Suppress unused warning when coroutines disabled
-#endif
+            // NOTE: Coroutine resumption happens later in actor's behavior()
+            // via resume_all() → resume_if_suspended() → resume_coroutine()
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
@@ -398,23 +346,6 @@ namespace actor_zeta { namespace detail {
         void set_coroutine(coroutine_handle<void> handle) noexcept {
             coro_handle_ = handle;
         }
-
-        /// @brief Add continuation callback to be invoked when future becomes ready
-        /// @param continuation Callback to invoke when ready
-        /// @note If future is already ready, continuation is invoked immediately
-        /// @note Enables non-blocking co_await and then() chains
-        void add_continuation(unique_function<void()>&& continuation) {
-            // Check if already ready - if so, invoke immediately
-            if (is_ready()) {
-                if (continuation) {
-                    continuation();
-                }
-                return;
-            }
-
-            // Otherwise, store for later invocation in set_ready()
-            continuations_.push_back(std::move(continuation));
-        }
 #endif // HAVE_STD_COROUTINES
 
     protected:
@@ -426,7 +357,6 @@ namespace actor_zeta { namespace detail {
     private:
 #if HAVE_STD_COROUTINES
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
-        std::vector<unique_function<void()>, pmr::polymorphic_allocator<unique_function<void()>>> continuations_;  // Continuation callbacks
 #endif
     };
 
