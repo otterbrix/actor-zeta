@@ -61,10 +61,17 @@ elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES 
     endif()
 
     # Enable C++17 experimental coroutines if using C++17 standard
-    # Note: AppleClang doesn't support -fcoroutines-ts, skip for macOS
+    # Note: AppleClang doesn't support coroutines flags in C++17, skip for macOS
     if (CMAKE_CXX_STANDARD EQUAL 17 AND NOT CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
-        message(STATUS "C++17 detected - enabling experimental coroutines support (-fcoroutines-ts)")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines-ts")
+        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+            # GCC uses -fcoroutines (not -fcoroutines-ts)
+            message(STATUS "C++17 detected - enabling experimental coroutines support (GCC: -fcoroutines)")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines")
+        elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            # Clang uses -fcoroutines-ts for C++17
+            message(STATUS "C++17 detected - enabling experimental coroutines support (Clang: -fcoroutines-ts)")
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines-ts")
+        endif()
     endif()
 endif()
 
