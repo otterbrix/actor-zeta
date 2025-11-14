@@ -16,21 +16,17 @@ jobs:
         cxx_standard: [17, 20]
         build_type: ["Release", "Debug"]
         configuration: [
-          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"},
           {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"},
 
-          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"9"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
-          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"}
+          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"},
+          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"13"},
+          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"14"}
         ]
         exclude:
-          # GCC 9, 10 don't support C++20
-          - configuration: {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"9"}
-            cxx_standard: 20
+          # GCC 10 doesn't support C++20
           - configuration: {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"}
-            cxx_standard: 20
-          - configuration: {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"9"}
             cxx_standard: 20
           - configuration: {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"}
             cxx_standard: 20
