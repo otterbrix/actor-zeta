@@ -129,23 +129,30 @@ namespace actor_zeta { namespace base {
         using call_trait =  type_traits::get_callable_trait_t<type_traits::remove_reference_t<F>>;
         using args_type_list = typename call_trait::args_types;
         using result_type = typename call_trait::result_type;
-        using T = typename type_traits::is_unique_future<result_type>::value_type;
         auto &args = msg->body();
 
-        result_type future = (ptr->*f)((actor_zeta::detail::get<I, args_type_list>(args))...);
-
-        if constexpr (std::is_void<T>::value) {
-            std::move(future).get();
-            if (msg->result_slot()) {
-                msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
-            }
+        if constexpr (std::is_void<result_type>::value) {
+            // Method returns void (not unique_future)
+            (ptr->*f)((actor_zeta::detail::get<I, args_type_list>(args))...);
+            msg->set_error(mailbox::slot_error_code::ok);
         } else {
-            T value = std::move(future).get();
-            if (msg->result_slot()) {
-                msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+            // Method returns unique_future<T>
+            using T = typename type_traits::is_unique_future<result_type>::value_type;
+            result_type future = (ptr->*f)((actor_zeta::detail::get<I, args_type_list>(args))...);
+
+            if constexpr (std::is_void<T>::value) {
+                std::move(future).get();
+                if (msg->result_slot()) {
+                    msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                }
+            } else {
+                T value = std::move(future).get();
+                if (msg->result_slot()) {
+                    msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                }
             }
+            msg->set_error(mailbox::slot_error_code::ok);
         }
-        msg->set_error(mailbox::slot_error_code::ok);
     }
 
     // clang-format on
@@ -171,23 +178,30 @@ namespace actor_zeta { namespace base {
         auto operator()(actor_zeta::pmr::memory_resource* resource, ClassPtr* ptr, F&& f) -> action {
             using call_trait = type_traits::get_callable_trait_t<type_traits::remove_reference_t<F>>;
             using result_type = typename call_trait::result_type;
-            using T = typename type_traits::is_unique_future<result_type>::value_type;
 
             action tmp(resource, [func = std::move(f), ptr](mailbox::message* msg) -> void {
-                result_type future = (ptr->*func)();
-
-                if constexpr (std::is_void<T>::value) {
-                    std::move(future).get();
-                    if (msg->result_slot()) {
-                        msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
-                    }
+                if constexpr (std::is_void<result_type>::value) {
+                    // Method returns void (not unique_future)
+                    (ptr->*func)();
+                    msg->set_error(mailbox::slot_error_code::ok);
                 } else {
-                    T value = std::move(future).get();
-                    if (msg->result_slot()) {
-                        msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                    // Method returns unique_future<T>
+                    using T = typename type_traits::is_unique_future<result_type>::value_type;
+                    result_type future = (ptr->*func)();
+
+                    if constexpr (std::is_void<T>::value) {
+                        std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                        }
+                    } else {
+                        T value = std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                        }
                     }
+                    msg->set_error(mailbox::slot_error_code::ok);
                 }
-                msg->set_error(mailbox::slot_error_code::ok);
             });
             return tmp;
         }
@@ -201,7 +215,6 @@ namespace actor_zeta { namespace base {
         auto operator()(actor_zeta::pmr::memory_resource* resource, ClassPtr* ptr, F&& f) -> action {
             using call_trait = type_traits::get_callable_trait_t<type_traits::remove_reference_t<F>>;
             using result_type = typename call_trait::result_type;
-            using T = typename type_traits::is_unique_future<result_type>::value_type;
 
             action tmp(resource, [func = std::move(f), ptr](mailbox::message* msg) -> void {
                 using arg_type_0 = type_traits::type_list_at_t<Args, 0>;
@@ -209,20 +222,28 @@ namespace actor_zeta { namespace base {
                 auto& tmp = msg->body();
                 using original_arg_type_0 = forward_arg<Args, 0>;
 
-                result_type future = (ptr->*func)(std::forward<original_arg_type_0>(static_cast<original_arg_type_0>(tmp.get<decay_arg_type_0>(0))));
-
-                if constexpr (std::is_void<T>::value) {
-                    std::move(future).get();
-                    if (msg->result_slot()) {
-                        msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
-                    }
+                if constexpr (std::is_void<result_type>::value) {
+                    // Method returns void (not unique_future)
+                    (ptr->*func)(std::forward<original_arg_type_0>(static_cast<original_arg_type_0>(tmp.get<decay_arg_type_0>(0))));
+                    msg->set_error(mailbox::slot_error_code::ok);
                 } else {
-                    T value = std::move(future).get();
-                    if (msg->result_slot()) {
-                        msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                    // Method returns unique_future<T>
+                    using T = typename type_traits::is_unique_future<result_type>::value_type;
+                    result_type future = (ptr->*func)(std::forward<original_arg_type_0>(static_cast<original_arg_type_0>(tmp.get<decay_arg_type_0>(0))));
+
+                    if constexpr (std::is_void<T>::value) {
+                        std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                        }
+                    } else {
+                        T value = std::move(future).get();
+                        if (msg->result_slot()) {
+                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                        }
                     }
+                    msg->set_error(mailbox::slot_error_code::ok);
                 }
-                msg->set_error(mailbox::slot_error_code::ok);
             });
             return tmp;
         }
