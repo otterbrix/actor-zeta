@@ -41,6 +41,12 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
         string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
     endif()
+
+    # Enable C++17 experimental coroutines if using C++17 standard
+    if (CMAKE_CXX_STANDARD EQUAL 17)
+        message(STATUS "C++17 detected - enabling experimental coroutines support (/await)")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /await")
+    endif()
 elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang"))
     if (EXCEPTIONS_DISABLE)
         message(STATUS "Disable C++ exceptions (GNU/Clang).")
@@ -52,6 +58,12 @@ elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES 
         message(STATUS "Disable RTTI (GNU/Clang).")
         string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
+    endif()
+
+    # Enable C++17 experimental coroutines if using C++17 standard
+    if (CMAKE_CXX_STANDARD EQUAL 17)
+        message(STATUS "C++17 detected - enabling experimental coroutines support (-fcoroutines-ts)")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines-ts")
     endif()
 endif()
 

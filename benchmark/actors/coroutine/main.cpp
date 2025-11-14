@@ -24,8 +24,6 @@ static void BM_Dummy(benchmark::State& state) {
 
 BENCHMARK(BM_Dummy);
 
-BENCHMARK_MAIN();
-
 int main(int argc, char** argv) {
     std::cerr << "Warning: Coroutine benchmarks disabled - C++20 coroutines not available\n";
     std::cerr << "Rebuild with C++20 and coroutine support to enable these benchmarks.\n";
