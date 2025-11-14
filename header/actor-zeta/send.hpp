@@ -28,6 +28,18 @@ namespace detail {
         T
     >;
 
+    // Helper: check if two type_lists have the same decayed types
+    template<typename ExpectedList, typename ProvidedList>
+    struct args_match_after_decay;
+
+    template<typename... Expected, typename... Provided>
+    struct args_match_after_decay<type_traits::type_list<Expected...>, type_traits::type_list<Provided...>> {
+        static constexpr bool value = std::is_same<
+            type_traits::type_list<type_traits::decay_t<Expected>...>,
+            type_traits::type_list<type_traits::decay_t<Provided>...>
+        >::value;
+    };
+
     template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
     inline auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
         -> typename Actor::template unique_future<
@@ -35,6 +47,25 @@ namespace detail {
     {
         using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
         using method_result_type = typename callable_trait::result_type;
+
+        // Compile-time argument count check
+        constexpr size_t expected_count = callable_trait::number_of_arguments;
+        constexpr size_t provided_count = sizeof...(Args);
+
+        static_assert(
+            expected_count == provided_count,
+            "send(): number of arguments must match method signature"
+        );
+
+        // Compile-time argument types check (after decay)
+        // Compare decay types: const string& and string both decay to string
+        using expected_args = typename callable_trait::args_types;  // type_list<const string&, int>
+        using provided_args = type_traits::type_list<Args...>;  // type_list<string&&, int&&>
+
+        static_assert(
+            args_match_after_decay<expected_args, provided_args>::value,
+            "send(): argument types must match method signature (after decay)"
+        );
 
         // Unwrap unique_future<T> returns to T for handler integration
         // When method returns unique_future<T>, handler calls get() and stores T in result_slot
