@@ -1,9 +1,3 @@
-// Mixed Sync/Async Actor Example
-// Demonstrates that actor can have BOTH sync and async methods with unified interface
-//
-// Recursive/nested coroutines NOT supported
-// This example uses only non-recursive async methods
-
 #if HAVE_STD_COROUTINES
 
 #include <actor-zeta.hpp>

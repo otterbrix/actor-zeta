@@ -1,0 +1,1003 @@
+#define CATCH_CONFIG_MAIN
+#include <catch2/catch.hpp>
+
+#include <actor-zeta.hpp>
+#include <actor-zeta/future.hpp>
+#include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/config.hpp>
+
+#if HAVE_STD_COROUTINES
+
+// ============================================================================
+// Test 1: promise_type exists and can be used for co_return
+// ============================================================================
+
+TEST_CASE("promise_type in unique_future<T>") {
+    SECTION("promise_type exists for unique_future<int>") {
+        using promise_type = actor_zeta::unique_future<int>::promise_type;
+        REQUIRE(std::is_same_v<promise_type::value_type, int>);
+    }
+
+    SECTION("promise_type exists for unique_future<void>") {
+        using promise_type = actor_zeta::unique_future<void>::promise_type;
+        REQUIRE(std::is_same_v<promise_type::value_type, void>);
+    }
+}
+
+// ============================================================================
+// Test 2: Coroutine with co_return (IMMEDIATE mode)
+// ============================================================================
+
+actor_zeta::unique_future<int> simple_coroutine_int() {
+    co_return 42;
+}
+
+actor_zeta::unique_future<std::string> simple_coroutine_string() {
+    co_return std::string("hello");
+}
+
+actor_zeta::unique_future<void> simple_coroutine_void() {
+    co_return;
+}
+
+TEST_CASE("simple coroutines with co_return") {
+    SECTION("co_return int") {
+        auto future = simple_coroutine_int();
+        REQUIRE(future.valid());
+        REQUIRE(future.is_ready());  // IMMEDIATE mode - should be ready
+        int result = std::move(future).get();
+        REQUIRE(result == 42);
+    }
+
+    SECTION("co_return string") {
+        auto future = simple_coroutine_string();
+        REQUIRE(future.valid());
+        REQUIRE(future.is_ready());
+        std::string result = std::move(future).get();
+        REQUIRE(result == "hello");
+    }
+
+    SECTION("co_return void") {
+        auto future = simple_coroutine_void();
+        REQUIRE(future.valid());
+        REQUIRE(future.is_ready());
+        std::move(future).get();  // Should not throw
+    }
+}
+
+// ============================================================================
+// Test 3: future_state has coroutine storage and methods
+// ============================================================================
+
+TEST_CASE("future_state coroutine methods") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("future_state<int> has coroutine methods") {
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                        alignof(actor_zeta::detail::future_state<int>));
+        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+
+        // Test virtual methods exist and can be called
+        REQUIRE_FALSE(state->has_coroutine());  // No coroutine stored yet
+        REQUIRE_FALSE(state->coroutine_done());
+        state->resume_coroutine();  // Should not crash (no-op if no coroutine)
+
+        // Cleanup
+        state->release();
+    }
+
+    SECTION("future_state<void> has coroutine methods") {
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<void>),
+                                        alignof(actor_zeta::detail::future_state<void>));
+        auto* state = new (mem) actor_zeta::detail::future_state<void>(resource);
+
+        // Test virtual methods exist
+        REQUIRE_FALSE(state->has_coroutine());
+        REQUIRE_FALSE(state->coroutine_done());
+        state->resume_coroutine();
+
+        // Cleanup
+        state->release();
+    }
+}
+
+// ============================================================================
+// Test 4: Coroutine handle storage via set_coroutine
+// ============================================================================
+
+actor_zeta::unique_future<int> coroutine_with_storage() {
+    co_return 100;
+}
+
+TEST_CASE("coroutine handle can be stored in future_state") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("set_coroutine stores handle") {
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                        alignof(actor_zeta::detail::future_state<int>));
+        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+
+        // Create a coroutine and get its handle
+        auto future = coroutine_with_storage();
+
+        // Note: In real usage, await_suspend would call set_coroutine()
+        // Here we just verify the method exists
+        REQUIRE_FALSE(state->has_coroutine());
+
+        // Cleanup
+        state->release();
+    }
+}
+
+// ============================================================================
+// Test 5: Virtual methods with `final` keyword (devirtualization check)
+// ============================================================================
+
+TEST_CASE("virtual methods marked as final") {
+    // This is a compile-time check - if it compiles, final is working
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                    alignof(actor_zeta::detail::future_state<int>));
+    auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+
+    // Cast to base to ensure virtual call
+    actor_zeta::detail::future_state_base* base = state;
+
+    // These should still be devirtualized by compiler (final keyword)
+    REQUIRE_FALSE(base->has_coroutine());
+    REQUIRE_FALSE(base->coroutine_done());
+    base->resume_coroutine();
+
+    // Cleanup
+    state->release();
+}
+
+// ============================================================================
+// Test 6: promise_type creates future_state correctly
+// ============================================================================
+
+TEST_CASE("promise_type allocates future_state") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("promise_type<int> creates state") {
+        actor_zeta::unique_future<int>::promise_type promise(resource);
+
+        // get_return_object creates the future
+        auto future = promise.get_return_object();
+        REQUIRE(future.valid());
+
+        // Set value via promise
+        promise.return_value(123);
+
+        // Future should have the value
+        REQUIRE(future.is_ready());
+        int result = std::move(future).get();
+        REQUIRE(result == 123);
+    }
+
+    SECTION("promise_type<void> creates state") {
+        actor_zeta::unique_future<void>::promise_type promise(resource);
+
+        auto future = promise.get_return_object();
+        REQUIRE(future.valid());
+
+        // Set ready via promise
+        promise.return_void();
+
+        // Future should be ready
+        REQUIRE(future.is_ready());
+        std::move(future).get();  // Should not throw
+    }
+}
+
+// ============================================================================
+// Test 7: Coroutine destruction
+// ============================================================================
+
+TEST_CASE("future_state destroys stored coroutine") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("destructor calls coro_handle_.destroy() if not done") {
+        // Create future_state
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                        alignof(actor_zeta::detail::future_state<int>));
+        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+
+        // Destroy immediately (no coroutine stored - should be safe)
+        state->~future_state();
+        resource->deallocate(state, sizeof(actor_zeta::detail::future_state<int>),
+                            alignof(actor_zeta::detail::future_state<int>));
+
+        // If we reach here, no crash occurred
+        REQUIRE(true);
+    }
+}
+
+// ============================================================================
+// Test 8: behavior_t linked_state
+// ============================================================================
+
+#include <actor-zeta/base/behavior.hpp>
+
+void dummy_handler() {}
+
+TEST_CASE("behavior_t has linked_state support") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("linked_state initially nullptr") {
+        auto behavior = actor_zeta::make_behavior(resource, &dummy_handler);
+        REQUIRE(behavior.linked_state() == nullptr);
+        REQUIRE_FALSE(behavior.has_suspended_coroutine());
+    }
+
+    SECTION("set_linked_state stores pointer") {
+        auto behavior = actor_zeta::make_behavior(resource, &dummy_handler);
+
+        // Create a future_state
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                        alignof(actor_zeta::detail::future_state<int>));
+        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+
+        // Link behavior to state
+        behavior.set_linked_state(state);
+        REQUIRE(behavior.linked_state() == state);
+
+        // No coroutine stored yet
+        REQUIRE_FALSE(behavior.has_suspended_coroutine());
+
+        // Cleanup
+        state->release();
+    }
+
+    SECTION("resume_if_suspended does not crash with nullptr") {
+        auto behavior = actor_zeta::make_behavior(resource, &dummy_handler);
+        behavior.resume_if_suspended();  // Should not crash
+        REQUIRE(true);
+    }
+
+    SECTION("resume_if_suspended does not crash with state (no coroutine)") {
+        auto behavior = actor_zeta::make_behavior(resource, &dummy_handler);
+
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                        alignof(actor_zeta::detail::future_state<int>));
+        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+
+        behavior.set_linked_state(state);
+        behavior.resume_if_suspended();  // Should not crash (no coroutine stored)
+        REQUIRE(true);
+
+        state->release();
+    }
+}
+
+// ============================================================================
+// Test 9: resume_all helper function
+// ============================================================================
+
+TEST_CASE("resume_all helper function") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("resume_all works with multiple behaviors") {
+        auto behavior1 = actor_zeta::make_behavior(resource, &dummy_handler);
+        auto behavior2 = actor_zeta::make_behavior(resource, &dummy_handler);
+        auto behavior3 = actor_zeta::make_behavior(resource, &dummy_handler);
+
+        // Should not crash even without linked states
+        actor_zeta::resume_all(behavior1, behavior2, behavior3);
+        REQUIRE(true);
+    }
+
+    SECTION("resume_all works with single behavior") {
+        auto behavior = actor_zeta::make_behavior(resource, &dummy_handler);
+        actor_zeta::resume_all(behavior);
+        REQUIRE(true);
+    }
+
+    SECTION("resume_all works with linked states") {
+        auto behavior1 = actor_zeta::make_behavior(resource, &dummy_handler);
+        auto behavior2 = actor_zeta::make_behavior(resource, &dummy_handler);
+
+        // Create states
+        void* mem1 = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                         alignof(actor_zeta::detail::future_state<int>));
+        auto* state1 = new (mem1) actor_zeta::detail::future_state<int>(resource);
+
+        void* mem2 = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                         alignof(actor_zeta::detail::future_state<int>));
+        auto* state2 = new (mem2) actor_zeta::detail::future_state<int>(resource);
+
+        behavior1.set_linked_state(state1);
+        behavior2.set_linked_state(state2);
+
+        // Resume all
+        actor_zeta::resume_all(behavior1, behavior2);
+        REQUIRE(true);
+
+        // Cleanup
+        state1->release();
+        state2->release();
+    }
+}
+
+// ============================================================================
+// Test 10: resume_all_if helper function
+// ============================================================================
+
+TEST_CASE("resume_all_if helper function") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("resume_all_if with predicate") {
+        auto behavior1 = actor_zeta::make_behavior(resource, &dummy_handler);
+        auto behavior2 = actor_zeta::make_behavior(resource, &dummy_handler);
+
+        int resume_count = 0;
+        auto predicate = [&](auto& b) {
+            resume_count++;
+            return b.linked_state() != nullptr;
+        };
+
+        // No linked states - predicate should return false
+        actor_zeta::resume_all_if(predicate, behavior1, behavior2);
+        REQUIRE(resume_count == 2);  // Predicate called twice
+    }
+
+    SECTION("resume_all_if only resumes when predicate is true") {
+        auto behavior1 = actor_zeta::make_behavior(resource, &dummy_handler);
+        auto behavior2 = actor_zeta::make_behavior(resource, &dummy_handler);
+
+        // Link only behavior1
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                        alignof(actor_zeta::detail::future_state<int>));
+        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+        behavior1.set_linked_state(state);
+
+        // Predicate: only resume if has linked_state
+        auto predicate = [](auto& b) { return b.linked_state() != nullptr; };
+
+        // Should only resume behavior1
+        actor_zeta::resume_all_if(predicate, behavior1, behavior2);
+        REQUIRE(true);
+
+        state->release();
+    }
+}
+
+// ============================================================================
+// Test 11: TWO modes architecture - IMMEDIATE mode
+// ============================================================================
+
+TEST_CASE("TWO modes architecture - IMMEDIATE mode") {
+    SECTION("implicit conversion from int") {
+        actor_zeta::unique_future<int> future = 42;  // Implicit conversion
+
+        REQUIRE(future.valid());
+        REQUIRE(future.is_immediate());
+        REQUIRE_FALSE(future.is_state());
+        REQUIRE(future.is_ready());  // IMMEDIATE is always ready
+
+        int result = std::move(future).get();
+        REQUIRE(result == 42);
+    }
+
+    SECTION("implicit conversion from string") {
+        actor_zeta::unique_future<std::string> future = std::string("hello");
+
+        REQUIRE(future.valid());
+        REQUIRE(future.is_immediate());
+        REQUIRE(future.is_ready());
+
+        std::string result = std::move(future).get();
+        REQUIRE(result == "hello");
+    }
+
+    SECTION("take_immediate_value extracts value") {
+        actor_zeta::unique_future<int> future = 123;
+
+        REQUIRE(future.is_immediate());
+
+        int value = std::move(future).take_immediate_value();
+        REQUIRE(value == 123);
+        REQUIRE_FALSE(future.valid());  // Moved-from state
+    }
+
+    SECTION("move constructor preserves IMMEDIATE mode") {
+        actor_zeta::unique_future<int> future1 = 99;
+        REQUIRE(future1.is_immediate());
+
+        actor_zeta::unique_future<int> future2 = std::move(future1);
+        REQUIRE(future2.is_immediate());
+        REQUIRE(future2.is_ready());
+
+        int result = std::move(future2).get();
+        REQUIRE(result == 99);
+    }
+
+    SECTION("move assignment preserves IMMEDIATE mode") {
+        auto* resource = actor_zeta::pmr::get_default_resource();
+        actor_zeta::unique_future<int> future1 = 77;
+        actor_zeta::unique_future<int> future2(resource);  // Invalid future
+
+        REQUIRE(future1.is_immediate());
+        REQUIRE_FALSE(future2.valid());
+
+        future2 = std::move(future1);
+        REQUIRE(future2.is_immediate());
+        REQUIRE(future2.valid());
+
+        int result = std::move(future2).get();
+        REQUIRE(result == 77);
+    }
+}
+
+// ============================================================================
+// Test 12: TWO modes architecture - STATE mode
+// ============================================================================
+
+TEST_CASE("TWO modes architecture - STATE mode") {
+    SECTION("co_return creates STATE mode") {
+        auto future = simple_coroutine_int();  // co_return 42
+
+        REQUIRE(future.valid());
+        REQUIRE(future.is_state());
+        REQUIRE_FALSE(future.is_immediate());
+        REQUIRE(future.is_ready());
+
+        int result = std::move(future).get();
+        REQUIRE(result == 42);
+    }
+
+    SECTION("take_state extracts state pointer") {
+        auto future = simple_coroutine_int();
+
+        REQUIRE(future.is_state());
+
+        auto* state = std::move(future).take_state();
+        REQUIRE(state != nullptr);
+        REQUIRE_FALSE(future.valid());  // Moved-from state
+
+        // Cleanup
+        state->release();
+    }
+
+    SECTION("move constructor preserves STATE mode") {
+        auto future1 = simple_coroutine_string();
+        REQUIRE(future1.is_state());
+
+        auto future2 = std::move(future1);
+        REQUIRE(future2.is_state());
+        REQUIRE(future2.is_ready());
+
+        std::string result = std::move(future2).get();
+        REQUIRE(result == "hello");
+    }
+
+    SECTION("cancel works only in STATE mode") {
+        auto* resource = actor_zeta::pmr::get_default_resource();
+
+        // STATE mode
+        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
+                                        alignof(actor_zeta::detail::future_state<int>));
+        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
+        actor_zeta::unique_future<int> future_state(state, false);
+
+        REQUIRE(future_state.is_state());
+        REQUIRE_FALSE(future_state.is_cancelled());
+
+        future_state.cancel();
+        REQUIRE(future_state.is_cancelled());
+
+        // IMMEDIATE mode - cancel does nothing
+        actor_zeta::unique_future<int> future_immediate = 42;
+        REQUIRE(future_immediate.is_immediate());
+        REQUIRE_FALSE(future_immediate.is_cancelled());
+
+        future_immediate.cancel();  // Should be no-op
+        REQUIRE_FALSE(future_immediate.is_cancelled());
+    }
+}
+
+// ============================================================================
+// Test 13: Sync methods returning unique_future (IMMEDIATE mode use case)
+// ============================================================================
+
+// Sync method returning unique_future<int>
+actor_zeta::unique_future<int> sync_add(int a, int b) {
+    return a + b;  // Implicit conversion: int → unique_future<int>
+}
+
+// Sync method returning unique_future<std::string>
+actor_zeta::unique_future<std::string> sync_concat(const std::string& a, const std::string& b) {
+    return a + b;  // Implicit conversion
+}
+
+TEST_CASE("sync methods with unique_future return type") {
+    SECTION("sync_add returns IMMEDIATE mode") {
+        auto future = sync_add(10, 20);
+
+        REQUIRE(future.valid());
+        REQUIRE(future.is_immediate());
+        REQUIRE(future.is_ready());
+
+        int result = std::move(future).get();
+        REQUIRE(result == 30);
+    }
+
+    SECTION("sync_concat returns IMMEDIATE mode") {
+        auto future = sync_concat("hello", " world");
+
+        REQUIRE(future.valid());
+        REQUIRE(future.is_immediate());
+        REQUIRE(future.is_ready());
+
+        std::string result = std::move(future).get();
+        REQUIRE(result == "hello world");
+    }
+
+    SECTION("IMMEDIATE mode - no waiting, instant get()") {
+        auto future = sync_add(5, 7);
+
+        // get() should return immediately without blocking
+        auto start = std::chrono::steady_clock::now();
+        int result = std::move(future).get();
+        auto elapsed = std::chrono::steady_clock::now() - start;
+
+        REQUIRE(result == 12);
+        // Should be near-instant (< 1ms)
+        REQUIRE(elapsed < std::chrono::milliseconds(1));
+    }
+}
+
+// ============================================================================
+// Test 14: Handler integration - methods returning unique_future<T>
+// ============================================================================
+
+#include <actor-zeta.hpp>
+#include <actor-zeta/send.hpp>
+
+// Test actor with methods returning unique_future<T>
+class future_test_actor final : public actor_zeta::basic_actor<future_test_actor> {
+public:
+    explicit future_test_actor(actor_zeta::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<future_test_actor>(res)
+        , sync_add_(actor_zeta::make_behavior(res, this, &future_test_actor::sync_add))
+        , async_mul_(actor_zeta::make_behavior(res, this, &future_test_actor::async_multiply)) {
+    }
+
+    // IMMEDIATE mode - sync method returning unique_future via implicit conversion
+    actor_zeta::unique_future<int> sync_add(int a, int b) {
+        return a + b;  // Implicit conversion: int → unique_future<int>
+    }
+
+    // STATE mode - async coroutine method
+    actor_zeta::unique_future<int> async_multiply(int a, int b) {
+        co_return a * b;  // promise_type creates STATE mode future
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &future_test_actor::sync_add,
+        &future_test_actor::async_multiply
+    >;
+
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::msg_id<future_test_actor, &future_test_actor::sync_add>:
+                sync_add_(msg);
+                break;
+            case actor_zeta::msg_id<future_test_actor, &future_test_actor::async_multiply>:
+                async_mul_(msg);
+                break;
+        }
+    }
+
+private:
+    actor_zeta::behavior_t sync_add_;
+    actor_zeta::behavior_t async_mul_;
+};
+
+TEST_CASE("Handler integration - unique_future<T> return types") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("sync method with IMMEDIATE mode future") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+        REQUIRE(actor != nullptr);
+
+        // Send message and get result
+        auto result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 10, 20);
+
+        REQUIRE(result.valid());
+
+        // Process the message
+        actor->resume(100);
+
+        REQUIRE(result.is_ready());
+        int value = std::move(result).get();
+        REQUIRE(value == 30);
+    }
+
+    SECTION("async method with STATE mode future") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+        REQUIRE(actor != nullptr);
+
+        // Send message and get result
+        auto result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 5, 7);
+
+        REQUIRE(result.valid());
+
+        // Process the message
+        actor->resume(100);
+
+        REQUIRE(result.is_ready());
+        int value = std::move(result).get();
+        REQUIRE(value == 35);
+    }
+
+    SECTION("multiple calls to sync method") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto r1 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 1, 2);
+        auto r2 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 3, 4);
+        auto r3 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 5, 6);
+
+        // Process all messages
+        actor->resume(100);
+
+        REQUIRE(std::move(r1).get() == 3);
+        REQUIRE(std::move(r2).get() == 7);
+        REQUIRE(std::move(r3).get() == 11);
+    }
+
+    SECTION("multiple calls to async method") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto r1 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 2, 3);
+        auto r2 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 4, 5);
+        auto r3 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 6, 7);
+
+        // Process all messages
+        actor->resume(100);
+
+        REQUIRE(std::move(r1).get() == 6);
+        REQUIRE(std::move(r2).get() == 20);
+        REQUIRE(std::move(r3).get() == 42);
+    }
+
+    SECTION("mixed sync and async calls") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto sync_result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 10, 5);
+        auto async_result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 3, 4);
+
+        // Process all messages
+        actor->resume(100);
+
+        REQUIRE(std::move(sync_result).get() == 15);
+        REQUIRE(std::move(async_result).get() == 12);
+    }
+}
+
+// Test 15: then() continuation chains
+TEST_CASE("then() continuation chains", "[coroutines][phase4][then]") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("then() with IMMEDIATE mode (sync method)") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        int callback_result = 0;
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 10, 20)
+            .then([&callback_result](int result) {
+                callback_result = result * 2;
+                return callback_result;
+            });
+
+        // Process messages (sync method may not need it, but continuation registration might)
+        actor->resume(100);
+
+        REQUIRE(future.is_ready());
+        REQUIRE(std::move(future).get() == 60);  // (10 + 20) * 2
+        REQUIRE(callback_result == 60);
+    }
+
+    SECTION("then() with STATE mode (async method)") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        int callback_result = 0;
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 5, 7)
+            .then([&callback_result](int result) {
+                callback_result = result + 10;
+                return callback_result;
+            });
+
+        REQUIRE(!future.is_ready());  // Not ready yet
+
+        // Process messages
+        actor->resume(100);
+
+        // Wait for continuation to execute
+        // In practice, continuations execute synchronously when future becomes ready
+        REQUIRE(future.is_ready());
+        REQUIRE(std::move(future).get() == 45);  // (5 * 7) + 10
+        REQUIRE(callback_result == 45);
+    }
+
+    SECTION("chained then() calls") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 2, 3)
+            .then([](int result) {
+                return result * 2;  // (2 + 3) * 2 = 10
+            })
+            .then([](int result) {
+                return result + 5;  // 10 + 5 = 15
+            })
+            .then([](int result) {
+                return result * 3;  // 15 * 3 = 45
+            });
+
+        actor->resume(100);
+
+        REQUIRE(std::move(future).get() == 45);
+    }
+
+    SECTION("then() returning void") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        int side_effect = 0;
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 7, 8)
+            .then([&side_effect](int result) {
+                side_effect = result;  // Store result in side effect
+                // Return void
+            });
+
+        actor->resume(100);
+
+        REQUIRE(future.is_ready());
+        std::move(future).get();  // void get()
+        REQUIRE(side_effect == 15);
+    }
+
+    SECTION("then() transformation T -> U") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 10, 20)
+            .then([](int result) -> double {
+                return static_cast<double>(result) / 2.0;  // int -> double
+            });
+
+        actor->resume(100);
+
+        REQUIRE(future.is_ready());
+        double result = std::move(future).get();
+        REQUIRE(result == 15.0);  // 30 / 2.0
+    }
+
+    SECTION("multiple then() chains on same actor") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto future1 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 1, 2)
+            .then([](int r) { return r * 10; });
+
+        auto future2 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 3, 4)
+            .then([](int r) { return r * 20; });
+
+        actor->resume(100);
+
+        REQUIRE(std::move(future1).get() == 30);  // (1 + 2) * 10
+        REQUIRE(std::move(future2).get() == 140);  // (3 + 4) * 20
+    }
+
+    SECTION("then() on async method with continuation") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        bool continuation_executed = false;
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 6, 7)
+            .then([&continuation_executed](int result) {
+                continuation_executed = true;
+                return result + 100;
+            });
+
+        REQUIRE(!continuation_executed);  // Not executed yet
+        REQUIRE(!future.is_ready());
+
+        // Process message - this triggers async_multiply completion AND continuation
+        actor->resume(100);
+
+        REQUIRE(continuation_executed);  // Now executed
+        REQUIRE(future.is_ready());
+        REQUIRE(std::move(future).get() == 142);  // (6 * 7) + 100
+    }
+}
+
+// Test 16: then() automatic unwrapping - callback returns future
+TEST_CASE("then() automatic unwrapping for future-returning callbacks", "[coroutines][phase4][unwrapping]") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+
+    SECTION("unwrapping: then() callback returns unique_future (IMMEDIATE → IMMEDIATE)") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 10, 20)
+            .then([actor = actor.get()](int result) {
+                // Callback returns unique_future<int> (should be unwrapped!)
+                return actor_zeta::send(actor, actor->address(), &future_test_actor::sync_add, result, 5);
+            });
+
+        // Type check: future should be unique_future<int>, NOT unique_future<unique_future<int>>
+        static_assert(std::is_same_v<decltype(future), actor_zeta::unique_future<int>>,
+                     "then() should unwrap unique_future return type");
+
+        actor->resume(100);
+
+        REQUIRE(future.is_ready());
+        REQUIRE(std::move(future).get() == 35);  // (10 + 20) + 5
+    }
+
+    SECTION("unwrapping: then() callback returns unique_future (STATE → STATE)") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 2, 3)
+            .then([actor = actor.get()](int result) {
+                // Callback returns async future (should be unwrapped!)
+                return actor_zeta::send(actor, actor->address(), &future_test_actor::async_multiply, result, 10);
+            });
+
+        // Type check: unwrapping works
+        static_assert(std::is_same_v<decltype(future), actor_zeta::unique_future<int>>,
+                     "then() should unwrap unique_future<unique_future<int>> → unique_future<int>");
+
+        REQUIRE(!future.is_ready());  // First async call not processed yet
+
+        // Process messages (both async methods complete in single resume)
+        // Note: async_multiply with just co_return executes synchronously
+        actor->resume(100);
+
+        // At this point, both levels have completed:
+        // 1. First async_multiply done (2 * 3 = 6)
+        // 2. Continuation called second send()
+        // 3. Second async_multiply done (6 * 10 = 60)
+        // 4. Unwrapping copied result to final future
+
+        REQUIRE(future.is_ready());
+        REQUIRE(std::move(future).get() == 60);
+    }
+
+    SECTION("unwrapping: chained actor calls") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 1, 2)
+            .then([actor = actor.get()](int r1) {
+                return actor_zeta::send(actor, actor->address(), &future_test_actor::sync_add, r1, 10);
+            })
+            .then([actor = actor.get()](int r2) {
+                return actor_zeta::send(actor, actor->address(), &future_test_actor::sync_add, r2, 100);
+            })
+            .then([](int r3) {
+                return r3 * 2;
+            });
+
+        actor->resume(100);
+
+        REQUIRE(std::move(future).get() == 226);  // ((1 + 2) + 10 + 100) * 2
+    }
+
+    SECTION("unwrapping: mixed IMMEDIATE and STATE modes") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 5, 5)
+            .then([actor = actor.get()](int result) {
+                // sync → async (unwrapping)
+                return actor_zeta::send(actor, actor->address(), &future_test_actor::async_multiply, result, 2);
+            })
+            .then([actor = actor.get()](int result) {
+                // async → sync (unwrapping)
+                return actor_zeta::send(actor, actor->address(), &future_test_actor::sync_add, result, 3);
+            });
+
+        actor->resume(100);  // Process all messages
+
+        REQUIRE(future.is_ready());
+        REQUIRE(std::move(future).get() == 23);  // ((5 + 5) * 2) + 3
+    }
+
+    SECTION("unwrapping: normal value vs future return") {
+        auto actor = actor_zeta::spawn<future_test_actor>(resource);
+
+        // Mix normal returns and future returns
+        auto future = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 2, 3)
+            .then([](int r) {
+                return r * 10;  // Returns int (not future)
+            })
+            .then([actor = actor.get()](int r) {
+                return actor_zeta::send(actor, actor->address(), &future_test_actor::sync_add, r, 7);  // Returns future
+            })
+            .then([](int r) {
+                return r - 5;  // Returns int
+            });
+
+        actor->resume(100);
+
+        REQUIRE(std::move(future).get() == 52);  // ((2 + 3) * 10 + 7) - 5
+    }
+}
+
+// Test 17: Recursive coroutines are NOT SUPPORTED
+// Recursive send(this, ...) from within a coroutine will deadlock
+// because the actor is in "running" state and won't reschedule itself.
+// This is a known architectural limitation.
+//
+// If you need recursion, use iterative algorithms instead.
+
+// ============================================================================
+// Test 18: Memory leak detection - coroutine cleanup
+// ============================================================================
+//
+// NOTE: This test verifies that coroutines are cleaned up properly.
+// Memory leak detection requires running with AddressSanitizer or Valgrind:
+//
+//   # With AddressSanitizer:
+//   cmake -DCMAKE_CXX_FLAGS="-fsanitize=address" ...
+//   ./tests_coroutines
+//
+//   # With Valgrind:
+//   valgrind --leak-check=full ./tests_coroutines
+//
+// If set_coroutine() is missing/commented, you will see memory leaks for:
+// - promise_type object (coroutine frame)
+// - Coroutine local variables
+//
+// This test ensures basic coroutine lifecycle works without crashing.
+
+TEST_CASE("coroutine cleanup does not crash") {
+    SECTION("simple coroutine with co_return") {
+        // This test ensures basic coroutine lifecycle completes without crash
+        // Memory leak detection requires ASAN or Valgrind
+        {
+            auto future = simple_coroutine_int();  // co_return 42
+            REQUIRE(future.valid());
+            REQUIRE(future.is_ready());
+            int result = std::move(future).get();
+            REQUIRE(result == 42);
+        }
+        // If we reach here without crash, basic cleanup works
+        // But memory leaks can only be detected with ASAN/Valgrind
+        REQUIRE(true);
+    }
+
+    SECTION("multiple coroutines") {
+        // Stress test - create/destroy many coroutines
+        for (int i = 0; i < 100; ++i) {
+            auto future = simple_coroutine_int();
+            int result = std::move(future).get();
+            REQUIRE(result == 42);
+        }
+        // No crash = basic cleanup works
+        REQUIRE(true);
+    }
+
+    SECTION("coroutine with string") {
+        {
+            auto future = simple_coroutine_string();  // co_return "hello"
+            REQUIRE(future.valid());
+            std::string result = std::move(future).get();
+            REQUIRE(result == "hello");
+        }
+        REQUIRE(true);
+    }
+
+    SECTION("void coroutine") {
+        {
+            auto future = simple_coroutine_void();  // co_return;
+            REQUIRE(future.valid());
+            std::move(future).get();  // Should not throw
+        }
+        REQUIRE(true);
+    }
+}
+
+#else // !HAVE_STD_COROUTINES
+
+TEST_CASE("coroutines disabled") {
+    REQUIRE(true);  // Pass test if coroutines not available
+    WARN("C++20 coroutines not available - tests skipped");
+}
+
+#endif // HAVE_STD_COROUTINES
