@@ -2,18 +2,18 @@
 
 #include <condition_variable>
 #include <cstddef>
-#include <list>
 #include <mutex>
 
 #include <actor-zeta/scheduler/forwards.hpp>
 #include <actor-zeta/scheduler/policy/unprofiled.hpp>
 #include <actor-zeta/scheduler/job_ptr.hpp>
+#include <actor-zeta/detail/queue/linked_list.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
     class work_sharing : public unprofiled {
     public:
-        using queue_type = std::list<job_ptr>;
+        using queue_type = actor_zeta::detail::linked_list<job_ptr>;
 
         ~work_sharing() override;
 
@@ -30,44 +30,45 @@ namespace actor_zeta { namespace scheduler {
             explicit worker_data(Scheduler*) {}
         };
 
+        // Single enqueue - accepts node (new or reused)
         template<class Coordinator>
-        bool enqueue(Coordinator* self, job_ptr job) {
-            queue_type l;
-            l.push_back(job);
+        bool enqueue(Coordinator* self, std::unique_ptr<job_ptr> node) {
             std::unique_lock<std::mutex> guard(cast(self).lock);
-            cast(self).queue.splice(cast(self).queue.end(), l);
+            cast(self).queue.push_back(node.release());
+            guard.unlock();
             cast(self).cv.notify_one();
             return true;
         }
 
-        template<class Coordinator>
-        void central_enqueue(Coordinator* self, job_ptr job) {
-            enqueue(self, job);
+        template<class Coordinator, class Resumable>
+        void central_enqueue(Coordinator* self, Resumable* resumable) {
+            auto node = std::make_unique<job_ptr>(resumable, &scheduler::detail::resume_impl<Resumable>);
+            enqueue(self, std::move(node));
+        }
+
+        template<class Worker, class Resumable>
+        void external_enqueue(Worker* self, Resumable* resumable) {
+            auto node = std::make_unique<job_ptr>(resumable, &scheduler::detail::resume_impl<Resumable>);
+            enqueue(self->parent(), std::move(node));
+        }
+
+        template<class Worker, class Resumable>
+        void internal_enqueue(Worker* self, Resumable* resumable) {
+            auto node = std::make_unique<job_ptr>(resumable, &scheduler::detail::resume_impl<Resumable>);
+            enqueue(self->parent(), std::move(node));
         }
 
         template<class Worker>
-        void external_enqueue(Worker* self, job_ptr job) {
-            enqueue(self->parent(), job);
+        void resume_job_later(Worker* self, std::unique_ptr<job_ptr> node) {
+            enqueue(self->parent(), std::move(node));
         }
 
         template<class Worker>
-        void internal_enqueue(Worker* self, job_ptr job) {
-            enqueue(self->parent(), job);
-        }
-
-        template<class Worker>
-        void resume_job_later(Worker* self, job_ptr job) {
-            enqueue(self->parent(), job);
-        }
-
-        template<class Worker>
-        job_ptr dequeue(Worker* self) {
+        std::unique_ptr<job_ptr> dequeue(Worker* self) {
             auto& parent_data = cast(self->parent());
             std::unique_lock<std::mutex> guard(parent_data.lock);
             parent_data.cv.wait(guard, [&] { return !parent_data.queue.empty(); });
-            job_ptr job = parent_data.queue.front();
-            parent_data.queue.pop_front();
-            return job;
+            return parent_data.queue.pop_front();
         }
 
         template<class Worker, class UnaryFunction>
@@ -78,11 +79,10 @@ namespace actor_zeta { namespace scheduler {
             auto& queue = cast(self).queue;
             auto next = [&]() -> job_ptr {
                 if (queue.empty()) {
-                    return job_ptr{nullptr, nullptr};
+                    return job_ptr();
                 }
-                auto front = queue.front();
-                queue.pop_front();
-                return front;
+                auto node_ptr = queue.pop_front();
+                return *node_ptr;
             };
             std::unique_lock<std::mutex> guard(cast(self).lock);
             for (auto job = next(); job; job = next()) {

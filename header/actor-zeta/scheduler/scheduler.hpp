@@ -91,8 +91,7 @@ namespace actor_zeta { namespace scheduler {
             }
             while (!alive_workers.empty()) {
                 auto it = alive_workers.begin();
-                auto job = job_ptr::wrap(&sh);
-                (*it)->external_enqueue(job);
+                (*it)->external_enqueue(&sh);
                 sh.wait_for_completion();
                 alive_workers.erase(it);
             }
@@ -109,18 +108,12 @@ namespace actor_zeta { namespace scheduler {
             policy_.foreach_central_resumable(this, clear_job);
         }
 
-        /// @brief Enqueue a job for execution
-        /// @param job Type-erased job pointer (not owned - actor managed by unique_ptr)
-        void enqueue(job_ptr job) {
-            policy_.central_enqueue(this, job);
-        }
-
-        /// @brief Enqueue an actor for execution (convenience template)
+        /// @brief Enqueue an actor for execution
         /// @tparam T Actor type with resume(size_t) method
         /// @param actor Pointer to actor to schedule
         template<typename T>
         void enqueue(T* actor) {
-            enqueue(job_ptr::wrap(actor));
+            policy_.central_enqueue(this, actor);
         }
 
     private:

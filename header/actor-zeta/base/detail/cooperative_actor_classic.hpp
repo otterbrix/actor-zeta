@@ -231,7 +231,7 @@ namespace actor_zeta { namespace base {
 #endif
 
                         if (state_ref_.compare_exchange_weak(current, desired,
-                                                             std::memory_order_seq_cst,
+                                                             std::memory_order_acq_rel,
                                                              std::memory_order_acquire)) {
                             break;
                         }
@@ -260,7 +260,7 @@ namespace actor_zeta { namespace base {
                         }
 
                         if (state_ref_.compare_exchange_weak(current, desired,
-                                                             std::memory_order_seq_cst,
+                                                             std::memory_order_acq_rel,
                                                              std::memory_order_acquire)) {
                             break;
                         }

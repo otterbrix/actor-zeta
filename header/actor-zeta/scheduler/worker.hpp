@@ -35,14 +35,16 @@ namespace actor_zeta { namespace scheduler {
         worker(const worker&) = delete;
         worker& operator=(const worker&) = delete;
 
-        void external_enqueue(job_ptr job) {
-            assert(job && "Cannot enqueue null job");
-            policy_.external_enqueue(this, job);
+        template<typename Resumable>
+        void external_enqueue(Resumable* resumable) {
+            assert(resumable && "Cannot enqueue null job");
+            policy_.external_enqueue(this, resumable);
         }
 
-        void execute_later(job_ptr job) {
-            assert(job && "Cannot enqueue null job");
-            policy_.internal_enqueue(this, job);
+        template<typename Resumable>
+        void execute_later(Resumable* resumable) {
+            assert(resumable && "Cannot enqueue null job");
+            policy_.internal_enqueue(this, resumable);
         }
 
         scheduler_ptr parent() {
@@ -68,25 +70,25 @@ namespace actor_zeta { namespace scheduler {
     private:
         void run() {
             for (;;) {
-                auto job = policy_.dequeue(this);
-                assert(job && "Dequeued null job");
-                policy_.before_resume(this, job);
-                auto res = job.resume(max_throughput_);
-                policy_.after_resume(this, job);
+                auto node = policy_.dequeue(this);
+                assert(node && "Dequeued null job");
+                policy_.before_resume(this, *node);
+                auto res = node->resume(max_throughput_);
+                policy_.after_resume(this, *node);
                 switch (res) {
                     case resume_result::resume: {
-                        policy_.resume_job_later(this, job);
+                        policy_.resume_job_later(this, std::move(node));
                         break;
                     }
                     case resume_result::done: {
-                        policy_.after_completion(this, job);
+                        policy_.after_completion(this, *node);
                         break;
                     }
                     case resume_result::awaiting: {
                         break;
                     }
                     case resume_result::shutdown: {
-                        policy_.after_completion(this, job);
+                        policy_.after_completion(this, *node);
                         policy_.before_shutdown(this);
                         return;
                     }

@@ -48,13 +48,13 @@ private:
     actor_zeta::behavior_t get_status_;
 };
 
-inline actor_zeta::unique_future<void> worker_actor::process_task(const std::string& task) {
+actor_zeta::unique_future<void> worker_actor::process_task(const std::string& task) {
     std::cerr << "[" << name_ << "] Processing task: " << task << std::endl;
     ++tasks_processed_;
     return actor_zeta::make_ready_future_void(resource());
 }
 
-inline actor_zeta::unique_future<void> worker_actor::get_status() {
+actor_zeta::unique_future<void> worker_actor::get_status() {
     std::cerr << "[" << name_ << "] Processed " << tasks_processed_ << " tasks" << std::endl;
     return actor_zeta::make_ready_future_void(resource());
 }

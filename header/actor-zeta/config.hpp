@@ -67,6 +67,19 @@ namespace actor_zeta {
 #define HAVE_STD_COROUTINES 0
 #endif
 
+// C++20 Atomic Wait/Notify feature detection
+// Enables efficient blocking wait using futex (Linux), __ulock_wait (macOS), or WaitOnAddress (Windows)
+// Benefits: Zero CPU usage while waiting (vs exponential backoff polling)
+#if CPP20_OR_GREATER && defined(__cpp_lib_atomic_wait)
+#if __cpp_lib_atomic_wait >= 201907L
+#define HAVE_ATOMIC_WAIT 1
+#else
+#define HAVE_ATOMIC_WAIT 0
+#endif
+#else
+#define HAVE_ATOMIC_WAIT 0
+#endif
+
 #define CACHE_LINE_SIZE 64
 
 #ifndef NODISCARD

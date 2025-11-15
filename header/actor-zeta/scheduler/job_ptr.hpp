@@ -6,6 +6,7 @@
 
 #include "resumable.hpp"
 #include "forwards.hpp"
+#include <actor-zeta/detail/queue/singly_linked.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
@@ -40,26 +41,23 @@ namespace actor_zeta { namespace scheduler {
     ///
     /// Uses function pointers for type erasure instead of virtual functions.
     /// Each type T gets its own compile-time generated function pointers.
-    /// This is a POD structure that can be efficiently passed by value.
-    struct job_ptr {
+    /// Intrusive structure for use with linked_list (singly-linked).
+    struct job_ptr : actor_zeta::detail::singly_linked<job_ptr> {
+        using node_type = actor_zeta::detail::singly_linked<job_ptr>;
+
         void* ptr;
         resume_info (*resume_fn)(void*, size_t);
 
-        /// @brief Create type-erased job pointer from typed pointer
-        /// @tparam T Type that has resume(size_t) method
-        /// @param p Pointer to object to wrap (not owned by job_ptr)
-        /// @return Type-erased job_ptr
-        template<class T>
-        static job_ptr wrap(T* p) {
-            static_assert(detail::has_resume_method<T>::value,
-                         "Type T must have 'resume_info resume(size_t)' method");
+        /// @brief Default constructor - creates null job_ptr
+        job_ptr() noexcept : ptr(nullptr), resume_fn(nullptr) {}
 
-            assert(p != nullptr && "Cannot wrap nullptr");
-
-            return job_ptr{
-                p,
-                &detail::resume_impl<T>
-            };
+        /// @brief Construct from raw pointer and function
+        /// @param p Pointer to resumable object (must not be null for non-default construction)
+        /// @param fn Resume function pointer (must not be null)
+        job_ptr(void* p, resume_info (*fn)(void*, size_t)) noexcept
+            : ptr(p), resume_fn(fn) {
+            assert((p != nullptr || fn == nullptr) && "Non-null function requires non-null pointer");
+            assert((fn != nullptr || p == nullptr) && "Non-null pointer requires non-null function");
         }
 
         /// @brief Resume execution of the job

@@ -255,6 +255,25 @@ namespace actor_zeta {
                 ++spin_count;
             }
 
+#if HAVE_ATOMIC_WAIT
+            // C++20: Efficient blocking wait (zero CPU usage)
+            // Uses futex (Linux), __ulock_wait (macOS), or WaitOnAddress (Windows)
+            auto current = storage_.state_->state();
+            while (current == detail::future_state_enum::pending) {
+                if (storage_.state_->is_cancelled()) {
+                    storage_.state_->release();
+                    storage_.state_ = nullptr;
+                    mode_ = storage_mode::invalid;
+                    assert(false && "get() on cancelled future!");
+                    std::terminate();
+                }
+
+                // Block until state changes (0% CPU)
+                storage_.state_->wait(current);
+                current = storage_.state_->state();
+            }
+#else
+            // C++17 fallback: Exponential backoff polling
             auto backoff = std::chrono::microseconds(1);
             constexpr auto max_backoff = std::chrono::microseconds(100);
 
@@ -272,6 +291,7 @@ namespace actor_zeta {
                     backoff *= 2;
                 }
             }
+#endif
 
             std::atomic_signal_fence(std::memory_order_acq_rel);
 
@@ -506,6 +526,23 @@ namespace actor_zeta {
                 ++spin_count;
             }
 
+#if HAVE_ATOMIC_WAIT
+            // C++20: Efficient blocking wait (zero CPU usage)
+            auto current = state_->state();
+            while (current == detail::future_state_enum::pending) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    return;
+                }
+
+                // Block until state changes (0% CPU)
+                state_->wait(current);
+                current = state_->state();
+            }
+#else
+            // C++17 fallback: Exponential backoff polling
             auto backoff = std::chrono::microseconds(1);
             constexpr auto max_backoff = std::chrono::microseconds(100);
 
@@ -522,6 +559,7 @@ namespace actor_zeta {
                     backoff *= 2;
                 }
             }
+#endif
 
             state_->release();
             state_ = nullptr;
