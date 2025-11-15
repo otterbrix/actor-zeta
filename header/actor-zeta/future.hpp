@@ -140,114 +140,71 @@ namespace actor_zeta {
     class unique_future final {
     public:
         explicit unique_future(pmr::memory_resource* /*res*/) noexcept
-            : mode_(storage_mode::invalid)
+            : state_(nullptr)
             , needs_scheduling_(false) {
-            storage_.state_ = nullptr;
+        }
+
+        explicit unique_future(detail::future_state<T>* state, bool needs_sched = false) noexcept
+            : state_(state)
+            , needs_scheduling_(needs_sched) {
         }
 
         unique_future(const unique_future&) = delete;
         unique_future& operator=(const unique_future&) = delete;
 
-        explicit unique_future(detail::future_state<T>* state, bool needs_sched = false) noexcept
-            : mode_(storage_mode::state)
-            , needs_scheduling_(needs_sched) {
-            storage_.state_ = state;
-        }
-
-        unique_future(T&& value) noexcept(std::is_nothrow_move_constructible<T>::value)
-            : mode_(storage_mode::immediate)
-            , needs_scheduling_(false) {
-            new (&storage_.value_) T(std::forward<T>(value));
-        }
-
-        unique_future(const T& value) noexcept(std::is_nothrow_copy_constructible<T>::value)
-            : mode_(storage_mode::immediate)
-            , needs_scheduling_(false) {
-            new (&storage_.value_) T(value);
-        }
-
         unique_future(unique_future&& other) noexcept
-            : mode_(other.mode_)
+            : state_(other.state_)
             , needs_scheduling_(other.needs_scheduling_) {
-            if (mode_ == storage_mode::state) {
-                storage_.state_ = other.storage_.state_;
-                other.storage_.state_ = nullptr;
-            } else if (mode_ == storage_mode::immediate) {
-                new (&storage_.value_) T(std::move(other.storage_.value_));
-                other.storage_.value_.~T();
-            }
-
-            other.mode_ = storage_mode::invalid;
+            other.state_ = nullptr;
             other.needs_scheduling_ = false;
         }
 
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
-                if (mode_ == storage_mode::state && storage_.state_) {
-                    if (!storage_.state_->is_ready()) {
-                        storage_.state_->set_state(detail::future_state_enum::cancelled);
-                    }
-                    storage_.state_->release();
-                } else if (mode_ == storage_mode::immediate) {
-                    storage_.value_.~T();
+                if (state_ && !state_->is_ready()) {
+                    state_->set_state(detail::future_state_enum::cancelled);
                 }
 
-                mode_ = other.mode_;
+                if (state_) {
+                    state_->release();
+                }
+
+                state_ = other.state_;
                 needs_scheduling_ = other.needs_scheduling_;
 
-                if (mode_ == storage_mode::state) {
-                    storage_.state_ = other.storage_.state_;
-                    other.storage_.state_ = nullptr;
-                } else if (mode_ == storage_mode::immediate) {
-                    new (&storage_.value_) T(std::move(other.storage_.value_));
-                    other.storage_.value_.~T();
-                }
-
-                other.mode_ = storage_mode::invalid;
+                other.state_ = nullptr;
                 other.needs_scheduling_ = false;
             }
             return *this;
         }
 
         ~unique_future() noexcept {
-            if (mode_ == storage_mode::state && storage_.state_) {
-                storage_.state_->release();
-            } else if (mode_ == storage_mode::immediate) {
-                storage_.value_.~T();
+            if (state_) {
+                state_->release();
             }
         }
 
         T get() && {
-            if (mode_ == storage_mode::immediate) {
-                T result = std::move(storage_.value_);
-                storage_.value_.~T();
-                mode_ = storage_mode::invalid;
-                return result;
-            }
-
-            assert(mode_ == storage_mode::state && "get() on invalid future");
-            assert(storage_.state_ && "get() with null state");
+            assert(state_ && "get() on invalid future");
 
             int spin_count = 0;
             constexpr int fast_spin_limit = 10;
             constexpr int yield_limit = 100;
 
-            while (!storage_.state_->is_ready() && spin_count < fast_spin_limit) {
-                if (storage_.state_->is_cancelled()) {
-                    storage_.state_->release();
-                    storage_.state_ = nullptr;
-                    mode_ = storage_mode::invalid;
+            while (!state_->is_ready() && spin_count < fast_spin_limit) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
                 ++spin_count;
             }
 
-            while (!storage_.state_->is_ready() && spin_count < yield_limit) {
-                if (storage_.state_->is_cancelled()) {
-                    storage_.state_->release();
-                    storage_.state_ = nullptr;
-                    mode_ = storage_mode::invalid;
+            while (!state_->is_ready() && spin_count < yield_limit) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
@@ -258,30 +215,28 @@ namespace actor_zeta {
 #if HAVE_ATOMIC_WAIT
             // C++20: Efficient blocking wait (zero CPU usage)
             // Uses futex (Linux), __ulock_wait (macOS), or WaitOnAddress (Windows)
-            auto current = storage_.state_->state();
+            auto current = state_->state();
             while (current == detail::future_state_enum::pending) {
-                if (storage_.state_->is_cancelled()) {
-                    storage_.state_->release();
-                    storage_.state_ = nullptr;
-                    mode_ = storage_mode::invalid;
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
 
                 // Block until state changes (0% CPU)
-                storage_.state_->wait(current);
-                current = storage_.state_->state();
+                state_->wait(current);
+                current = state_->state();
             }
 #else
             // C++17 fallback: Exponential backoff polling
             auto backoff = std::chrono::microseconds(1);
             constexpr auto max_backoff = std::chrono::microseconds(100);
 
-            while (!storage_.state_->is_ready()) {
-                if (storage_.state_->is_cancelled()) {
-                    storage_.state_->release();
-                    storage_.state_ = nullptr;
-                    mode_ = storage_mode::invalid;
+            while (!state_->is_ready()) {
+                if (state_->is_cancelled()) {
+                    state_->release();
+                    state_ = nullptr;
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
@@ -293,13 +248,10 @@ namespace actor_zeta {
             }
 #endif
 
-            std::atomic_signal_fence(std::memory_order_acq_rel);
+            T result = state_->result().template get<T>(0);
 
-            T result = storage_.state_->result().template get<T>(0);
-
-            storage_.state_->release();
-            storage_.state_ = nullptr;
-            mode_ = storage_mode::invalid;
+            state_->release();
+            state_ = nullptr;
 
             return result;
         }
@@ -307,16 +259,11 @@ namespace actor_zeta {
         T get() & = delete;
 
         [[nodiscard]] bool is_ready() const noexcept {
-            if (mode_ == storage_mode::immediate) {
-                return true;
-            } else if (mode_ == storage_mode::state) {
-                return storage_.state_ && storage_.state_->is_ready();
-            }
-            return false;
+            return state_ && state_->is_ready();
         }
 
         [[nodiscard]] bool valid() const noexcept {
-            return mode_ != storage_mode::invalid;
+            return state_ != nullptr;
         }
 
         [[nodiscard]] bool needs_scheduling() const noexcept {
@@ -324,44 +271,22 @@ namespace actor_zeta {
         }
 
         void cancel() noexcept {
-            if (mode_ == storage_mode::state && storage_.state_) {
-                storage_.state_->set_state(detail::future_state_enum::cancelled);
+            if (state_) {
+                state_->set_state(detail::future_state_enum::cancelled);
             }
         }
 
         [[nodiscard]] bool is_cancelled() const noexcept {
-            return mode_ == storage_mode::state && storage_.state_ && storage_.state_->is_cancelled();
+            return state_ && state_->is_cancelled();
         }
 
-        [[nodiscard]] bool is_immediate() const noexcept {
-            return mode_ == storage_mode::immediate;
-        }
-
-        [[nodiscard]] bool is_state() const noexcept {
-            return mode_ == storage_mode::state;
-        }
-
-        T take_immediate_value() && {
-            assert(mode_ == storage_mode::immediate && "take_immediate_value() on non-immediate future");
-            T value = std::move(storage_.value_);
-            storage_.value_.~T();
-            mode_ = storage_mode::invalid;
-            return value;
-        }
-
-        detail::future_state<T>* take_state() && {
-            assert(mode_ == storage_mode::state && "take_state() on non-state future");
-            auto* state = storage_.state_;
-            storage_.state_ = nullptr;
-            mode_ = storage_mode::invalid;
-            return state;
+        [[nodiscard]] detail::future_state<T>* get_state() const noexcept {
+            return state_;
         }
 
         [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
-            if (mode_ == storage_mode::state && storage_.state_) {
-                return storage_.state_->memory_resource();
-            }
-            return pmr::get_default_resource();
+            assert(state_ && "memory_resource() called on moved-from or invalid future");
+            return state_->memory_resource();
         }
 
 #if HAVE_STD_COROUTINES
@@ -369,6 +294,8 @@ namespace actor_zeta {
             using value_type = T;
 
             unique_future<T> get_return_object() {
+                assert(resource_ != nullptr &&
+                       "Coroutine must be actor member function with resource() method");
 
                 void* mem = resource_->allocate(sizeof(detail::future_state<T>),
                                                 alignof(detail::future_state<T>));
@@ -412,41 +339,55 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
+            // Default constructor - standalone coroutines will get nullptr resource
             promise_type() noexcept
-                : resource_(pmr::get_default_resource())
+                : resource_(nullptr)
                 , state_(nullptr) {
             }
 
-            template<typename... Args>
-            promise_type(Args&&...) noexcept
-                : resource_(pmr::get_default_resource())
+            // Constructor for actor member functions - extracts resource from actor*
+            // When coroutine is member function, compiler passes 'this' as first argument
+            template<typename First, typename... Args>
+            promise_type(First&& first, Args&&...) noexcept
+                : resource_(extract_resource_impl(std::forward<First>(first)))
                 , state_(nullptr) {
             }
 
             ~promise_type() noexcept = default;
 
         private:
+            // SFINAE: Extract resource from actor pointer (if has resource() method)
+            template<typename U>
+            static auto try_get_resource(U* ptr, int) noexcept
+                -> decltype(ptr->resource()) {
+                return ptr->resource();
+            }
+
+            // Fallback: Return nullptr (will assert in get_return_object)
+            template<typename U>
+            static pmr::memory_resource* try_get_resource(U*, ...) noexcept {
+                return nullptr;
+            }
+
+            // Extract resource from pointer type
+            template<typename U>
+            static pmr::memory_resource* extract_resource_impl(U* ptr) noexcept {
+                return try_get_resource(ptr, 0);
+            }
+
+            // Fallback for non-pointer types -> nullptr
+            template<typename U>
+            static pmr::memory_resource* extract_resource_impl(U&&) noexcept {
+                return nullptr;
+            }
+
             pmr::memory_resource* resource_;
             detail::future_state<T>* state_;
         };
 #endif
 
     private:
-        enum class storage_mode : uint8_t {
-            invalid,
-            state,
-            immediate
-        };
-
-        union storage {
-            detail::future_state<T>* state_;
-            T value_;
-
-            storage() noexcept : state_(nullptr) {}
-            ~storage() noexcept {}
-        } storage_;
-
-        storage_mode mode_;
+        detail::future_state<T>* state_;
         bool needs_scheduling_;
     };
 
@@ -455,12 +396,21 @@ namespace actor_zeta {
     public:
         explicit unique_future(pmr::memory_resource* /*res*/) noexcept
             : state_(nullptr)
-            , needs_scheduling_(false) {
+            , needs_scheduling_(false)
+            , is_ready_void_(false) {
         }
 
         explicit unique_future(detail::future_state<void>* state, bool needs_sched = false) noexcept
             : state_(state)
-            , needs_scheduling_(needs_sched) {
+            , needs_scheduling_(needs_sched)
+            , is_ready_void_(false) {
+        }
+
+        // ✅ Static factory for ready void future (zero allocation)
+        static unique_future<void> make_ready() noexcept {
+            unique_future<void> f(nullptr, false);
+            f.is_ready_void_ = true;
+            return f;
         }
 
         unique_future(const unique_future&) = delete;
@@ -468,37 +418,50 @@ namespace actor_zeta {
 
         unique_future(unique_future&& other) noexcept
             : state_(other.state_)
-            , needs_scheduling_(other.needs_scheduling_) {
+            , needs_scheduling_(other.needs_scheduling_)
+            , is_ready_void_(other.is_ready_void_) {
             other.state_ = nullptr;
             other.needs_scheduling_ = false;
+            other.is_ready_void_ = false;
         }
 
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
-                if (state_ && !state_->is_ready()) {
-                    state_->set_state(detail::future_state_enum::cancelled);
-                }
+                // ✅ Don't release if this is ready void (no allocation)
+                if (!is_ready_void_) {
+                    if (state_ && !state_->is_ready()) {
+                        state_->set_state(detail::future_state_enum::cancelled);
+                    }
 
-                if (state_) {
-                    state_->release();
+                    if (state_) {
+                        state_->release();
+                    }
                 }
 
                 state_ = other.state_;
                 needs_scheduling_ = other.needs_scheduling_;
+                is_ready_void_ = other.is_ready_void_;
 
                 other.state_ = nullptr;
                 other.needs_scheduling_ = false;
+                other.is_ready_void_ = false;
             }
             return *this;
         }
 
         ~unique_future() noexcept {
-            if (state_) {
+            // ✅ Don't release if this is ready void (no allocation)
+            if (state_ && !is_ready_void_) {
                 state_->release();
             }
         }
 
         void get() && {
+            // ✅ Fast path for ready void (no allocation, no waiting)
+            if (is_ready_void_) {
+                return;
+            }
+
             assert(state_ && "get() on invalid future");
 
             int spin_count = 0;
@@ -568,11 +531,13 @@ namespace actor_zeta {
         void get() & = delete;
 
         [[nodiscard]] bool is_ready() const noexcept {
-            return state_ && state_->is_ready();
+            // ✅ Fast path for ready void
+            return is_ready_void_ || (state_ && state_->is_ready());
         }
 
         [[nodiscard]] bool valid() const noexcept {
-            return state_ != nullptr;
+            // ✅ Ready void is valid even without state
+            return is_ready_void_ || (state_ != nullptr);
         }
 
         [[nodiscard]] bool needs_scheduling() const noexcept {
@@ -598,6 +563,9 @@ namespace actor_zeta {
             using value_type = void;
 
             unique_future<void> get_return_object() {
+                assert(resource_ != nullptr &&
+                       "Coroutine must be actor member function with resource() method");
+
                 void* mem = resource_->allocate(sizeof(detail::future_state<void>),
                                                 alignof(detail::future_state<void>));
                 state_ = new (mem) detail::future_state<void>(resource_);
@@ -621,11 +589,47 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
-            explicit promise_type(pmr::memory_resource* res = pmr::get_default_resource()) noexcept
-                : resource_(res)
-                , state_(nullptr) {}
+            // Default constructor - standalone coroutines will get nullptr resource
+            promise_type() noexcept
+                : resource_(nullptr)
+                , state_(nullptr) {
+            }
+
+            // Constructor for actor member functions - extracts resource from actor*
+            template<typename First, typename... Args>
+            promise_type(First&& first, Args&&...) noexcept
+                : resource_(extract_resource_impl(std::forward<First>(first)))
+                , state_(nullptr) {
+            }
+
+            ~promise_type() noexcept = default;
 
         private:
+            // SFINAE: Extract resource from actor pointer (if has resource() method)
+            template<typename U>
+            static auto try_get_resource(U* ptr, int) noexcept
+                -> decltype(ptr->resource()) {
+                return ptr->resource();
+            }
+
+            // Fallback: Return nullptr (will assert in get_return_object)
+            template<typename U>
+            static pmr::memory_resource* try_get_resource(U*, ...) noexcept {
+                return nullptr;
+            }
+
+            // Extract resource from pointer type
+            template<typename U>
+            static pmr::memory_resource* extract_resource_impl(U* ptr) noexcept {
+                return try_get_resource(ptr, 0);
+            }
+
+            // Fallback for non-pointer types -> nullptr
+            template<typename U>
+            static pmr::memory_resource* extract_resource_impl(U&&) noexcept {
+                return nullptr;
+            }
+
             pmr::memory_resource* resource_;
             detail::future_state<void>* state_;
         };
@@ -634,24 +638,36 @@ namespace actor_zeta {
     private:
         detail::future_state<void>* state_;
         bool needs_scheduling_;
+        bool is_ready_void_;  // ✅ True for ready void future (zero allocation)
     };
 
     template<typename T>
     unique_future<T> make_ready_future(pmr::memory_resource* resource, T&& value) {
-        return unique_future<T>(std::forward<T>(value));
+        void* mem = resource->allocate(sizeof(detail::future_state<T>),
+                                       alignof(detail::future_state<T>));
+        auto* state = new (mem) detail::future_state<T>(resource);
+
+        detail::rtt result(resource, std::forward<T>(value));
+        state->set_result(std::move(result));
+
+        return unique_future<T>(state, false);
     }
 
     template<typename T>
     unique_future<T> make_ready_future(pmr::memory_resource* resource, const T& value) {
-        return unique_future<T>(value);
+        void* mem = resource->allocate(sizeof(detail::future_state<T>),
+                                       alignof(detail::future_state<T>));
+        auto* state = new (mem) detail::future_state<T>(resource);
+
+        detail::rtt result(resource, value);
+        state->set_result(std::move(result));
+
+        return unique_future<T>(state, false);
     }
 
-    inline unique_future<void> make_ready_future_void(pmr::memory_resource* resource) {
-        void* mem = resource->allocate(sizeof(detail::future_state<void>),
-                                       alignof(detail::future_state<void>));
-        auto* state = new (mem) detail::future_state<void>(resource);
-        state->set_ready();
-        return unique_future<void>(state, false);
+    inline unique_future<void> make_ready_future_void(pmr::memory_resource* /*resource*/) {
+        // ✅ Zero allocation - just return ready void future
+        return unique_future<void>::make_ready();
     }
 
     template<typename T>
@@ -673,68 +689,63 @@ namespace actor_zeta {
 
     template<typename T>
     struct future_awaiter {
-        detail::future_state<T>* state_;
-        pmr::memory_resource* resource_;
+        unique_future<T> future_;
 
-        explicit future_awaiter(detail::future_state<T>* s, pmr::memory_resource* res) noexcept
-            : state_(s), resource_(res) {
+        explicit future_awaiter(unique_future<T>&& f) noexcept
+            : future_(std::move(f)) {
         }
 
-        future_awaiter(const future_awaiter&) = default;
+        future_awaiter(const future_awaiter&) = delete;
+        future_awaiter& operator=(const future_awaiter&) = delete;
+
         future_awaiter(future_awaiter&&) noexcept = default;
-        future_awaiter& operator=(const future_awaiter&) = default;
-        future_awaiter& operator=(future_awaiter&&) = default;
+        future_awaiter& operator=(future_awaiter&&) noexcept = default;
 
-        ~future_awaiter() noexcept {
-        }
+        ~future_awaiter() noexcept = default;
 
         [[nodiscard]] bool await_ready() const noexcept {
-
-            if (!state_) {
-                return true;
-            }
-
-            bool ready = state_->is_ready();
-            return ready;
+            return future_.is_ready();
         }
 
         bool await_suspend(std::coroutine_handle<> handle) noexcept {
-
-            if (!state_) {
+            if (future_.is_ready()) {
                 return false;
             }
 
-            if (state_->is_ready()) {
+            auto* state = future_.get_state();
+            if (!state) {
                 return false;
             }
 
             // ✅ CRITICAL: Save coroutine handle in future_state
             // Resume will be called from actor's behavior() via resume_all()
             // This ensures coroutine runs in CORRECT thread (actor's thread, not sender's)
-            state_->set_coroutine(handle);
+            state->set_coroutine(handle);
 
             return true;
         }
 
         T await_resume() {
-
-            assert(state_ && "await_resume() with null state");
-            assert(state_->is_ready() && "await_resume() called but state not ready!");
-
-            T result = state_->result().template get<T>(0);
-
-            state_->release();
-            state_ = nullptr;
-
-            return result;
+            assert(future_.valid() && "await_resume() on invalid future");
+            return std::move(future_).get();
         }
     };
 
     template<>
     struct future_awaiter<void> {
-        unique_future<void>& future_;
+        unique_future<void> future_;
 
-        explicit future_awaiter(unique_future<void>& f) noexcept : future_(f) {}
+        explicit future_awaiter(unique_future<void>&& f) noexcept
+            : future_(std::move(f)) {
+        }
+
+        future_awaiter(const future_awaiter&) = delete;
+        future_awaiter& operator=(const future_awaiter&) = delete;
+
+        future_awaiter(future_awaiter&&) noexcept = default;
+        future_awaiter& operator=(future_awaiter&&) noexcept = default;
+
+        ~future_awaiter() noexcept = default;
 
         [[nodiscard]] bool await_ready() const noexcept {
             return future_.is_ready();
@@ -765,33 +776,8 @@ namespace actor_zeta {
     };
 
     template<typename T>
-    auto operator co_await(unique_future<T>&& f) noexcept {
-
-        if (f.is_immediate()) {
-            return future_awaiter<T>{nullptr, pmr::get_default_resource()};
-        }
-
-        auto* resource = f.memory_resource();
-
-        auto* state = std::move(f).take_state();
-
-
-        return future_awaiter<T>{state, resource};
-    }
-
-    template<typename T>
-    auto operator co_await(unique_future<T>& f) noexcept {
-
-        if (f.is_immediate()) {
-            return future_awaiter<T>{nullptr, pmr::get_default_resource()};
-        }
-
-        auto* resource = f.memory_resource();
-
-        auto* state = std::move(f).take_state();
-
-
-        return future_awaiter<T>{state, resource};
+    auto operator co_await(unique_future<T> f) noexcept {
+        return future_awaiter<T>{std::move(f)};
     }
 
 }

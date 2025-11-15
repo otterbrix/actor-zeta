@@ -364,177 +364,91 @@ TEST_CASE("resume_all_if helper function") {
 }
 
 // ============================================================================
-// Test 11: TWO modes architecture - IMMEDIATE mode
+// Test 11: REMOVED - TWO modes architecture tests (immediate mode removed)
 // ============================================================================
 
-TEST_CASE("TWO modes architecture - IMMEDIATE mode") {
-    SECTION("implicit conversion from int") {
-        actor_zeta::unique_future<int> future = 42;  // Implicit conversion
-
-        REQUIRE(future.valid());
-        REQUIRE(future.is_immediate());
-        REQUIRE_FALSE(future.is_state());
-        REQUIRE(future.is_ready());  // IMMEDIATE is always ready
-
-        int result = std::move(future).get();
-        REQUIRE(result == 42);
-    }
-
-    SECTION("implicit conversion from string") {
-        actor_zeta::unique_future<std::string> future = std::string("hello");
-
-        REQUIRE(future.valid());
-        REQUIRE(future.is_immediate());
-        REQUIRE(future.is_ready());
-
-        std::string result = std::move(future).get();
-        REQUIRE(result == "hello");
-    }
-
-    SECTION("take_immediate_value extracts value") {
-        actor_zeta::unique_future<int> future = 123;
-
-        REQUIRE(future.is_immediate());
-
-        int value = std::move(future).take_immediate_value();
-        REQUIRE(value == 123);
-        REQUIRE_FALSE(future.valid());  // Moved-from state
-    }
-
-    SECTION("move constructor preserves IMMEDIATE mode") {
-        actor_zeta::unique_future<int> future1 = 99;
-        REQUIRE(future1.is_immediate());
-
-        actor_zeta::unique_future<int> future2 = std::move(future1);
-        REQUIRE(future2.is_immediate());
-        REQUIRE(future2.is_ready());
-
-        int result = std::move(future2).get();
-        REQUIRE(result == 99);
-    }
-
-    SECTION("move assignment preserves IMMEDIATE mode") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
-        actor_zeta::unique_future<int> future1 = 77;
-        actor_zeta::unique_future<int> future2(resource);  // Invalid future
-
-        REQUIRE(future1.is_immediate());
-        REQUIRE_FALSE(future2.valid());
-
-        future2 = std::move(future1);
-        REQUIRE(future2.is_immediate());
-        REQUIRE(future2.valid());
-
-        int result = std::move(future2).get();
-        REQUIRE(result == 77);
-    }
-}
-
 // ============================================================================
-// Test 12: TWO modes architecture - STATE mode
+// Test 12: Coroutine futures (STATE mode)
 // ============================================================================
 
-TEST_CASE("TWO modes architecture - STATE mode") {
-    SECTION("co_return creates STATE mode") {
+TEST_CASE("Coroutine futures") {
+    SECTION("co_return creates valid future") {
         auto future = simple_coroutine_int();  // co_return 42
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_state());
-        REQUIRE_FALSE(future.is_immediate());
         REQUIRE(future.is_ready());
 
         int result = std::move(future).get();
         REQUIRE(result == 42);
     }
 
-    SECTION("take_state extracts state pointer") {
-        auto future = simple_coroutine_int();
-
-        REQUIRE(future.is_state());
-
-        auto* state = std::move(future).take_state();
-        REQUIRE(state != nullptr);
-        REQUIRE_FALSE(future.valid());  // Moved-from state
-
-        // Cleanup
-        state->release();
-    }
-
-    SECTION("move constructor preserves STATE mode") {
+    SECTION("move constructor preserves future state") {
         auto future1 = simple_coroutine_string();
-        REQUIRE(future1.is_state());
+        REQUIRE(future1.valid());
 
         auto future2 = std::move(future1);
-        REQUIRE(future2.is_state());
+        REQUIRE(future2.valid());
         REQUIRE(future2.is_ready());
 
         std::string result = std::move(future2).get();
         REQUIRE(result == "hello");
     }
 
-    SECTION("cancel works only in STATE mode") {
+    SECTION("cancel works on futures") {
         auto* resource = actor_zeta::pmr::get_default_resource();
 
-        // STATE mode
+        // Create future with state
         void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
                                         alignof(actor_zeta::detail::future_state<int>));
         auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
         actor_zeta::unique_future<int> future_state(state, false);
 
-        REQUIRE(future_state.is_state());
+        REQUIRE(future_state.valid());
         REQUIRE_FALSE(future_state.is_cancelled());
 
         future_state.cancel();
         REQUIRE(future_state.is_cancelled());
-
-        // IMMEDIATE mode - cancel does nothing
-        actor_zeta::unique_future<int> future_immediate = 42;
-        REQUIRE(future_immediate.is_immediate());
-        REQUIRE_FALSE(future_immediate.is_cancelled());
-
-        future_immediate.cancel();  // Should be no-op
-        REQUIRE_FALSE(future_immediate.is_cancelled());
     }
 }
 
 // ============================================================================
-// Test 13: Sync methods returning unique_future (IMMEDIATE mode use case)
+// Test 13: Sync methods returning unique_future via make_ready_future()
 // ============================================================================
 
 // Sync method returning unique_future<int>
 actor_zeta::unique_future<int> sync_add(int a, int b) {
-    return a + b;  // Implicit conversion: int → unique_future<int>
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    return actor_zeta::make_ready_future(resource, a + b);
 }
 
 // Sync method returning unique_future<std::string>
 actor_zeta::unique_future<std::string> sync_concat(const std::string& a, const std::string& b) {
-    return a + b;  // Implicit conversion
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    return actor_zeta::make_ready_future(resource, a + b);
 }
 
 TEST_CASE("sync methods with unique_future return type") {
-    SECTION("sync_add returns IMMEDIATE mode") {
+    SECTION("sync_add returns ready future") {
         auto future = sync_add(10, 20);
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_immediate());
         REQUIRE(future.is_ready());
 
         int result = std::move(future).get();
         REQUIRE(result == 30);
     }
 
-    SECTION("sync_concat returns IMMEDIATE mode") {
+    SECTION("sync_concat returns ready future") {
         auto future = sync_concat("hello", " world");
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_immediate());
         REQUIRE(future.is_ready());
 
         std::string result = std::move(future).get();
         REQUIRE(result == "hello world");
     }
 
-    SECTION("IMMEDIATE mode - no waiting, instant get()") {
+    SECTION("ready future - no waiting, instant get()") {
         auto future = sync_add(5, 7);
 
         // get() should return immediately without blocking
@@ -564,14 +478,14 @@ public:
         , async_mul_(actor_zeta::make_behavior(res, this, &future_test_actor::async_multiply)) {
     }
 
-    // IMMEDIATE mode - sync method returning unique_future via implicit conversion
+    // Sync method returning ready future via make_ready_future()
     actor_zeta::unique_future<int> sync_add(int a, int b) {
-        return a + b;  // Implicit conversion: int → unique_future<int>
+        return actor_zeta::make_ready_future(resource(), a + b);
     }
 
-    // STATE mode - async coroutine method
+    // Async coroutine method
     actor_zeta::unique_future<int> async_multiply(int a, int b) {
-        co_return a * b;  // promise_type creates STATE mode future
+        co_return a * b;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -598,7 +512,7 @@ private:
 TEST_CASE("Handler integration - unique_future<T> return types") {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
-    SECTION("sync method with IMMEDIATE mode future") {
+    SECTION("sync method with ready future") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
         REQUIRE(actor != nullptr);
 
@@ -615,7 +529,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         REQUIRE(value == 30);
     }
 
-    SECTION("async method with STATE mode future") {
+    SECTION("async coroutine method") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
         REQUIRE(actor != nullptr);
 

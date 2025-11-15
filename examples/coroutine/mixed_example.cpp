@@ -27,20 +27,20 @@ public:
     }
 
     // ========================================
-    // SYNC METHODS - regular functions with implicit conversion
+    // SYNC METHODS - regular functions with make_ready_future
     // ========================================
 
     /// @brief Simple addition - synchronous method
-    /// Returns unique_future<int> but implemented as regular function
+    /// Returns unique_future<int> using make_ready_future
     actor_zeta::unique_future<int> add(int a, int b) {
         std::cout << "[Calculator] SYNC add(" << a << ", " << b << ")\n";
-        return a + b;  // ✅ int → unique_future<int> implicit conversion
+        return actor_zeta::make_ready_future(resource(), a + b);
     }
 
     /// @brief Simple multiplication - synchronous method
     actor_zeta::unique_future<int> multiply(int a, int b) {
         std::cout << "[Calculator] SYNC multiply(" << a << ", " << b << ")\n";
-        return a * b;  // ✅ int → unique_future<int> implicit conversion
+        return actor_zeta::make_ready_future(resource(), a * b);
     }
 
     // ========================================
@@ -139,7 +139,7 @@ int main() {
     std::cout << "--- Key observations ---\n";
     std::cout << "1. Both sync and async methods have SAME signature: unique_future<int>\n";
     std::cout << "2. Caller uses SAME code: send() and get()\n";
-    std::cout << "3. Sync methods use 'return T' - implicit conversion\n";
+    std::cout << "3. Sync methods use 'make_ready_future()' for immediate results\n";
     std::cout << "4. Async methods use 'co_await' and 'co_return'\n";
     std::cout << "5. No difference from caller's perspective!\n";
     std::cout << "\n NOTE: Recursive coroutines (like factorial, power) are NOT supported\n";
