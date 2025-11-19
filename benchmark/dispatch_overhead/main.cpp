@@ -10,7 +10,7 @@ using namespace actor_zeta;
 
 class old_style_actor : public base::basic_actor<old_style_actor> {
 public:
-    using dispatch_traits = base::dispatch_traits<
+    using dispatch_traits = actor_zeta::dispatch_traits<
         &old_style_actor::method1,
         &old_style_actor::method2,
         &old_style_actor::method3,
@@ -27,7 +27,7 @@ public:
         , behavior5_(make_behavior(resource, this, &old_style_actor::method5))
         , counter_(0) {}
 
-    void behavior(mailbox::message* msg) override {
+    void behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<old_style_actor, &old_style_actor::method1>) {
             behavior1_(msg);
@@ -72,33 +72,33 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
     for (auto _ : state) {
         switch (method_id) {
             case 0: {
-                auto f = send(actor, base::address_t::empty_address(), &old_style_actor::method1, 1);
+                auto f = send(actor.get(), actor->address(), &old_style_actor::method1, 1);
                 while (!f.is_ready()) { actor->resume(1); }
-                benchmark::DoNotOptimize(f.get());
+                benchmark::DoNotOptimize(std::move(f).get());
                 break;
             }
             case 1: {
-                auto f = send(actor, base::address_t::empty_address(), &old_style_actor::method2, 2);
+                auto f = send(actor.get(), actor->address(), &old_style_actor::method2, 2);
                 while (!f.is_ready()) { actor->resume(1); }
-                benchmark::DoNotOptimize(f.get());
+                benchmark::DoNotOptimize(std::move(f).get());
                 break;
             }
             case 2: {
-                auto f = send(actor, base::address_t::empty_address(), &old_style_actor::method3, 3);
+                auto f = send(actor.get(), actor->address(), &old_style_actor::method3, 3);
                 while (!f.is_ready()) { actor->resume(1); }
-                benchmark::DoNotOptimize(f.get());
+                benchmark::DoNotOptimize(std::move(f).get());
                 break;
             }
             case 3: {
-                auto f = send(actor, base::address_t::empty_address(), &old_style_actor::method4, 4);
+                auto f = send(actor.get(), actor->address(), &old_style_actor::method4, 4);
                 while (!f.is_ready()) { actor->resume(1); }
-                benchmark::DoNotOptimize(f.get());
+                benchmark::DoNotOptimize(std::move(f).get());
                 break;
             }
             case 4: {
-                auto f = send(actor, base::address_t::empty_address(), &old_style_actor::method5, 5);
+                auto f = send(actor.get(), actor->address(), &old_style_actor::method5, 5);
                 while (!f.is_ready()) { actor->resume(1); }
-                benchmark::DoNotOptimize(f.get());
+                benchmark::DoNotOptimize(std::move(f).get());
                 break;
             }
         }
