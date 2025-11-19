@@ -56,11 +56,12 @@ namespace actor_zeta { namespace mailbox {
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
-        /// @brief Get future state (result slot)
-        actor_zeta::detail::future_state_base* result_slot() const noexcept { return result_slot_; }
+        /// @brief Get future state (result slot) - returns intrusive_ptr (copy, calls add_ref())
+        /// This ensures future_state stays alive during method calls, preventing race conditions
+        intrusive_ptr<actor_zeta::detail::future_state_base> result_slot() const noexcept { return result_slot_; }
 
-        /// @brief Set future state (result slot)
-        void set_result_slot(actor_zeta::detail::future_state_base* slot) noexcept { result_slot_ = slot; }
+        /// @brief Set future state (result slot) - accepts intrusive_ptr
+        void set_result_slot(const intrusive_ptr<actor_zeta::detail::future_state_base>& slot) noexcept { result_slot_ = slot; }
 
         /// @brief Check if cancelled (via result_slot state)
         bool is_cancelled() const noexcept {
@@ -117,8 +118,8 @@ namespace actor_zeta { namespace mailbox {
         message_id command_;
         actor_zeta::detail::rtt body_;
 
-        // Future state for request-response pattern
-        actor_zeta::detail::future_state_base* result_slot_{nullptr};
+        // Future state for request-response pattern (automatic lifetime management via intrusive_ptr)
+        intrusive_ptr<actor_zeta::detail::future_state_base> result_slot_;
     };
 
     static_assert(std::is_move_constructible<message>::value, "");

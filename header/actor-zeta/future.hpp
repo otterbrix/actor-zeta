@@ -26,23 +26,21 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
-        explicit promise(detail::future_state_base* slot, pmr::memory_resource* res) noexcept
+        explicit promise(const intrusive_ptr<detail::future_state_base>& slot, pmr::memory_resource* res) noexcept
             : slot_(slot)
             , resource_(res) {
             assert(slot_ && "promise constructed with null slot");
         }
 
         promise(promise&& other) noexcept
-            : slot_(other.slot_)
+            : slot_(std::move(other.slot_))
             , resource_(other.resource_) {
-            other.slot_ = nullptr;
         }
 
         promise& operator=(promise&& other) noexcept {
             if (this != &other) {
-                slot_ = other.slot_;
+                slot_ = std::move(other.slot_);
                 resource_ = other.resource_;
-                other.slot_ = nullptr;
             }
             return *this;
         }
@@ -76,11 +74,11 @@ namespace actor_zeta {
         }
 
         [[nodiscard]] detail::future_state_base* slot() const noexcept {
-            return slot_;
+            return slot_.get();
         }
 
     private:
-        detail::future_state_base* slot_;
+        intrusive_ptr<detail::future_state_base> slot_;
         pmr::memory_resource* resource_;
     };
 
@@ -91,21 +89,19 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
-        explicit promise(detail::future_state_base* slot, pmr::memory_resource* res) noexcept
+        explicit promise(const intrusive_ptr<detail::future_state_base>& slot, pmr::memory_resource* res) noexcept
             : slot_(slot), resource_(res) {
             assert(slot_ && "promise<void> constructed with null slot");
         }
 
         promise(promise&& other) noexcept
-            : slot_(other.slot_), resource_(other.resource_) {
-            other.slot_ = nullptr;
+            : slot_(std::move(other.slot_)), resource_(other.resource_) {
         }
 
         promise& operator=(promise&& other) noexcept {
             if (this != &other) {
-                slot_ = other.slot_;
+                slot_ = std::move(other.slot_);
                 resource_ = other.resource_;
-                other.slot_ = nullptr;
             }
             return *this;
         }
@@ -128,13 +124,17 @@ namespace actor_zeta {
         }
 
         [[nodiscard]] detail::future_state_base* slot() const noexcept {
-            return slot_;
+            return slot_.get();
         }
 
     private:
-        detail::future_state_base* slot_;
+        intrusive_ptr<detail::future_state_base> slot_;
         pmr::memory_resource* resource_;
     };
+
+    // Tag type for adopting an existing reference (no add_ref() in constructor)
+    struct adopt_ref_t {};
+    inline constexpr adopt_ref_t adopt_ref{};
 
     template<typename T>
     class unique_future final {
@@ -145,7 +145,14 @@ namespace actor_zeta {
         }
 
         explicit unique_future(detail::future_state<T>* state, bool needs_sched = false) noexcept
-            : state_(state)
+            : state_(state)  // intrusive_ptr assignment calls add_ref() automatically
+            , needs_scheduling_(needs_sched) {
+        }
+
+        // Constructor for adopting an existing reference (no add_ref())
+        // Use this when the state already has a reference count for this future
+        unique_future(adopt_ref_t, detail::future_state<T>* state, bool needs_sched = false) noexcept
+            : state_(state, false)  // intrusive_ptr(ptr, false) adopts reference (no add_ref)
             , needs_scheduling_(needs_sched) {
         }
 
@@ -153,9 +160,8 @@ namespace actor_zeta {
         unique_future& operator=(const unique_future&) = delete;
 
         unique_future(unique_future&& other) noexcept
-            : state_(other.state_)
+            : state_(std::move(other.state_))  // intrusive_ptr move - no add_ref/release
             , needs_scheduling_(other.needs_scheduling_) {
-            other.state_ = nullptr;
             other.needs_scheduling_ = false;
         }
 
@@ -165,23 +171,17 @@ namespace actor_zeta {
                     state_->set_state(detail::future_state_enum::cancelled);
                 }
 
-                if (state_) {
-                    state_->release();
-                }
-
-                state_ = other.state_;
+                // intrusive_ptr move assignment handles release() + assignment atomically
+                state_ = std::move(other.state_);
                 needs_scheduling_ = other.needs_scheduling_;
 
-                other.state_ = nullptr;
                 other.needs_scheduling_ = false;
             }
             return *this;
         }
 
         ~unique_future() noexcept {
-            if (state_) {
-                state_->release();
-            }
+            // intrusive_ptr destructor automatically calls release()
         }
 
         T get() && {
@@ -193,8 +193,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready() && spin_count < fast_spin_limit) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
@@ -203,8 +202,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready() && spin_count < yield_limit) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
@@ -218,8 +216,7 @@ namespace actor_zeta {
             auto current = state_->state();
             while (current == detail::future_state_enum::pending) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
@@ -235,8 +232,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready()) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     std::terminate();
                 }
@@ -248,11 +244,18 @@ namespace actor_zeta {
             }
 #endif
 
-            T result = state_->result().template get<T>(0);
+            // FIX: Use take_result() for atomic transition ready→consumed
+            // Move result OUT of future_state before releasing
+            detail::rtt result_rtt = state_->take_result();
 
-            state_->release();
+            // CRITICAL: Release state IMMEDIATELY after taking result
+            // This prevents race where message_guard::~message_guard() might also call release()
+            // We no longer need state_ - all data is in local result_rtt
+            // intrusive_ptr = nullptr automatically calls release()
             state_ = nullptr;
 
+            // Safe: Extract value from LOCAL rtt, not from state
+            T result = result_rtt.template get<T>(0);
             return result;
         }
 
@@ -281,7 +284,7 @@ namespace actor_zeta {
         }
 
         [[nodiscard]] detail::future_state<T>* get_state() const noexcept {
-            return state_;
+            return state_.get();  // Return raw pointer from intrusive_ptr
         }
 
         [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
@@ -304,7 +307,8 @@ namespace actor_zeta {
                 auto handle = detail::coroutine_handle<promise_type>::from_promise(*this);
                 state_->set_coroutine(handle);
 
-                return unique_future<T>(state_, false);
+                // Use adopt_ref - refcount starts at 1, future adopts that reference
+                return unique_future<T>(adopt_ref, state_, false);
             }
 
             detail::suspend_never initial_suspend() noexcept {
@@ -387,7 +391,7 @@ namespace actor_zeta {
 #endif
 
     private:
-        detail::future_state<T>* state_;
+        intrusive_ptr<detail::future_state<T>> state_;  // Changed from raw pointer to intrusive_ptr
         bool needs_scheduling_;
     };
 
@@ -401,12 +405,19 @@ namespace actor_zeta {
         }
 
         explicit unique_future(detail::future_state<void>* state, bool needs_sched = false) noexcept
-            : state_(state)
+            : state_(state)  // intrusive_ptr assignment calls add_ref() automatically
             , needs_scheduling_(needs_sched)
             , is_ready_void_(false) {
         }
 
-        // ✅ Static factory for ready void future (zero allocation)
+        // Constructor for adopting an existing reference (no add_ref())
+        unique_future(adopt_ref_t, detail::future_state<void>* state, bool needs_sched = false) noexcept
+            : state_(state, false)  // intrusive_ptr(ptr, false) adopts reference (no add_ref)
+            , needs_scheduling_(needs_sched)
+            , is_ready_void_(false) {
+        }
+
+        // Static factory for ready void future (zero allocation)
         static unique_future<void> make_ready() noexcept {
             unique_future<void> f(nullptr, false);
             f.is_ready_void_ = true;
@@ -417,32 +428,30 @@ namespace actor_zeta {
         unique_future& operator=(const unique_future&) = delete;
 
         unique_future(unique_future&& other) noexcept
-            : state_(other.state_)
+            : state_(std::move(other.state_))  // intrusive_ptr move - no add_ref/release
             , needs_scheduling_(other.needs_scheduling_)
             , is_ready_void_(other.is_ready_void_) {
-            other.state_ = nullptr;
             other.needs_scheduling_ = false;
             other.is_ready_void_ = false;
         }
 
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
-                // ✅ Don't release if this is ready void (no allocation)
+                // Don't release if this is ready void (no allocation)
                 if (!is_ready_void_) {
                     if (state_ && !state_->is_ready()) {
                         state_->set_state(detail::future_state_enum::cancelled);
                     }
 
-                    if (state_) {
-                        state_->release();
-                    }
+                    // intrusive_ptr move assignment handles release() + assignment atomically
+                    state_ = std::move(other.state_);
+                } else {
+                    state_ = std::move(other.state_);
                 }
 
-                state_ = other.state_;
                 needs_scheduling_ = other.needs_scheduling_;
                 is_ready_void_ = other.is_ready_void_;
 
-                other.state_ = nullptr;
                 other.needs_scheduling_ = false;
                 other.is_ready_void_ = false;
             }
@@ -450,14 +459,11 @@ namespace actor_zeta {
         }
 
         ~unique_future() noexcept {
-            // ✅ Don't release if this is ready void (no allocation)
-            if (state_ && !is_ready_void_) {
-                state_->release();
-            }
+            // intrusive_ptr destructor automatically calls release() (unless ready void with null state)
         }
 
         void get() && {
-            // ✅ Fast path for ready void (no allocation, no waiting)
+            // Fast path for ready void (no allocation, no waiting)
             if (is_ready_void_) {
                 return;
             }
@@ -470,8 +476,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready() && spin_count < fast_spin_limit) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     return;
                 }
@@ -480,8 +485,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready() && spin_count < yield_limit) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     return;
                 }
@@ -494,8 +498,7 @@ namespace actor_zeta {
             auto current = state_->state();
             while (current == detail::future_state_enum::pending) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     return;
                 }
@@ -511,8 +514,7 @@ namespace actor_zeta {
 
             while (!state_->is_ready()) {
                 if (state_->is_cancelled()) {
-                    state_->release();
-                    state_ = nullptr;
+                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
                     assert(false && "get() on cancelled future!");
                     return;
                 }
@@ -524,19 +526,19 @@ namespace actor_zeta {
             }
 #endif
 
-            state_->release();
+            // intrusive_ptr = nullptr automatically calls release()
             state_ = nullptr;
         }
 
         void get() & = delete;
 
         [[nodiscard]] bool is_ready() const noexcept {
-            // ✅ Fast path for ready void
+            // Fast path for ready void
             return is_ready_void_ || (state_ && state_->is_ready());
         }
 
         [[nodiscard]] bool valid() const noexcept {
-            // ✅ Ready void is valid even without state
+            // Ready void is valid even without state
             return is_ready_void_ || (state_ != nullptr);
         }
 
@@ -555,7 +557,7 @@ namespace actor_zeta {
         }
 
         [[nodiscard]] detail::future_state<void>* get_state() const noexcept {
-            return state_;
+            return state_.get();  // Return raw pointer from intrusive_ptr
         }
 
 #if HAVE_STD_COROUTINES
@@ -573,7 +575,8 @@ namespace actor_zeta {
                 auto handle = detail::coroutine_handle<promise_type>::from_promise(*this);
                 state_->set_coroutine(handle);
 
-                return unique_future<void>(state_, false);
+                // Use adopt_ref - refcount starts at 1, future adopts that reference
+                return unique_future<void>(adopt_ref, state_, false);
             }
 
             detail::suspend_never initial_suspend() noexcept { return {}; }
@@ -636,37 +639,39 @@ namespace actor_zeta {
 #endif
 
     private:
-        detail::future_state<void>* state_;
+        intrusive_ptr<detail::future_state<void>> state_;  // Changed from raw pointer to intrusive_ptr
         bool needs_scheduling_;
-        bool is_ready_void_;  // ✅ True for ready void future (zero allocation)
+        bool is_ready_void_;  // True for ready void future (zero allocation)
     };
 
     template<typename T>
     unique_future<T> make_ready_future(pmr::memory_resource* resource, T&& value) {
         void* mem = resource->allocate(sizeof(detail::future_state<T>),
                                        alignof(detail::future_state<T>));
-        auto* state = new (mem) detail::future_state<T>(resource);
+        auto* state = new (mem) detail::future_state<T>(resource);  // refcount = 1
 
         detail::rtt result(resource, std::forward<T>(value));
         state->set_result(std::move(result));
 
-        return unique_future<T>(state, false);
+        // Use adopt_ref - no message to release, future adopts initial refcount
+        return unique_future<T>(adopt_ref, state, false);
     }
 
     template<typename T>
     unique_future<T> make_ready_future(pmr::memory_resource* resource, const T& value) {
         void* mem = resource->allocate(sizeof(detail::future_state<T>),
                                        alignof(detail::future_state<T>));
-        auto* state = new (mem) detail::future_state<T>(resource);
+        auto* state = new (mem) detail::future_state<T>(resource);  // refcount = 1
 
         detail::rtt result(resource, value);
         state->set_result(std::move(result));
 
-        return unique_future<T>(state, false);
+        // Use adopt_ref - no message to release, future adopts initial refcount
+        return unique_future<T>(adopt_ref, state, false);
     }
 
     inline unique_future<void> make_ready_future_void(pmr::memory_resource* /*resource*/) {
-        // ✅ Zero allocation - just return ready void future
+        // Zero allocation - just return ready void future
         return unique_future<void>::make_ready();
     }
 
@@ -674,9 +679,11 @@ namespace actor_zeta {
     unique_future<T> make_error_future(pmr::memory_resource* resource) {
         void* mem = resource->allocate(sizeof(detail::future_state<T>),
                                        alignof(detail::future_state<T>));
-        auto* state = new (mem) detail::future_state<T>(resource);
+        auto* state = new (mem) detail::future_state<T>(resource);  // refcount = 1
         state->set_state(detail::future_state_enum::error);
-        return unique_future<T>(state, false);
+
+        // Use adopt_ref - no message to release, future adopts initial refcount
+        return unique_future<T>(adopt_ref, state, false);
     }
 
 }
@@ -717,10 +724,22 @@ namespace actor_zeta {
                 return false;
             }
 
-            // ✅ CRITICAL: Save coroutine handle in future_state
+            // CRITICAL: Save coroutine handle in future_state
             // Resume will be called from actor's behavior() via resume_all()
             // This ensures coroutine runs in CORRECT thread (actor's thread, not sender's)
             state->set_coroutine(handle);
+
+            // FIX Problem #9: Re-check after set_coroutine() to close race window
+            // Race scenario:
+            //   1. We check is_ready() → false
+            //   2. Another thread calls set_result(), sees has_coroutine() == false, doesn't resume
+            //   3. We call set_coroutine(handle)
+            //   4. → Nobody will call resume() → HANG FOREVER
+            // Solution: Re-check is_ready() after setting handle
+            // If ready now, return false (don't suspend) - coroutine will run immediately
+            if (future_.is_ready()) {
+                return false;  // Don't suspend - another thread set result
+            }
 
             return true;
         }
@@ -761,10 +780,22 @@ namespace actor_zeta {
                 return false;
             }
 
-            // ✅ CRITICAL: Save coroutine handle in future_state
+            // CRITICAL: Save coroutine handle in future_state
             // Resume will be called from actor's behavior() via resume_all()
             // This ensures coroutine runs in CORRECT thread (actor's thread, not sender's)
             state->set_coroutine(handle);
+
+            // FIX Problem #9: Re-check after set_coroutine() to close race window
+            // Race scenario:
+            //   1. We check is_ready() → false
+            //   2. Another thread calls set_result(), sees has_coroutine() == false, doesn't resume
+            //   3. We call set_coroutine(handle)
+            //   4. → Nobody will call resume() → HANG FOREVER
+            // Solution: Re-check is_ready() after setting handle
+            // If ready now, return false (don't suspend) - coroutine will run immediately
+            if (future_.is_ready()) {
+                return false;  // Don't suspend - another thread set result
+            }
 
             return true;
         }

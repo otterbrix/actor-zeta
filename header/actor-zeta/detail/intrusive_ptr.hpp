@@ -8,6 +8,7 @@
 
 #include <actor-zeta/detail/ref_counted.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
+#include <actor-zeta/detail/memory_resource.hpp>
 
 namespace actor_zeta {
     ///
@@ -223,5 +224,30 @@ namespace actor_zeta {
     intrusive_ptr<T> make_counted(args&&... xs) {
         return intrusive_ptr<T>(new T(std::forward<args>(xs)...), false);
     }
+
+    /// @brief PMR-aware version of make_counted for types requiring custom allocation
+    /// @tparam T Type to create (must have constructor taking pmr::memory_resource*)
+    /// @tparam Args Additional constructor arguments
+    /// @param res Memory resource for allocation
+    /// @param args Arguments forwarded to T's constructor (after res)
+    /// @return intrusive_ptr<T> owning the newly created object
+    ///
+    /// Usage:
+    ///   auto ptr = make_counted<future_state<int>>(resource);
+    ///   auto ptr = make_counted<MyType>(resource, arg1, arg2);
+    ///
+    /// Memory management:
+    ///   - Allocates using res->allocate(sizeof(T), alignof(T))
+    ///   - Constructs via placement new: new (mem) T(res, args...)
+    ///   - Returns intrusive_ptr with adopt_ref (doesn't call add_ref)
+    ///   - Deallocation handled by T::destroy() virtual method
+    namespace pmr {
+        template<class T, class... Args>
+        intrusive_ptr<T> make_counted(memory_resource* res, Args&&... args) {
+            void* mem = res->allocate(sizeof(T), alignof(T));
+            T* ptr = new (mem) T(res, std::forward<Args>(args)...);
+            return intrusive_ptr<T>(ptr, false);  // adopt_ref - don't add_ref
+        }
+    } // namespace pmr
 
 } // namespace actor_zeta

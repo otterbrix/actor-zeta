@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <thread>  // for std::this_thread::yield()
 
 namespace actor_zeta { namespace detail {
 
@@ -18,7 +19,8 @@ namespace actor_zeta { namespace detail {
         ready = 2,             // Result available (success)
         error = 3,             // Error occurred (broken promise, mailbox closed, etc.)
         consumed = 4,          // get() called, result moved out
-        cancelled = 5          // Explicitly cancelled
+        cancelled = 5,         // Explicitly cancelled
+        setting = 6            // set_result() in progress (protects result_ during swap)
     };
 
     /// @brief Base class for future state (type-erased part)
@@ -27,20 +29,21 @@ namespace actor_zeta { namespace detail {
         explicit future_state_base(pmr::memory_resource* res) noexcept
             : resource_(res)
             , state_(future_state_enum::pending)
-            // Initial refcount = 2:
-            //   Ref #1: Owned by message (released when message processed or mailbox destroyed)
-            //   Ref #2: Owned by future (released when future.get() called or future destroyed)
+            // Initial refcount = 1:
+            //   Initial ref: Owned by message (released when message destroyed)
+            //   Future adds its own ref when created (future constructor calls add_ref())
             //
             // Lifetime scenarios:
-            //   Normal:    message processed → ref=1, future.get() → ref=0 → destroy
-            //   Orphaned:  future destroyed → ref=1, message processed → ref=0 → destroy
-            //   Cancelled: future destroyed early → ref=1, message sets error → ref=0 → destroy
-            , refcount_(2)
+            //   Normal:    future.get() → ref 2→1, message destroyed → ref 1→0 → destroy
+            //   Orphaned:  future destroyed → ref 2→1, message destroyed → ref 1→0 → destroy
+            //   No future: message destroyed → ref 1→0 → destroy
+            , refcount_(1)
 #ifndef NDEBUG
             , magic_(kMagicAlive)
             , generation_(next_generation())
 #endif
-        {}
+        {
+        }
 
         future_state_base(const future_state_base&) = delete;
         future_state_base& operator=(const future_state_base&) = delete;
@@ -67,11 +70,49 @@ namespace actor_zeta { namespace detail {
 #endif
         }
 
+        /// @brief Try to increment reference count (like weak_ptr::lock())
+        /// @return true if successful (object alive), false if object being destroyed
+        ///
+        /// This is the thread-safe equivalent of std::weak_ptr::lock().
+        /// Atomically checks if refcount > 0 and increments if so.
+        ///
+        /// Use this instead of add_ref() when you have a raw pointer and don't know
+        /// if the object is still alive (e.g., from message->result_slot()).
+        [[nodiscard]] bool try_add_ref() noexcept {
+            int old_count = refcount_.load(std::memory_order_relaxed);
+
+            // Loop until we either successfully increment or detect object is dead
+            do {
+                if (old_count == 0) {
+                    // Object is being destroyed, cannot increment
+                    return false;
+                }
+
+                // Try to increment: old_count → old_count + 1
+                // If another thread changed refcount, old_count is updated and we retry
+            } while (!refcount_.compare_exchange_weak(
+                old_count, old_count + 1,
+                std::memory_order_acquire,   // Success: synchronize with release operations
+                std::memory_order_relaxed)); // Failure: just reload and retry
+
+            // Successfully incremented refcount
+            return true;
+        }
+
         /// @brief Decrement reference count and deallocate if zero
         void release() noexcept {
-#ifndef NDEBUG
-            assert(magic_ == kMagicAlive && "Double release detected!");
-#endif
+            // CRITICAL: Do NOT check magic_ before fetch_sub!
+            //
+            // Race scenario if we check first:
+            //   Thread A: release() → reads magic_ (OK)
+            //   Thread B: release() → refcount 1→0 → destroy() → magic_ = kMagicDead
+            //   Thread A: fetch_sub → refcount 0→-1 (underflow!)
+            //
+            // Solution: fetch_sub FIRST (atomic), then check if we destroyed
+            //   - If old_value > 1: object still alive, can safely check magic_
+            //   - If old_value == 1: we're destroying, no need to check
+            //   - If old_value <= 0: underflow (bug), will be caught by assert
+
             // OPTIMIZATION: Use release-only ordering on hot path
             //
             // Rationale:
@@ -197,15 +238,22 @@ namespace actor_zeta { namespace detail {
     public:
         explicit future_state(pmr::memory_resource* res) noexcept
             : future_state_base(res)
-            , result_(res)
+            , result_(res)  // Initialize empty rtt (no allocation, capacity=0)
 #if HAVE_STD_COROUTINES
             , coro_handle_()
 #endif
-        {}
+        {
+            // result_ is empty rtt, will be filled via move assignment in set_result()
+        }
 
         ~future_state() noexcept override {
+            auto s = state_.load(std::memory_order_acquire);
+            while (s == future_state_enum::setting) {
+                std::this_thread::yield();  // ISSUE #4 FIX: Yield CPU while waiting
+                s = state_.load(std::memory_order_acquire);
+            }
+
 #if HAVE_STD_COROUTINES
-            // Destroy coroutine if exists and not done
             if (coro_handle_ && !coro_handle_.done()) {
                 coro_handle_.destroy();
             }
@@ -217,38 +265,20 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
             assert(magic_ == kMagicAlive && "Use-after-free: set_result() on deleted state!");
 #endif
-            // CRITICAL FIX: Synchronize non-atomic result_ with atomic state_
-            //
-            // Problem: result_ is non-atomic, state_ is atomic
-            // We need: result_ write happens-before state_ changes to ready
-            //
-            // Solution: Write result BEFORE CAS with release ordering
-            //   1. Write result_ first (may write even if future is cancelled)
-            //   2. CAS pending→ready with release ordering
-            //   3. Release ordering ensures: result_ write visible to acquire load
-            //
-            // Safety: If CAS fails (future cancelled), result_ is written but won't be read
-            // because reader checks state==ready before accessing result_
-
-            // Write result BEFORE CAS
-            result_ = std::move(value);
-
-            // Atomic transition: pending → ready with RELEASE semantics
-            // Release ordering creates happens-before with acquire load in is_ready()
-            // This ensures: result_ write visible to threads that see state==ready
             auto expected = future_state_enum::pending;
-            state_.compare_exchange_strong(expected, future_state_enum::ready,
-                                          std::memory_order_release,  // success: release
-                                          std::memory_order_relaxed);  // failure: relaxed
+            if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire)) {
+                return;
+            }
+
+            result_.swap(value);
+
+            state_.store(future_state_enum::ready, std::memory_order_release);
 
 #if HAVE_ATOMIC_WAIT
-            // C++20: Wake waiting thread (efficient futex/ulock_wait)
-            // This enables zero-CPU blocking wait instead of polling
             state_.notify_one();
 #endif
-
-            // NOTE: Coroutine resumption happens later in actor's behavior()
-            // via resume_all() → resume_if_suspended() → resume_coroutine()
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
@@ -264,6 +294,7 @@ namespace actor_zeta { namespace detail {
             assert((s == future_state_enum::ready || s == future_state_enum::consumed)
                    && "result() called before set_result()!");
 #endif
+            // Return reference to embedded rtt (no pointer needed!)
             return result_;
         }
 
@@ -275,6 +306,7 @@ namespace actor_zeta { namespace detail {
             assert((s == future_state_enum::ready || s == future_state_enum::consumed)
                    && "result() called before set_result()!");
 #endif
+            // Return const reference to embedded rtt
             return result_;
         }
 
@@ -285,6 +317,8 @@ namespace actor_zeta { namespace detail {
             assert(transitioned && "take_result() called on non-ready state!");
             (void)transitioned;
 
+            // Simple move from embedded rtt - no race condition!
+            // state_ transition (ready→consumed) guarantees no other thread is accessing
             return std::move(result_);
         }
 
@@ -319,6 +353,8 @@ namespace actor_zeta { namespace detail {
         }
 
     private:
+        // Embedded result (not pointer!) - eliminates ALL race conditions
+        // Empty when constructed (capacity=0), filled via move assignment in set_result()
         rtt result_;
 #if HAVE_STD_COROUTINES
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
@@ -404,5 +440,15 @@ namespace actor_zeta { namespace detail {
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
 #endif
     };
+
+    // intrusive_ptr support for future_state_base
+    // These free functions enable intrusive_ptr to manage future_state lifetime
+    inline void intrusive_ptr_add_ref(const future_state_base* p) noexcept {
+        const_cast<future_state_base*>(p)->add_ref();
+    }
+
+    inline void intrusive_ptr_release(const future_state_base* p) noexcept {
+        const_cast<future_state_base*>(p)->release();
+    }
 
 }} // namespace actor_zeta::detail

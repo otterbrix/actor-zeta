@@ -142,13 +142,13 @@ namespace actor_zeta { namespace base {
 
             if constexpr (std::is_void<T>::value) {
                 std::move(future).get();
-                if (msg->result_slot()) {
-                    msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                if (auto slot = msg->result_slot()) {
+                    slot->set_result_rtt(detail::rtt(slot->memory_resource(), int{0}));
                 }
             } else {
                 T value = std::move(future).get();
-                if (msg->result_slot()) {
-                    msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                if (auto slot = msg->result_slot()) {
+                    slot->set_result_rtt(detail::rtt(slot->memory_resource(), std::move(value)));
                 }
             }
             msg->set_error(mailbox::slot_error_code::ok);
@@ -191,13 +191,13 @@ namespace actor_zeta { namespace base {
 
                     if constexpr (std::is_void<T>::value) {
                         std::move(future).get();
-                        if (msg->result_slot()) {
-                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                        if (auto slot = msg->result_slot()) {
+                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), int{0}));
                         }
                     } else {
                         T value = std::move(future).get();
-                        if (msg->result_slot()) {
-                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                        if (auto slot = msg->result_slot()) {
+                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), std::move(value)));
                         }
                     }
                     msg->set_error(mailbox::slot_error_code::ok);
@@ -233,13 +233,13 @@ namespace actor_zeta { namespace base {
 
                     if constexpr (std::is_void<T>::value) {
                         std::move(future).get();
-                        if (msg->result_slot()) {
-                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), int{0}));
+                        if (auto slot = msg->result_slot()) {
+                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), int{0}));
                         }
                     } else {
                         T value = std::move(future).get();
-                        if (msg->result_slot()) {
-                            msg->result_slot()->set_result_rtt(detail::rtt(msg->result_slot()->memory_resource(), std::move(value)));
+                        if (auto slot = msg->result_slot()) {
+                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), std::move(value)));
                         }
                     }
                     msg->set_error(mailbox::slot_error_code::ok);

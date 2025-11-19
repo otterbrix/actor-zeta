@@ -25,24 +25,42 @@ TEST_CASE("promise_type in unique_future<T>") {
 }
 
 // ============================================================================
-// Test 2: Coroutine with co_return (IMMEDIATE mode)
+// Test 2: Coroutine with co_return (actor member functions)
 // ============================================================================
 
-actor_zeta::unique_future<int> simple_coroutine_int() {
-    co_return 42;
-}
+// Test actor with coroutine member functions
+class coroutine_test_actor final : public actor_zeta::basic_actor<coroutine_test_actor> {
+public:
+    explicit coroutine_test_actor(actor_zeta::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<coroutine_test_actor>(res) {}
 
-actor_zeta::unique_future<std::string> simple_coroutine_string() {
-    co_return std::string("hello");
-}
+    // Coroutine member functions - resource() extracted from 'this'
+    actor_zeta::unique_future<int> coro_int() {
+        co_return 42;
+    }
 
-actor_zeta::unique_future<void> simple_coroutine_void() {
-    co_return;
-}
+    actor_zeta::unique_future<std::string> coro_string() {
+        co_return std::string("hello");
+    }
+
+    actor_zeta::unique_future<void> coro_void() {
+        co_return;
+    }
+
+    actor_zeta::unique_future<int> coro_storage() {
+        co_return 100;
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<>;
+    void behavior(actor_zeta::mailbox::message*) {}
+};
 
 TEST_CASE("simple coroutines with co_return") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
+
     SECTION("co_return int") {
-        auto future = simple_coroutine_int();
+        auto future = actor->coro_int();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());  // IMMEDIATE mode - should be ready
         int result = std::move(future).get();
@@ -50,7 +68,7 @@ TEST_CASE("simple coroutines with co_return") {
     }
 
     SECTION("co_return string") {
-        auto future = simple_coroutine_string();
+        auto future = actor->coro_string();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
         std::string result = std::move(future).get();
@@ -58,7 +76,7 @@ TEST_CASE("simple coroutines with co_return") {
     }
 
     SECTION("co_return void") {
-        auto future = simple_coroutine_void();
+        auto future = actor->coro_void();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
         std::move(future).get();  // Should not throw
@@ -105,12 +123,9 @@ TEST_CASE("future_state coroutine methods") {
 // Test 4: Coroutine handle storage via set_coroutine
 // ============================================================================
 
-actor_zeta::unique_future<int> coroutine_with_storage() {
-    co_return 100;
-}
-
 TEST_CASE("coroutine handle can be stored in future_state") {
     auto* resource = actor_zeta::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("set_coroutine stores handle") {
         void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
@@ -118,7 +133,7 @@ TEST_CASE("coroutine handle can be stored in future_state") {
         auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
 
         // Create a coroutine and get its handle
-        auto future = coroutine_with_storage();
+        auto future = actor->coro_storage();
 
         // Note: In real usage, await_suspend would call set_coroutine()
         // Here we just verify the method exists
@@ -159,9 +174,12 @@ TEST_CASE("virtual methods marked as final") {
 
 TEST_CASE("promise_type allocates future_state") {
     auto* resource = actor_zeta::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("promise_type<int> creates state") {
-        actor_zeta::unique_future<int>::promise_type promise(resource);
+        // When promise_type is created for actor member function,
+        // compiler passes 'this' as first argument to promise_type constructor
+        actor_zeta::unique_future<int>::promise_type promise(actor.get());
 
         // get_return_object creates the future
         auto future = promise.get_return_object();
@@ -177,7 +195,7 @@ TEST_CASE("promise_type allocates future_state") {
     }
 
     SECTION("promise_type<void> creates state") {
-        actor_zeta::unique_future<void>::promise_type promise(resource);
+        actor_zeta::unique_future<void>::promise_type promise(actor.get());
 
         auto future = promise.get_return_object();
         REQUIRE(future.valid());
@@ -372,8 +390,11 @@ TEST_CASE("resume_all_if helper function") {
 // ============================================================================
 
 TEST_CASE("Coroutine futures") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
+
     SECTION("co_return creates valid future") {
-        auto future = simple_coroutine_int();  // co_return 42
+        auto future = actor->coro_int();  // co_return 42
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -383,7 +404,7 @@ TEST_CASE("Coroutine futures") {
     }
 
     SECTION("move constructor preserves future state") {
-        auto future1 = simple_coroutine_string();
+        auto future1 = actor->coro_string();
         REQUIRE(future1.valid());
 
         auto future2 = std::move(future1);
@@ -620,11 +641,14 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 // This test ensures basic coroutine lifecycle works without crashing.
 
 TEST_CASE("coroutine cleanup does not crash") {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
+
     SECTION("simple coroutine with co_return") {
         // This test ensures basic coroutine lifecycle completes without crash
         // Memory leak detection requires ASAN or Valgrind
         {
-            auto future = simple_coroutine_int();  // co_return 42
+            auto future = actor->coro_int();  // co_return 42
             REQUIRE(future.valid());
             REQUIRE(future.is_ready());
             int result = std::move(future).get();
@@ -638,7 +662,7 @@ TEST_CASE("coroutine cleanup does not crash") {
     SECTION("multiple coroutines") {
         // Stress test - create/destroy many coroutines
         for (int i = 0; i < 100; ++i) {
-            auto future = simple_coroutine_int();
+            auto future = actor->coro_int();
             int result = std::move(future).get();
             REQUIRE(result == 42);
         }
@@ -648,7 +672,7 @@ TEST_CASE("coroutine cleanup does not crash") {
 
     SECTION("coroutine with string") {
         {
-            auto future = simple_coroutine_string();  // co_return "hello"
+            auto future = actor->coro_string();  // co_return "hello"
             REQUIRE(future.valid());
             std::string result = std::move(future).get();
             REQUIRE(result == "hello");
@@ -658,7 +682,7 @@ TEST_CASE("coroutine cleanup does not crash") {
 
     SECTION("void coroutine") {
         {
-            auto future = simple_coroutine_void();  // co_return;
+            auto future = actor->coro_void();  // co_return;
             REQUIRE(future.valid());
             std::move(future).get();  // Should not throw
         }

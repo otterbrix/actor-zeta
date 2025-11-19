@@ -156,3 +156,132 @@ TEST_CASE("shutdown - immediate stop") {
 
     REQUIRE(true); // If we get here, no crash occurred
 }
+
+// ============================================================================
+// NEW TESTS: Shutdown Race Conditions (ISSUE #2, #3)
+// ============================================================================
+
+TEST_CASE("shutdown - concurrent enqueue during destruction") {
+    // Tests ISSUE #2: Invalid state assertions in enqueue_impl()
+    // Race: Thread 1 in enqueue_impl() CAS loop
+    //       Thread 2 calls begin_shutdown() → sets destroying bit
+    //       Thread 1 sees scheduled_destroying and asserts
+    // Expected: No assertion failure, enqueue should handle destroying state
+
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+
+    auto actor = actor_zeta::spawn<worker_actor>(resource);
+    scheduler->start();
+
+    std::atomic<bool> stop{false};
+    std::atomic<int> enqueue_count{0};
+
+    // Capture raw pointer before threads start - safe because we control lifetime
+    worker_actor* actor_ptr = actor.get();
+
+    // Thread 1: Continuous enqueue
+    std::thread t1([&, actor_ptr] {
+        while (!stop.load(std::memory_order_relaxed)) {
+            auto future = actor_zeta::send(actor_ptr, actor_zeta::address_t::empty_address(), &worker_actor::ping);
+            ++enqueue_count;
+            // Small delay to increase race window
+            std::this_thread::sleep_for(std::chrono::microseconds(1));
+        }
+    });
+
+    // Thread 2: Destroy after 50ms
+    std::thread t2([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        scheduler->stop();
+        stop = true;  // Signal t1 to stop FIRST
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Give t1 time to exit loop
+        actor.reset();  // Destroy after t1 stopped sending
+    });
+
+    t1.join();
+    t2.join();
+
+    // Should NOT assert with scheduled_destroying
+    REQUIRE(enqueue_count.load() > 0); // Verify enqueue happened
+}
+
+TEST_CASE("shutdown - concurrent resume during destruction") {
+    // Tests ISSUE #3: Invalid state assertions in resume_guard
+    // Race: Thread 1 in resume_guard constructor
+    //       Thread 2 calls destructor → sets destroying bit
+    //       Thread 1 sees scheduled_destroying and asserts
+    // Expected: No assertion failure, resume_guard should handle destroying state
+
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+
+    auto actor = actor_zeta::spawn<worker_actor>(resource);
+
+    // Send many messages to keep actor busy
+    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
+    for (int i = 0; i < 100; ++i) {
+        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
+    }
+
+    scheduler->start();
+
+    // Let scheduler run for a bit
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // Destroy while actor may be running
+    scheduler->stop();
+    actor.reset();
+
+    // Should NOT assert with running_destroying or scheduled_destroying
+    REQUIRE(true); // If we get here, no assertion fired
+}
+
+TEST_CASE("shutdown - three-way race: enqueue + resume + destroy") {
+    // Combined race: All three operations happening simultaneously
+    // Thread 1: Enqueuing messages
+    // Thread 2: Scheduler running resume()
+    // Thread 3: Destroying actor
+    // Expected: No assertions, clean shutdown
+
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
+        new actor_zeta::scheduler::sharing_scheduler(2, 100));
+
+    auto actor = actor_zeta::spawn<worker_actor>(resource);
+
+    std::atomic<bool> stop{false};
+    std::atomic<int> enqueue_count{0};
+
+    // Capture raw pointer before threads start
+    worker_actor* actor_ptr = actor.get();
+
+    // Thread 1: Continuous enqueue
+    std::thread t1([&, actor_ptr] {
+        while (!stop.load(std::memory_order_relaxed)) {
+            auto future = actor_zeta::send(actor_ptr, actor_zeta::address_t::empty_address(), &worker_actor::ping);
+            ++enqueue_count;
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
+    });
+
+    // Thread 2: Scheduler running (multiple workers)
+    scheduler->start();
+
+    // Thread 3: Destroy after 30ms
+    std::thread t3([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        stop = true;  // Signal t1 to stop FIRST
+        scheduler->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Give t1 time to exit
+        actor.reset();
+    });
+
+    t1.join();
+    t3.join();
+
+    // Should NOT assert anywhere
+    REQUIRE(enqueue_count.load() > 0);
+}

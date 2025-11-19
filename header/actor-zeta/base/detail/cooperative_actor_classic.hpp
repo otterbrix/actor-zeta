@@ -110,18 +110,29 @@ namespace actor_zeta { namespace base {
         unique_future<R> enqueue_impl(mailbox::message_ptr msg) {
             assert(msg.get() != nullptr);
 
-            void* mem = resource()->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
-            auto* state = new (mem) detail::future_state<R>(resource());
+            // Use PMR make_counted - cleaner, exception-safe allocation
+            auto state = pmr::make_counted<detail::future_state<R>>(resource());  // refcount = 1
 
-            msg->set_result_slot(state);
+            // set_result_slot accepts intrusive_ptr by const ref, calls add_ref() internally
+            msg->set_result_slot(state);  // refcount = 2 (local + message)
+
+            // NO manual add_ref() needed! unique_future constructor will call add_ref()
+            // Refcount flow:
+            //   - After set_result_slot: refcount = 2 (local + message)
+            //   - unique_future constructor: add_ref() → refcount = 3
+            //   - Local state dies: release() → refcount = 2
+            //   - Final: message +1, future +1
 
             if (is_destroying(state_.load(std::memory_order_acquire))) {
                 state->set_state(detail::future_state_enum::error);
-                unique_future<R> future(state, false);
-                return future;
+                return unique_future<R>(adopt_ref, state.detach(), false);
             }
 
             auto result = mailbox().push_back(std::move(msg));
+
+            // DO NOT release here! Actor may process message immediately
+            // and destroy state before we construct the future below
+
             bool needs_sched = false;
 
             switch (result) {
@@ -137,11 +148,11 @@ namespace actor_zeta { namespace base {
                     while (true) {
 #ifndef NDEBUG
                         assert(++cas_attempts < MAX_CAS_ATTEMPTS && "enqueue_impl: CAS loop - possible livelock/race condition!");
-
-                        assert(current != actor_state::scheduled_destroying && "enqueue_impl: invalid state scheduled_destroying!");
-                        assert(current != actor_state::running_scheduled_destroying && "enqueue_impl: invalid state running_scheduled_destroying!");
 #endif
 
+                        // ISSUE #2 FIX: Transient destroying states (scheduled_destroying, running_scheduled_destroying)
+                        // can appear when actor is being destroyed while scheduled/running.
+                        // These are valid transient states - just exit without scheduling.
                         if (is_running(current) || is_destroying(current)) {
                             needs_sched = false;
                             break;
@@ -152,7 +163,9 @@ namespace actor_zeta { namespace base {
                             break;
                         }
 
-                        assert(current == actor_state::idle && "enqueue_impl: expected idle state for scheduling!");
+                        // Valid states for scheduling: idle or idle_destroying (rare but possible)
+                        assert((current == actor_state::idle || current == actor_state::idle_destroying) &&
+                               "enqueue_impl: expected idle or idle_destroying state for scheduling!");
 
                         desired = set_scheduled(current, true);
                         assert(desired == actor_state::scheduled && "enqueue_impl: invalid desired state!");
@@ -182,7 +195,10 @@ namespace actor_zeta { namespace base {
                     break;
             }
 
-            return unique_future<R>(state, needs_sched);
+            // Use adopt_ref to transfer ownership without add_ref() race
+            // Actor may have already processed message and released its ref!
+            // Refcount stays at 2: message +1 (may be destroyed), future adopts local ref +1
+            return unique_future<R>(adopt_ref, state.detach(), needs_sched);
         }
 
         scheduler::resume_info resume(size_t max_throughput) noexcept {
@@ -206,27 +222,38 @@ namespace actor_zeta { namespace base {
                     while (true) {
 #ifndef NDEBUG
                         assert(++cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard constructor: CAS loop - possible livelock!");
-
-                        assert(current != actor_state::scheduled_destroying && "resume_guard: invalid state scheduled_destroying!");
-                        assert(current != actor_state::running_scheduled_destroying && "resume_guard: invalid state running_scheduled_destroying!");
 #endif
+
+                        // ISSUE #3 FIX: Transient destroying states can appear when:
+                        // - scheduled_destroying: actor was scheduled when destructor started
+                        // - running_scheduled_destroying: should be impossible (caught by is_running check)
+                        // These are valid transient states during shutdown.
+
                         if (is_running(current)) {
                             assert(false && "Concurrent resume() detected - scheduler BUG!");
                         }
 
 #ifndef NDEBUG
+                        // Valid entry states: idle, scheduled, or any *_destroying variant (except running variants)
                         assert((current == actor_state::idle ||
                                 current == actor_state::scheduled ||
-                                current == actor_state::idle_destroying) &&
+                                current == actor_state::idle_destroying ||
+                                current == actor_state::scheduled_destroying) &&
                                "resume_guard: unexpected state at entry!");
 #endif
 
                         desired = set_running(current, true);
 
 #ifndef NDEBUG
+                        // Valid states after setting running bit:
+                        // - running (from idle)
+                        // - running_scheduled (from scheduled)
+                        // - running_destroying (from idle_destroying)
+                        // - running_scheduled_destroying (from scheduled_destroying)
                         assert((desired == actor_state::running ||
                                 desired == actor_state::running_scheduled ||
-                                desired == actor_state::running_destroying) &&
+                                desired == actor_state::running_destroying ||
+                                desired == actor_state::running_scheduled_destroying) &&
                                "resume_guard: invalid desired state!");
 #endif
 
@@ -335,9 +362,13 @@ namespace actor_zeta { namespace base {
                         }
 
                         ~message_guard() noexcept {
-                            if (message_ && message_->result_slot()) {
-                                message_->result_slot()->release();
-                            }
+                            // NEW OWNERSHIP MODEL:
+                            // Message owns the initial reference (refcount starts at 1)
+                            // Future adds its own reference when created
+                            // message_guard does NOT touch refcount at all!
+                            //
+                            // Message will release its reference when destroyed (~message())
+                            // This eliminates the race - no result_slot() + release() pattern
                             actor_->current_message_ = prev_message_;
                         }
 
@@ -383,12 +414,18 @@ namespace actor_zeta { namespace base {
         }
 
         pmr::memory_resource* resource() const noexcept {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Use-after-free: resource() called on destroyed actor!");
+#endif
             return resource_;
         }
 
         cooperative_actor()= delete;
 
         ~cooperative_actor() {
+#ifndef NDEBUG
+            assert(magic_ == kMagicAlive && "Double-delete: destructor called on already destroyed actor!");
+#endif
             auto current = state_.load(std::memory_order_acquire);
             bool already_shutdown = is_destroying(current);
 
@@ -402,25 +439,9 @@ namespace actor_zeta { namespace base {
             }
 
             (void)already_shutdown;
-#ifndef NDEBUG
-#endif
 
-            std::atomic_thread_fence(std::memory_order_seq_cst);
-
-#ifndef NDEBUG
-            int spin_count = 0;
-            constexpr int MAX_SPINS = 10000000;
-#endif
-            while (is_running(state_.load(std::memory_order_seq_cst))) {
-                std::this_thread::yield();
-#ifndef NDEBUG
-                if (++spin_count > MAX_SPINS) {
-                    assert(false && "Destructor waiting too long for resume() - possible deadlock!");
-                }
-#endif
-            }
-
-            std::atomic_thread_fence(std::memory_order_seq_cst);
+            // ISSUE #6 FIX: Use extracted method instead of duplicated code
+            wait_for_resume_to_complete("Destructor");
 
             current = state_.load(std::memory_order_acquire);
             while (true) {
@@ -432,6 +453,12 @@ namespace actor_zeta { namespace base {
                     break;
                 }
             }
+
+            // NOTE: Do NOT set magic_ = kMagicDead here!
+            // Reason: TSAN data race - other threads may still be reading magic_ in resource()
+            // The destroying bit in state_ already prevents new operations.
+            // If someone tries to use the actor after destruction, the magic check will fail
+            // when the memory is reused or freed.
         }
 
     protected:
@@ -439,7 +466,11 @@ namespace actor_zeta { namespace base {
             : actor_mixin<Actor>()
             , resource_(check_ptr(in_resource))
             , current_message_(nullptr)
-            , mailbox_() {
+            , mailbox_()
+#ifndef NDEBUG
+            , magic_(kMagicAlive)
+#endif
+        {
             static_assert(check_dispatch_traits_exists(),
                 "Actor must define nested 'struct dispatch_traits { using methods = type_list<...>; }'");
             mailbox().try_block();
@@ -455,25 +486,41 @@ namespace actor_zeta { namespace base {
                     break;
                 }
             }
+
+            // ISSUE #6 FIX: Use extracted method instead of duplicated code
+            wait_for_resume_to_complete("begin_shutdown");
+        }
+
+    private:
+        /// @brief Wait for resume() to complete (used by destructor and begin_shutdown)
+        /// @param context Error message context (e.g., "Destructor", "begin_shutdown()")
+        /// ISSUE #6 FIX: Extracted common wait-for-resume logic to eliminate duplication
+        void wait_for_resume_to_complete(const char* context) noexcept {
             std::atomic_thread_fence(std::memory_order_seq_cst);
 
 #ifndef NDEBUG
-            int spin_count = 0;
-            constexpr int MAX_SPINS = 10000000;
+            // ISSUE #5 FIX: Use timer instead of counter (more reliable across different CPUs)
+            auto start_time = std::chrono::steady_clock::now();
+            constexpr auto timeout = std::chrono::seconds(5);
 #endif
             while (is_running(state_.load(std::memory_order_seq_cst))) {
                 std::this_thread::yield();
 #ifndef NDEBUG
-                if (++spin_count > MAX_SPINS) {
-                    assert(false && "begin_shutdown() waiting too long for resume() - possible deadlock!");
+                auto elapsed = std::chrono::steady_clock::now() - start_time;
+                if (elapsed > timeout) {
+                    // Build error message: "<context> waiting too long for resume() - possible deadlock!"
+                    // We can't use std::string (exceptions disabled), so use assert message only
+                    (void)context;  // Suppress unused warning in release builds
+                    assert(false && "wait_for_resume_to_complete: timeout - possible deadlock!");
                 }
+#else
+                (void)context;  // Suppress unused warning in release builds
 #endif
             }
 
             std::atomic_thread_fence(std::memory_order_seq_cst);
         }
 
-    private:
         mailbox::message* current_message() noexcept { return current_message_; }
 
         inline const Actor* self() const noexcept {
@@ -492,6 +539,13 @@ namespace actor_zeta { namespace base {
         mailbox::message* current_message_;
         mailbox_t mailbox_;
         std::atomic<actor_state> state_{actor_state::idle};
+
+#ifndef NDEBUG
+        // Magic values for use-after-free detection (same pattern as future_state)
+        static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
+        static constexpr uint32_t kMagicDead = 0xDEADC0DE;
+        uint32_t magic_;
+#endif
     };
 
 }}

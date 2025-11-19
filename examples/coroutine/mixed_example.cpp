@@ -1,5 +1,3 @@
-#if HAVE_STD_COROUTINES
-
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <iostream>
@@ -154,15 +152,3 @@ int main() {
 
     return 0;
 }
-
-#else // !HAVE_STD_COROUTINES
-
-#include <iostream>
-
-int main() {
-    std::cout << "ERROR: This example requires C++20 coroutines support.\n";
-    std::cout << "Please compile with -std=c++20 and ensure your compiler supports coroutines.\n";
-    return 1;
-}
-
-#endif // HAVE_STD_COROUTINES
