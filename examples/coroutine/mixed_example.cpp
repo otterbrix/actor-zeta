@@ -55,7 +55,7 @@ public:
         auto future = actor_zeta::send(this, address(), &calculator_actor::multiply, x, x);
 
         std::cout << "[Calculator] ASYNC square - awaiting multiply...\n";
-        int result = co_await future;  // ✅ Suspend here, thread is free for other actors
+        int result = co_await future;  //  Suspend here, thread is free for other actors
         std::cout << "[Calculator] ASYNC square - multiply completed: " << result << "\n";
 
         co_return result;
@@ -68,7 +68,7 @@ public:
     >;
 
     void behavior(actor_zeta::mailbox::message* msg) override {
-        // ✅ NEW: Resume any suspended coroutines before processing message
+        //  NEW: Resume any suspended coroutines before processing message
         // This enables STATE mode - coroutines can suspend and resume later
         actor_zeta::resume_all(square_);  // Only async behaviors need resume
 

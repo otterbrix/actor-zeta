@@ -78,7 +78,7 @@ public:
         // Call worker asynchronously
         auto future = send(worker_, address(), &worker_actor::compute, x);
 
-        // ✅ CRITICAL TEST: co_await should suspend and resume in SAME thread
+        // CRITICAL TEST: co_await should suspend and resume in SAME thread
         int result = co_await future;
 
         // Record thread AFTER co_await
@@ -96,7 +96,7 @@ public:
     using dispatch_traits = dispatch_traits<&client_actor::process>;
 
     void behavior(mailbox::message* msg) override {
-        // ✅ Resume suspended coroutines BEFORE processing new messages
+        // Resume suspended coroutines BEFORE processing new messages
         resume_all(process_);
 
         switch (msg->command()) {
@@ -145,7 +145,7 @@ TEST_CASE("coroutine resumes in owner actor's thread, not sender's thread") {
     // Give scheduler time to finish processing
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // ✅ ASSERTIONS
+    // ASSERTIONS
     REQUIRE(result == 42);  // 21 * 2 = 42
 
     // Critical check: coroutine must resume in CLIENT's thread, not WORKER's thread
@@ -157,11 +157,11 @@ TEST_CASE("coroutine resumes in owner actor's thread, not sender's thread") {
     INFO("Client after co_await:  " << client_after);
     INFO("Worker thread:          " << worker_thread);
 
-    // ✅ Main assertion: coroutine resumed in SAME thread (client's thread)
+    // Main assertion: coroutine resumed in SAME thread (client's thread)
     REQUIRE(client_before == client_after);
     REQUIRE_FALSE(client->thread_mismatch_detected());
 
-    // ❌ If this fails, coroutine ran in worker's thread (BUG!)
+    // If this fails, coroutine ran in worker's thread (BUG!)
     // This would happen with old implementation (continuation calls handle.resume() directly)
     REQUIRE(client_after != worker_thread);
 

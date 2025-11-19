@@ -81,7 +81,7 @@ namespace detail {
             typed_actor = actor;
         }
 
-        // ✅ NEW: Pass arguments directly to enqueue_impl()
+        //  NEW: Pass arguments directly to enqueue_impl()
         // Message will be created in receiver's memory resource (no cross-arena migration)
         return typed_actor->template enqueue_impl<actual_result_type>(
             sender,

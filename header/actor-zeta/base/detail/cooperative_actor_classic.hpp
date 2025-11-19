@@ -82,6 +82,23 @@ namespace actor_zeta { namespace base {
         return ptr;
     }
 
+    /// @brief Helper function for exponential backoff in CAS loops and wait loops
+    /// @param attempt Current attempt number (0-based)
+    /// Implements progressive backoff strategy:
+    /// - Attempts 1-4: spin (no yield/sleep) - for low contention
+    /// - Attempts 5-10: yield CPU - for medium contention
+    /// - Attempts 11+: exponential sleep (1us -> 2us -> 4us -> ... -> 1ms cap) - for high contention
+    inline void exponential_backoff(int attempt) noexcept {
+        if (attempt >= 4) {
+            if (attempt < 10) {
+                std::this_thread::yield();
+            } else {
+                auto sleep_us = std::min(1 << (attempt - 10), 1000);  // Cap at 1ms
+                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+            }
+        }
+    }
+
     template<class Actor, class MailBox>
     class cooperative_actor<Actor, MailBox, actor_type::classic>
         : public actor_mixin<Actor> {
@@ -128,13 +145,35 @@ namespace actor_zeta { namespace base {
             // set_result_slot accepts intrusive_ptr by const ref, calls add_ref() internally
             msg->set_result_slot(state);  // refcount = 2 (local + message)
 
-            // NO manual add_ref() needed! unique_future constructor will call add_ref()
-            // Refcount flow:
-            //   - After set_result_slot: refcount = 2 (local + message)
-            //   - unique_future constructor: add_ref() → refcount = 3
-            //   - Local state dies: release() → refcount = 2
-            //   - Final: message +1, future +1
+            // ============================================================================
+            // REFCOUNT OWNERSHIP MODEL
+            // ============================================================================
+            //
+            // 1. make_counted creates intrusive_ptr with refcount = 1 (local 'state')
+            // 2. set_result_slot(state) copies intrusive_ptr -> add_ref() -> refcount = 2
+            //    Owners: local 'state' (+1), message slot_ (+1)
+            // 3. adopt_ref + detach() transfers ownership without add_ref():
+            //    - state.detach() releases local ownership WITHOUT decrementing refcount
+            //    - adopt_ref tells unique_future to adopt the +1 reference (don't add_ref)
+            //    - refcount stays at 2: message (+1), future (+1 adopted)
+            // 4. When actor processes message:
+            //    - Message destroyed -> slot_->release() -> refcount: 2 -> 1
+            //    - Future still owns +1 reference
+            // 5. When caller consumes future:
+            //    - future.get() / ~unique_future() -> slot_->release() -> refcount: 1 -> 0
+            //    - future_state deleted
+            //
+            // CRITICAL: adopt_ref prevents race where actor destroys message before
+            // future constructor finishes. Without adopt_ref, we'd need add_ref() which
+            // could race with message destruction -> use-after-free!
+            // ============================================================================
 
+            // NOTE: This is_destroying() check is racy by design (TOCTOU - Time-Of-Check-Time-Of-Use).
+            // If actor starts destroying AFTER this check but BEFORE push_back(), the message will
+            // be enqueued but not processed. This is acceptable:
+            // - resume() has a second is_destroying() check that prevents behavior() execution
+            // - Minimal waste (one message allocation + enqueue)
+            // - Early check here prevents unnecessary work in the common case
             if (is_destroying(state_.load(std::memory_order_acquire))) {
                 state->set_state(detail::future_state_enum::error);
                 return unique_future<R>(adopt_ref, state.detach(), false);
@@ -156,19 +195,7 @@ namespace actor_zeta { namespace base {
                     constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
-                        // Exponential backoff to reduce CPU usage and cache thrashing
-                        // Attempts 1-4: spin (no yield/sleep)
-                        // Attempts 5-10: yield CPU
-                        // Attempts 11+: exponential sleep (1μs → 2μs → 4μs → ... → 1ms cap)
-                        if (cas_attempts >= 4) {
-                            if (cas_attempts < 10) {
-                                std::this_thread::yield();
-                            } else {
-                                auto sleep_us = std::min(1 << (cas_attempts - 10), 1000);  // Cap at 1ms
-                                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-                            }
-                        }
-
+                        exponential_backoff(cas_attempts);
                         ++cas_attempts;
 
 #ifndef NDEBUG
@@ -197,6 +224,12 @@ namespace actor_zeta { namespace base {
                         }
 
                         // Valid states for scheduling: idle or idle_destroying (rare but possible)
+                        // NOTE: idle_destroying is allowed here - it's a transient state during shutdown.
+                        // If destructor sets destroying bit AFTER we checked but BEFORE CAS:
+                        //   - We set scheduled bit -> actor becomes scheduled_destroying
+                        //   - Scheduler will call resume(), which checks is_destroying() and returns done
+                        //   - Messages won't be processed (check at line 478 prevents behavior() call)
+                        //   - Minimal waste (one unnecessary schedule call), but correct behavior
                         assert((current == actor_state::idle || current == actor_state::idle_destroying) &&
                                "enqueue_impl: expected idle or idle_destroying state for scheduling!");
 
@@ -251,19 +284,7 @@ namespace actor_zeta { namespace base {
                     constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
-                        // Exponential backoff to reduce CPU usage and cache thrashing
-                        // Attempts 1-4: spin (no yield/sleep)
-                        // Attempts 5-10: yield CPU
-                        // Attempts 11+: exponential sleep (1μs → 2μs → 4μs → ... → 1ms cap)
-                        if (cas_attempts >= 4) {
-                            if (cas_attempts < 10) {
-                                std::this_thread::yield();
-                            } else {
-                                auto sleep_us = std::min(1 << (cas_attempts - 10), 1000);  // Cap at 1ms
-                                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-                            }
-                        }
-
+                        exponential_backoff(cas_attempts);
                         ++cas_attempts;
 
 #ifndef NDEBUG
@@ -284,7 +305,14 @@ namespace actor_zeta { namespace base {
                         // These are valid transient states during shutdown.
 
                         if (is_running(current)) {
+#ifndef NDEBUG
                             assert(false && "Concurrent resume() detected - scheduler BUG!");
+#else
+                            // CRITICAL: Concurrent resume() means scheduler bug!
+                            // Cannot safely continue - behavior() will be called concurrently!
+                            // Safer to abort with diagnostics than corrupt user data.
+                            std::terminate();
+#endif
                         }
 
 #ifndef NDEBUG
@@ -327,19 +355,7 @@ namespace actor_zeta { namespace base {
                     constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
-                        // Exponential backoff to reduce CPU usage and cache thrashing
-                        // Attempts 1-4: spin (no yield/sleep)
-                        // Attempts 5-10: yield CPU
-                        // Attempts 11+: exponential sleep (1μs → 2μs → 4μs → ... → 1ms cap)
-                        if (cas_attempts >= 4) {
-                            if (cas_attempts < 10) {
-                                std::this_thread::yield();
-                            } else {
-                                auto sleep_us = std::min(1 << (cas_attempts - 10), 1000);  // Cap at 1ms
-                                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-                            }
-                        }
-
+                        exponential_backoff(cas_attempts);
                         ++cas_attempts;
 
 #ifndef NDEBUG
@@ -358,6 +374,28 @@ namespace actor_zeta { namespace base {
 
                         desired = set_running(current, false);
 
+                        // ============================================================================
+                        // KEEP_SCHEDULED MECHANISM (Race Window Handling)
+                        // ============================================================================
+                        //
+                        // If keep_scheduled_ = true, we leave the scheduled bit set when leaving resume().
+                        // This happens when:
+                        // 1. mailbox.empty() returns true
+                        // 2. mailbox.try_block() fails (message arrived during race window)
+                        // 3. check_race_window() confirms message exists
+                        //
+                        // WHY KEEP SCHEDULED BIT:
+                        // - Prevents actor from going to idle state when message is pending
+                        // - Scheduler will call resume() again immediately
+                        // - Avoids unnecessary state transition: running -> idle -> scheduled -> running
+                        // - Performance optimization: saves CAS operations and scheduler overhead
+                        //
+                        // STATE TRANSITIONS:
+                        // - Without keep_scheduled: running_scheduled -> idle (loses scheduled bit)
+                        // - With keep_scheduled:    running_scheduled -> scheduled (keeps bit)
+                        //
+                        // CORRECTNESS: Safe because check_race_window() already verified message exists
+                        // ============================================================================
                         if (!keep_scheduled_) {
                             desired = set_scheduled(desired, false);
                         }
@@ -383,6 +421,28 @@ namespace actor_zeta { namespace base {
                 return scheduler::resume_info(result, handled);
             };
 
+            // ============================================================================
+            // RACE WINDOW DETECTION (Best-Effort, Non-Atomic)
+            // ============================================================================
+            //
+            // This lambda checks if mailbox has pending messages after try_block() failed.
+            // If try_block() fails (returns false), it means a message arrived AFTER empty()
+            // check but BEFORE try_block() call - this is the "race window".
+            //
+            // WHY NON-ATOMIC CHECK IS OK:
+            // - This is a best-effort optimization to reduce latency
+            // - False negatives are acceptable:
+            //   * If we miss a message here, it will be processed on next resume()
+            //   * Worst case: actor goes to awaiting state, sender re-schedules it
+            //   * No correctness issue, just slightly higher latency
+            // - False positives are impossible with current mailbox implementation:
+            //   * blocked() and empty() are both atomic operations
+            //   * If check returns true, message definitely exists
+            //
+            // ALTERNATIVE (rejected): Add atomic mailbox::has_pending() method
+            // - Would require additional atomic operations in hot path
+            // - Negligible benefit - current approach works correctly
+            // ============================================================================
             auto check_race_window = [this]() -> bool {
                 return !mailbox().blocked() && !mailbox().empty();
             };
@@ -438,13 +498,26 @@ namespace actor_zeta { namespace base {
                         }
 
                         ~message_guard() noexcept {
-                            // NEW OWNERSHIP MODEL:
-                            // Message owns the initial reference (refcount starts at 1)
-                            // Future adds its own reference when created
-                            // message_guard does NOT touch refcount at all!
+                            // ============================================================================
+                            // REFCOUNT OWNERSHIP - NO MANIPULATION NEEDED
+                            // ============================================================================
                             //
-                            // Message will release its reference when destroyed (~message())
-                            // This eliminates the race - no result_slot() + release() pattern
+                            // message_guard does NOT touch refcount at all! Here's why it works:
+                            //
+                            // 1. enqueue_impl creates future_state with refcount = 2:
+                            //    - Message slot_ holds +1 reference (via set_result_slot)
+                            //    - Future adopted +1 reference (via adopt_ref + detach)
+                            // 2. When ~message() runs (here in ~message_guard):
+                            //    - slot_->release() decrements refcount: 2 -> 1
+                            //    - Future still owns +1 reference
+                            // 3. When caller consumes future:
+                            //    - future.get() / ~unique_future() -> release() -> refcount: 1 -> 0
+                            //    - future_state deleted
+                            //
+                            // CRITICAL: adopt_ref in enqueue_impl prevents race!
+                            // Without adopt_ref, we'd need: msg->result_slot()->add_ref() HERE
+                            // But that would race with message destruction -> use-after-free!
+                            // ============================================================================
                             actor_->current_message_ = prev_message_;
                         }
 
@@ -460,6 +533,30 @@ namespace actor_zeta { namespace base {
                     ++handled;
                 }
 
+                // ============================================================================
+                // NO-PROGRESS DETECTION (Mailbox Empty During Processing)
+                // ============================================================================
+                //
+                // If handled == before, it means pop_front() returned nullptr (no message).
+                // This can happen in these scenarios:
+                //
+                // 1. Mailbox became empty during processing:
+                //    - We checked !empty() earlier, but actor processed all messages since then
+                //    - This is normal during high-throughput bursts
+                //
+                // 2. Race window during blocked state:
+                //    - Mailbox was temporarily blocked (awaiting external event)
+                //    - Message arrived AFTER empty() check but BEFORE try_block()
+                //
+                // HANDLING:
+                // - Try to block mailbox (suspend actor until next message arrives)
+                // - If try_block() fails (race window detected), check_race_window() verifies
+                // - If message exists, keep_scheduled ensures actor resumes immediately
+                // - Otherwise, actor goes to awaiting state (scheduler removes from queue)
+                //
+                // CORRECTNESS: This is the ONLY way to handle mailbox emptying during processing
+                // without busy-waiting or missing messages.
+                // ============================================================================
                 if (handled == before) {
                     if (mailbox().closed()) {
                         return finalize(scheduler::resume_result::done, handled, false);
@@ -584,8 +681,12 @@ namespace actor_zeta { namespace base {
             constexpr auto timeout = std::chrono::seconds(30);  // Longer timeout for release
 #endif
 
-            while (is_running(state_.load(std::memory_order_seq_cst))) {
-                std::this_thread::yield();
+            int wait_attempts = 0;
+
+            // P1 OPTIMIZATION: Use acquire instead of seq_cst (sufficient for read-only check)
+            while (is_running(state_.load(std::memory_order_acquire))) {
+                exponential_backoff(wait_attempts);
+                ++wait_attempts;
 
                 auto elapsed = std::chrono::steady_clock::now() - start_time;
                 if (elapsed > timeout) {
@@ -628,7 +729,13 @@ namespace actor_zeta { namespace base {
 #ifndef NDEBUG
         // Magic values for use-after-free detection (same pattern as future_state)
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
+
+        // NOTE: kMagicDead is intentionally NOT used in destructor to avoid TSAN data race.
+        // Other threads may still be reading magic_ in resource() when destructor runs.
+        // The destroying bit in state_ already prevents new operations, making kMagicDead
+        // redundant. Reserved for potential future use (e.g., delayed cleanup patterns).
         static constexpr uint32_t kMagicDead = 0xDEADC0DE;
+
         uint32_t magic_;
 #endif
     };
