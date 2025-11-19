@@ -10,6 +10,13 @@ using namespace actor_zeta;
 
 class old_style_actor : public base::basic_actor<old_style_actor> {
 public:
+    // Declare methods first (needed by dispatch_traits)
+    void method1(int x) { counter_ += x; }
+    void method2(int x) { counter_ += x * 2; }
+    void method3(int x) { counter_ += x * 3; }
+    void method4(int x) { counter_ += x * 4; }
+    void method5(int x) { counter_ += x * 5; }
+
     using dispatch_traits = actor_zeta::dispatch_traits<
         &old_style_actor::method1,
         &old_style_actor::method2,
@@ -41,12 +48,6 @@ public:
             behavior5_(msg);
         }
     }
-
-    void method1(int x) { counter_ += x; }
-    void method2(int x) { counter_ += x * 2; }
-    void method3(int x) { counter_ += x * 3; }
-    void method4(int x) { counter_ += x * 4; }
-    void method5(int x) { counter_ += x * 5; }
 
     int counter() const { return counter_; }
 
