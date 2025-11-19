@@ -19,7 +19,7 @@ public:
         std::cout << "[Calculator " << id() << "] Created\n";
     }
 
-    ~calculator_actor() override {
+    ~calculator_actor() {
         begin_shutdown();
         std::cout << "[Calculator " << id() << "] Destroyed\n";
     }
@@ -55,7 +55,7 @@ public:
         auto future = actor_zeta::send(this, address(), &calculator_actor::multiply, x, x);
 
         std::cout << "[Calculator] ASYNC square - awaiting multiply...\n";
-        int result = co_await future;  //  Suspend here, thread is free for other actors
+        int result = co_await std::move(future);  // Suspend here, thread is free for other actors
         std::cout << "[Calculator] ASYNC square - multiply completed: " << result << "\n";
 
         co_return result;
@@ -67,7 +67,7 @@ public:
         &calculator_actor::square
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) override {
+    void behavior(actor_zeta::mailbox::message* msg) {
         //  NEW: Resume any suspended coroutines before processing message
         // This enables STATE mode - coroutines can suspend and resume later
         actor_zeta::resume_all(square_);  // Only async behaviors need resume
@@ -110,16 +110,18 @@ int main() {
 
     // Call sync method - add
     {
-        auto future = actor_zeta::send(calculator.get(), actor_zeta::address_t{},
+        auto future = actor_zeta::send(calculator.get(), calculator->address(),
                                        &calculator_actor::add, 10, 20);
+        calculator->resume(100);
         int result = std::move(future).get();
         std::cout << "Result: 10 + 20 = " << result << "\n\n";
     }
 
     // Call sync method - multiply
     {
-        auto future = actor_zeta::send(calculator.get(), actor_zeta::address_t{},
+        auto future = actor_zeta::send(calculator.get(), calculator->address(),
                                        &calculator_actor::multiply, 7, 8);
+        calculator->resume(100);
         int result = std::move(future).get();
         std::cout << "Result: 7 * 8 = " << result << "\n\n";
     }
@@ -128,8 +130,11 @@ int main() {
 
     // Call async method - square (will use co_await internally)
     {
-        auto future = actor_zeta::send(calculator.get(), actor_zeta::address_t{},
+        auto future = actor_zeta::send(calculator.get(), calculator->address(),
                                        &calculator_actor::square, 5);
+        // Need multiple resume calls for coroutine to complete
+        calculator->resume(100);  // Process square message
+        calculator->resume(100);  // Resume coroutine after multiply completes
         int result = std::move(future).get();
         std::cout << "Result: 5^2 = " << result << "\n\n";
     }
