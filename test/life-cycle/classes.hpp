@@ -62,10 +62,19 @@ public:
         return storages_.size()+test_handlers_.size();
     }
 
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
         enqueue_base_counter++;
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

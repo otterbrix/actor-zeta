@@ -8,6 +8,7 @@
 #include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/future.hpp>
+#include <actor-zeta/make_message.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
@@ -105,10 +106,21 @@ namespace actor_zeta { namespace base {
         template<typename T>
         using unique_future = actor_zeta::unique_future<T>;
 
-        template<typename R>
+        template<typename R, typename... Args>
         [[nodiscard("Check needs_scheduling() and call schedule() if needed")]]
-        unique_future<R> enqueue_impl(mailbox::message_ptr msg) {
-            assert(msg.get() != nullptr);
+        unique_future<R> enqueue_impl(
+            base::address_t sender,
+            mailbox::message_id cmd,
+            Args&&... args
+        ) {
+            // Create message in RECEIVER'S memory (this->resource())
+            // This avoids cross-arena migration issues with RTT
+            auto msg = detail::make_message(
+                this->resource(),           // Receiver's memory resource
+                std::move(sender),
+                cmd,
+                std::forward<Args>(args)...
+            );
 
             // Use PMR make_counted - cleaner, exception-safe allocation
             auto state = pmr::make_counted<detail::future_state<R>>(resource());  // refcount = 1
@@ -140,14 +152,35 @@ namespace actor_zeta { namespace base {
                     auto current = state_.load(std::memory_order_acquire);
                     actor_state desired;
 
-#ifndef NDEBUG
                     int cas_attempts = 0;
-                    constexpr int MAX_CAS_ATTEMPTS = 100000;
-#endif
+                    constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
+                        // Exponential backoff to reduce CPU usage and cache thrashing
+                        // Attempts 1-4: spin (no yield/sleep)
+                        // Attempts 5-10: yield CPU
+                        // Attempts 11+: exponential sleep (1μs → 2μs → 4μs → ... → 1ms cap)
+                        if (cas_attempts >= 4) {
+                            if (cas_attempts < 10) {
+                                std::this_thread::yield();
+                            } else {
+                                auto sleep_us = std::min(1 << (cas_attempts - 10), 1000);  // Cap at 1ms
+                                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+                            }
+                        }
+
+                        ++cas_attempts;
+
 #ifndef NDEBUG
-                        assert(++cas_attempts < MAX_CAS_ATTEMPTS && "enqueue_impl: CAS loop - possible livelock/race condition!");
+                        // Debug: assert on livelock
+                        assert(cas_attempts < MAX_CAS_ATTEMPTS && "enqueue_impl: CAS loop - possible livelock/race condition!");
+#else
+                        // Release: detect livelock and abort to prevent infinite loop
+                        if (cas_attempts >= MAX_CAS_ATTEMPTS) {
+                            // Livelock detected - should never happen in correct code
+                            // Safer to abort than hang forever
+                            std::terminate();
+                        }
 #endif
 
                         // ISSUE #2 FIX: Transient destroying states (scheduled_destroying, running_scheduled_destroying)
@@ -214,14 +247,35 @@ namespace actor_zeta { namespace base {
                     auto current = state_ref_.load(std::memory_order_acquire);
                     actor_state desired;
 
-#ifndef NDEBUG
                     int cas_attempts = 0;
-                    constexpr int MAX_CAS_ATTEMPTS = 100000;
-#endif
+                    constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
+                        // Exponential backoff to reduce CPU usage and cache thrashing
+                        // Attempts 1-4: spin (no yield/sleep)
+                        // Attempts 5-10: yield CPU
+                        // Attempts 11+: exponential sleep (1μs → 2μs → 4μs → ... → 1ms cap)
+                        if (cas_attempts >= 4) {
+                            if (cas_attempts < 10) {
+                                std::this_thread::yield();
+                            } else {
+                                auto sleep_us = std::min(1 << (cas_attempts - 10), 1000);  // Cap at 1ms
+                                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+                            }
+                        }
+
+                        ++cas_attempts;
+
 #ifndef NDEBUG
-                        assert(++cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard constructor: CAS loop - possible livelock!");
+                        // Debug: assert on livelock
+                        assert(cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard constructor: CAS loop - possible livelock!");
+#else
+                        // Release: detect livelock and abort to prevent infinite loop
+                        if (cas_attempts >= MAX_CAS_ATTEMPTS) {
+                            // Livelock detected - should never happen in correct code
+                            // Safer to abort than hang forever
+                            std::terminate();
+                        }
 #endif
 
                         // ISSUE #3 FIX: Transient destroying states can appear when:
@@ -269,15 +323,37 @@ namespace actor_zeta { namespace base {
                     auto current = state_ref_.load(std::memory_order_acquire);
                     actor_state desired;
 
-#ifndef NDEBUG
                     int cas_attempts = 0;
-                    constexpr int MAX_CAS_ATTEMPTS = 100000;
-#endif
+                    constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
+                        // Exponential backoff to reduce CPU usage and cache thrashing
+                        // Attempts 1-4: spin (no yield/sleep)
+                        // Attempts 5-10: yield CPU
+                        // Attempts 11+: exponential sleep (1μs → 2μs → 4μs → ... → 1ms cap)
+                        if (cas_attempts >= 4) {
+                            if (cas_attempts < 10) {
+                                std::this_thread::yield();
+                            } else {
+                                auto sleep_us = std::min(1 << (cas_attempts - 10), 1000);  // Cap at 1ms
+                                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+                            }
+                        }
+
+                        ++cas_attempts;
+
 #ifndef NDEBUG
-                        assert(++cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard destructor: CAS loop - possible livelock!");
+                        // Debug: assert on livelock
+                        assert(cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard destructor: CAS loop - possible livelock!");
+#else
+                        // Release: detect livelock and abort to prevent infinite loop
+                        if (cas_attempts >= MAX_CAS_ATTEMPTS) {
+                            // Livelock detected - should never happen in correct code
+                            // Safer to abort than hang forever
+                            std::terminate();
+                        }
 #endif
+
                         assert(is_running(current) && "resume_guard: not running!");
 
                         desired = set_running(current, false);
@@ -498,24 +574,33 @@ namespace actor_zeta { namespace base {
         void wait_for_resume_to_complete(const char* context) noexcept {
             std::atomic_thread_fence(std::memory_order_seq_cst);
 
-#ifndef NDEBUG
             // ISSUE #5 FIX: Use timer instead of counter (more reliable across different CPUs)
+            // Now enabled in BOTH debug and release builds for safety
             auto start_time = std::chrono::steady_clock::now();
-            constexpr auto timeout = std::chrono::seconds(5);
+
+#ifndef NDEBUG
+            constexpr auto timeout = std::chrono::seconds(5);  // Shorter timeout for debug
+#else
+            constexpr auto timeout = std::chrono::seconds(30);  // Longer timeout for release
 #endif
+
             while (is_running(state_.load(std::memory_order_seq_cst))) {
                 std::this_thread::yield();
-#ifndef NDEBUG
+
                 auto elapsed = std::chrono::steady_clock::now() - start_time;
                 if (elapsed > timeout) {
-                    // Build error message: "<context> waiting too long for resume() - possible deadlock!"
-                    // We can't use std::string (exceptions disabled), so use assert message only
-                    (void)context;  // Suppress unused warning in release builds
+#ifndef NDEBUG
+                    // Debug: assert with message
+                    (void)context;  // Suppress unused warning
                     assert(false && "wait_for_resume_to_complete: timeout - possible deadlock!");
-                }
 #else
-                (void)context;  // Suppress unused warning in release builds
+                    // Release: terminate to prevent infinite hang
+                    // Deadlock detected - safer to abort than hang forever
+                    // Context is lost (no exceptions), but at least we don't hang
+                    (void)context;
+                    std::terminate();
 #endif
+                }
             }
 
             std::atomic_thread_fence(std::memory_order_seq_cst);

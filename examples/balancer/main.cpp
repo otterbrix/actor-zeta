@@ -135,64 +135,61 @@ public:
         &collection_t::find
     >;
 
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+    // NEW API: Forward arguments to child actor (message created in child's resource)
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
         // Check if we have any child actors
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
             return actor_zeta::make_error_future<R>(resource_);
         }
 
-        // Balancer logic: forward message to child actor using round-robin
-        switch (msg->command()) {
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
-                auto index = cursor_ % actors_.size();
-                ++cursor_;
-                ++count_balancer;
+        // Balancer logic: forward to child actor using round-robin
+        auto index = cursor_ % actors_.size();
+        ++cursor_;
+        ++count_balancer;
 
-                // Forward the message to the selected actor
-                auto child_future = actors_[index]->enqueue_impl<R>(std::move(msg));
+        // Forward arguments to child actor (child creates message in its own resource)
+        auto child_future = actors_[index]->template enqueue_impl<R>(
+            sender,
+            cmd,
+            std::forward<Args>(args)...
+        );
 
-                // Execute child immediately if needed (inline execution to avoid deadlock)
-                if (child_future.needs_scheduling()) {
-                    // Process child's message immediately on this thread
-                    auto& child = actors_[index];
-                    while (!child_future.is_ready()) {
-                        child->resume(1);  // Process one message
-                    }
-                }
-
-                // Extract result from child future
-                if constexpr (std::is_same_v<R, void>) {
-                    std::move(child_future).get();  // Wait for completion
-                } else {
-                    // For non-void: get result but we'll return it via future_state below
-                }
-
-                // Create future_state<R> for balancer's return value (already ready)
-                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
-                                                 alignof(actor_zeta::detail::future_state<R>));
-                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
-
-                // Set result immediately (balancer executed synchronously)
-                if constexpr (std::is_same_v<R, void>) {
-                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, int{0}));
-                } else {
-                    R result = std::move(child_future).get();  // Get result from child
-                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, std::move(result)));
-                }
-
-                // Return async future (already in ready state)
-                return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
-            }
-            default: {
-                std::cerr << "Error: Unknown command" << std::endl;
-                return actor_zeta::make_error_future<R>(resource_);
+        // Execute child immediately if needed (inline execution to avoid deadlock)
+        if (child_future.needs_scheduling()) {
+            auto& child = actors_[index];
+            while (!child_future.is_ready()) {
+                child->resume(1);  // Process one message
             }
         }
+
+        // Extract result from child future
+        if constexpr (std::is_same_v<R, void>) {
+            std::move(child_future).get();  // Wait for completion
+        } else {
+            // For non-void: get result but we'll return it via future_state below
+        }
+
+        // Create future_state<R> for balancer's return value (already ready)
+        void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                                         alignof(actor_zeta::detail::future_state<R>));
+        auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
+
+        // Set result immediately (balancer executed synchronously)
+        if constexpr (std::is_same_v<R, void>) {
+            state->set_result_rtt(actor_zeta::detail::rtt(resource_, int{0}));
+        } else {
+            R result = std::move(child_future).get();  // Get result from child
+            state->set_result_rtt(actor_zeta::detail::rtt(resource_, std::move(result)));
+        }
+
+        // Return async future (already in ready state)
+        return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
     }
 
 protected:

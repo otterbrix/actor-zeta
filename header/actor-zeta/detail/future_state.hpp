@@ -20,7 +20,8 @@ namespace actor_zeta { namespace detail {
         error = 3,             // Error occurred (broken promise, mailbox closed, etc.)
         consumed = 4,          // get() called, result moved out
         cancelled = 5,         // Explicitly cancelled
-        setting = 6            // set_result() in progress (protects result_ during swap)
+        setting = 6,           // set_result() in progress (protects result_ during swap)
+        consuming = 7          // take_result() in progress (protects result_ during move)
     };
 
     /// @brief Base class for future state (type-erased part)
@@ -247,9 +248,12 @@ namespace actor_zeta { namespace detail {
         }
 
         ~future_state() noexcept override {
+            // Wait for concurrent operations to complete before destroying result_
+            // - setting: set_result() is swapping result_
+            // - consuming: take_result() is moving result_
             auto s = state_.load(std::memory_order_acquire);
-            while (s == future_state_enum::setting) {
-                std::this_thread::yield();  // ISSUE #4 FIX: Yield CPU while waiting
+            while (s == future_state_enum::setting || s == future_state_enum::consuming) {
+                std::this_thread::yield();  // Yield CPU while waiting
                 s = state_.load(std::memory_order_acquire);
             }
 
@@ -312,14 +316,19 @@ namespace actor_zeta { namespace detail {
 
         /// @brief Take result (move out, mark as consumed)
         [[nodiscard]] rtt take_result() noexcept {
+            // Transition: ready → consuming (protects move operation)
             auto expected = future_state_enum::ready;
-            bool transitioned = transition(expected, future_state_enum::consumed);
+            bool transitioned = transition(expected, future_state_enum::consuming);
             assert(transitioned && "take_result() called on non-ready state!");
             (void)transitioned;
 
-            // Simple move from embedded rtt - no race condition!
-            // state_ transition (ready→consumed) guarantees no other thread is accessing
-            return std::move(result_);
+            // Move result out while state==consuming protects from concurrent destructor
+            rtt result = std::move(result_);
+
+            // Transition: consuming → consumed (move complete, safe to destruct)
+            state_.store(future_state_enum::consumed, std::memory_order_release);
+
+            return result;
         }
 
 #if HAVE_STD_COROUTINES

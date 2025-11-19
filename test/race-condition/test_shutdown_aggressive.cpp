@@ -40,9 +40,18 @@ public:
         &bad_shutdown_actor::slow_task
     >;
 
-    template<typename R>
-    actor_zeta::unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    template<typename R, typename... Args>
+    actor_zeta::unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
     size_t processed_count() const { return counter_.load(std::memory_order_acquire); }
@@ -87,9 +96,18 @@ public:
         &good_shutdown_actor::slow_task
     >;
 
-    template<typename R>
-    actor_zeta::unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    template<typename R, typename... Args>
+    actor_zeta::unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
     size_t processed_count() const { return counter_.load(std::memory_order_acquire); }

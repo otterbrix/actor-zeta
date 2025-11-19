@@ -81,13 +81,13 @@ namespace detail {
             typed_actor = actor;
         }
 
-        auto msg = detail::make_message(
-            typed_actor->resource(),
+        // ✅ NEW: Pass arguments directly to enqueue_impl()
+        // Message will be created in receiver's memory resource (no cross-arena migration)
+        return typed_actor->template enqueue_impl<actual_result_type>(
             sender,
             mailbox::make_message_id(ActionId),
-            std::forward<Args>(args)...);
-
-        return typed_actor->template enqueue_impl<actual_result_type>(std::move(msg));
+            std::forward<Args>(args)...
+        );
     }
 } // namespace detail
 

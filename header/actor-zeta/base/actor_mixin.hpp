@@ -5,6 +5,7 @@
 #include <actor-zeta/detail/pmr/polymorphic_allocator.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/future.hpp>
+#include <actor-zeta/make_message.hpp>
 
 namespace actor_zeta { namespace base {
 
@@ -115,14 +116,28 @@ namespace actor_zeta { namespace base {
             return {static_cast<const Derived*>(this)->resource()};
         }
 
-        /// @brief Helper for supervisors - simplifies enqueue_impl<R>() implementation
+        /// @brief Helper for supervisors - simplifies enqueue_impl<R, Args...>() implementation
         /// @note Supervisor calls behavior() synchronously, but returns async future (already ready)
-        /// @note Supervisor just calls: return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+        /// @note NEW API: Creates message in receiver's resource, calls behavior, returns ready future
+        /// @note Usage: return enqueue_sync_impl<R>(sender, cmd, [this](auto* msg) { behavior(msg); }, std::forward<Args>(args)...);
         /// @note Uses CRTP to call derived class's resource() method
-        template<typename R, typename BehaviorFunc>
-        unique_future<R> enqueue_sync_impl(mailbox::message_ptr msg, BehaviorFunc&& behavior_func) {
+        template<typename R, typename BehaviorFunc, typename... Args>
+        unique_future<R> enqueue_sync_impl(
+            base::address_t sender,
+            mailbox::message_id cmd,
+            BehaviorFunc&& behavior_func,
+            Args&&... args
+        ) {
             auto* derived = static_cast<Derived*>(this);
             auto* res = derived->resource();
+
+            // Create message in receiver's resource (avoid cross-arena migration)
+            auto msg = detail::make_message(
+                res,
+                std::move(sender),
+                cmd,
+                std::forward<Args>(args)...
+            );
 
             // Allocate future_state<R> for result with refcount=2 (future + supervisor code)
             void* mem = res->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));

@@ -91,9 +91,18 @@ public:
     }
 
     /// @brief Override enqueue_impl для supervisor - используем helper
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
 protected:
@@ -159,9 +168,18 @@ public:
     >;
 
     /// @brief Override enqueue_impl для supervisor - используем helper
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
 protected:

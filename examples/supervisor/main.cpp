@@ -148,9 +148,19 @@ public:
         &supervisor_actor::check_status
     >;
 
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    // NEW API: Forward arguments to enqueue_sync_impl (message created in receiver's resource)
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
 protected:
