@@ -4,7 +4,6 @@
 #include <actor-zeta.hpp>
 
 #include <cstdint>
-#include <actor-zeta/detail/pmr/polymorphic_allocator.hpp>
 
 #include <actor-zeta/impl/actor/address.ipp>
 

@@ -373,16 +373,26 @@ namespace actor_zeta {
                 return nullptr;
             }
 
-            // Extract resource from pointer type
+            // Helper: dispatch based on whether type is a pointer
             template<typename U>
-            static pmr::memory_resource* extract_resource_impl(U* ptr) noexcept {
-                return try_get_resource(ptr, 0);
+            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::true_type /* is_pointer */) noexcept {
+                // U is a pointer type - remove reference wrapper and pass as pointer
+                // E.g., T*&& or T*& becomes T*
+                using ptr_type = std::remove_reference_t<U>;
+                return try_get_resource(static_cast<ptr_type>(arg), 0);
             }
 
-            // Fallback for non-pointer types -> nullptr
             template<typename U>
-            static pmr::memory_resource* extract_resource_impl(U&&) noexcept {
-                return nullptr;
+            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::false_type /* not_pointer */) noexcept {
+                // U is not a pointer - try to take address (for references)
+                return try_get_resource(&arg, 0);
+            }
+
+            // Main entry point: handles all cases (pointer, reference, rvalue)
+            template<typename U>
+            static pmr::memory_resource* extract_resource_impl(U&& arg) noexcept {
+                using decayed = std::decay_t<U>;
+                return extract_impl_dispatch(std::forward<U>(arg), std::is_pointer<decayed>{});
             }
 
             pmr::memory_resource* resource_;
@@ -621,16 +631,26 @@ namespace actor_zeta {
                 return nullptr;
             }
 
-            // Extract resource from pointer type
+            // Helper: dispatch based on whether type is a pointer
             template<typename U>
-            static pmr::memory_resource* extract_resource_impl(U* ptr) noexcept {
-                return try_get_resource(ptr, 0);
+            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::true_type /* is_pointer */) noexcept {
+                // U is a pointer type - remove reference wrapper and pass as pointer
+                // E.g., T*&& or T*& becomes T*
+                using ptr_type = std::remove_reference_t<U>;
+                return try_get_resource(static_cast<ptr_type>(arg), 0);
             }
 
-            // Fallback for non-pointer types -> nullptr
             template<typename U>
-            static pmr::memory_resource* extract_resource_impl(U&&) noexcept {
-                return nullptr;
+            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::false_type /* not_pointer */) noexcept {
+                // U is not a pointer - try to take address (for references)
+                return try_get_resource(&arg, 0);
+            }
+
+            // Main entry point: handles all cases (pointer, reference, rvalue)
+            template<typename U>
+            static pmr::memory_resource* extract_resource_impl(U&& arg) noexcept {
+                using decayed = std::decay_t<U>;
+                return extract_impl_dispatch(std::forward<U>(arg), std::is_pointer<decayed>{});
             }
 
             pmr::memory_resource* resource_;

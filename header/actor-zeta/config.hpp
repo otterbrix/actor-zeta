@@ -37,27 +37,7 @@ namespace actor_zeta {
 #define CPP17_OR_GREATER (CPLUSPLUS >= 201703L)
 #define CPP20_OR_GREATER (CPLUSPLUS >= 202000L)
 
-#if CPP17_OR_GREATER && defined(__has_include)
-#if __has_include(<string_view> )
-#define HAVE_STD_STRING_VIEW 1
-#else
-#define HAVE_STD_STRING_VIEW 0
-#endif
-#else
-#define HAVE_STD_STRING_VIEW 0
-#endif
-
-#if CPP17_OR_GREATER && defined(__has_include)
-#if __has_include(<memory_resource> )
-#define HAVE_STD_PMR 1
-#else
-#define HAVE_STD_PMR 0
-#endif
-#else
-#define HAVE_STD_PMR 0
-#endif
-
-#if CPP20_OR_GREATER && defined(__has_include)
+#if defined(__has_include)
 #if __has_include(<coroutine>) && defined(__cpp_impl_coroutine)
 #define HAVE_STD_COROUTINES 1
 #else
@@ -70,7 +50,7 @@ namespace actor_zeta {
 // C++20 Atomic Wait/Notify feature detection
 // Enables efficient blocking wait using futex (Linux), __ulock_wait (macOS), or WaitOnAddress (Windows)
 // Benefits: Zero CPU usage while waiting (vs exponential backoff polling)
-#if CPP20_OR_GREATER && defined(__cpp_lib_atomic_wait)
+#if defined(__cpp_lib_atomic_wait)
 #if __cpp_lib_atomic_wait >= 201907L
 #define HAVE_ATOMIC_WAIT 1
 #else
@@ -82,17 +62,6 @@ namespace actor_zeta {
 
 #define CACHE_LINE_SIZE 64
 
-#ifndef NODISCARD
-#ifdef __has_cpp_attribute
-#if __has_cpp_attribute(nodiscard) && !(defined(__clang__) && (__cplusplus < 201703L))
-#define NODISCARD [[nodiscard]]
-#else
-#define NODISCARD
-#endif
-#else
-#define NODISCARD
-#endif
-#endif
 
 #ifndef REQUIRE_CONST_INIT
 #define REQUIRE_CONST_INIT
@@ -124,12 +93,5 @@ namespace actor_zeta {
 #endif
 
 #define DEBUG NDEBUG
-
-#ifdef CPP11_OR_GREATER
-#define CXX14_CONSTEXPR
-#elif CPP14_OR_GREATER
-#define CXX14_CONSTEXPR constexpr
-#endif
-
 
 } // namespace actor_zeta

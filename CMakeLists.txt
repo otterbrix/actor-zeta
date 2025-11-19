@@ -11,9 +11,9 @@ if (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"  AND UNIX AND NOT APPLE ) #--------
     list(APPEND CMAKE_MODULE_PATH "${LLVM_DIR}")
 endif() #--------------------------------------------------------------------------- Clang
 
-set(CMAKE_CXX_STANDARD 20 CACHE STRING "The C++ standard whose features are requested.")
-set(CMAKE_CXX_STANDARD_REQUIRED     ON)
-set(CMAKE_CXX_EXTENSIONS            OFF)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS   ON)
 
 option(ALLOW_EXAMPLES               "ALLOW EXAMPLES"            OFF)
@@ -41,12 +41,6 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
         string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
     endif()
-
-    # Enable C++17 experimental coroutines if using C++17 standard
-    if (CMAKE_CXX_STANDARD EQUAL 17)
-        message(STATUS "C++17 detected - enabling experimental coroutines support (/await)")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /await")
-    endif()
 elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang"))
     if (EXCEPTIONS_DISABLE)
         message(STATUS "Disable C++ exceptions (GNU/Clang).")
@@ -58,29 +52,6 @@ elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES 
         message(STATUS "Disable RTTI (GNU/Clang).")
         string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
-    endif()
-
-    # Enable C++17 experimental coroutines if using C++17 standard
-    # Note: AppleClang doesn't support coroutines flags in C++17, skip for macOS
-    if (CMAKE_CXX_STANDARD EQUAL 17 AND NOT CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
-        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-            # GCC 10+ uses -fcoroutines, earlier versions don't support coroutines
-            if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 10.0)
-                message(STATUS "C++17 detected - enabling experimental coroutines support (GCC ${CMAKE_CXX_COMPILER_VERSION}: -fcoroutines)")
-                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines")
-            else()
-                message(STATUS "C++17 detected - GCC ${CMAKE_CXX_COMPILER_VERSION} doesn't support coroutines, skipping")
-            endif()
-        elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-            # Clang < 16: -fcoroutines-ts for C++17
-            # Clang >= 16: -fcoroutines-ts removed, coroutines available without flag in C++20 only
-            if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16.0)
-                message(STATUS "C++17 detected - enabling experimental coroutines support (Clang ${CMAKE_CXX_COMPILER_VERSION}: -fcoroutines-ts)")
-                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines-ts")
-            else()
-                message(STATUS "C++17 detected - Clang ${CMAKE_CXX_COMPILER_VERSION} doesn't support C++17 coroutines (use C++20)")
-            endif()
-        endif()
     endif()
 endif()
 

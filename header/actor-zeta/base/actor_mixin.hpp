@@ -2,7 +2,6 @@
 
 #include <actor-zeta/base/address.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
-#include <actor-zeta/detail/pmr/polymorphic_allocator.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/future.hpp>
 #include <actor-zeta/make_message.hpp>

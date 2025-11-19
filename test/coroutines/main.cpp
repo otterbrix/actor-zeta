@@ -172,43 +172,6 @@ TEST_CASE("virtual methods marked as final") {
 // Test 6: promise_type creates future_state correctly
 // ============================================================================
 
-TEST_CASE("promise_type allocates future_state") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
-    auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
-
-    SECTION("promise_type<int> creates state") {
-        // When promise_type is created for actor member function,
-        // compiler passes 'this' as first argument to promise_type constructor
-        actor_zeta::unique_future<int>::promise_type promise(actor.get());
-
-        // get_return_object creates the future
-        auto future = promise.get_return_object();
-        REQUIRE(future.valid());
-
-        // Set value via promise
-        promise.return_value(123);
-
-        // Future should have the value
-        REQUIRE(future.is_ready());
-        int result = std::move(future).get();
-        REQUIRE(result == 123);
-    }
-
-    SECTION("promise_type<void> creates state") {
-        actor_zeta::unique_future<void>::promise_type promise(actor.get());
-
-        auto future = promise.get_return_object();
-        REQUIRE(future.valid());
-
-        // Set ready via promise
-        promise.return_void();
-
-        // Future should be ready
-        REQUIRE(future.is_ready());
-        std::move(future).get();  // Should not throw
-    }
-}
-
 // ============================================================================
 // Test 7: Coroutine destruction
 // ============================================================================

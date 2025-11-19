@@ -29,7 +29,6 @@ namespace actor_zeta { namespace type_traits {
         using class_type = C;
     };
 
-#if CPP17_OR_GREATER
     template<class C, typename R, class... Args>
     struct callable_trait<R (C::*)(Args...) const> : callable_trait<R(Args...)> {
         using class_type = C;
@@ -39,15 +38,12 @@ namespace actor_zeta { namespace type_traits {
     struct callable_trait<R (C::*)(Args...)> : callable_trait<R(Args...)> {
         using class_type = C;
     };
-#endif
 
     template<class R, class... Args>
     struct callable_trait<R (*)(Args...) noexcept> : callable_trait<R(Args...)> {};
 
-#if CPP17_OR_GREATER
     template<class R, class... Args>
     struct callable_trait<R (*)(Args...)> : callable_trait<R(Args...)> {};
-#endif
     template<class T>
     struct has_apply_operator final {
         template<class U>

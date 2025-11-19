@@ -13,7 +13,7 @@ jobs:
   build:
     strategy:
       matrix:
-        cxx_standard: [17, 20]
+        cxx_standard: [20]
         build_type: ["Release", "Debug"]
         os: ["macos-14", "macos-15"]
 

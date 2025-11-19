@@ -13,22 +13,13 @@ jobs:
   build:
     strategy:
       matrix:
-        cxx_standard: [17, 20]
+        cxx_standard: [20]
         build_type: ["Release", "Debug"]
         configuration: [
-          {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"},
-
-          {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"13"}
         ]
-        exclude:
-          # GCC 10 doesn't support C++20
-          - configuration: {"UBUNTU_VERSION":"20.04", "TOOLCHAIN_VERSION":"10"}
-            cxx_standard: 20
-          - configuration: {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"10"}
-            cxx_standard: 20
 
     runs-on: ubuntu-latest
     container:
