@@ -9,10 +9,10 @@ class calculator_actor;
 
 /// @brief Calculator actor with BOTH sync and async methods
 /// Demonstrates unified interface - caller doesn't need to know which is which
-class calculator_actor final : public actor_zeta::coroutine_actor<calculator_actor> {
+class calculator_actor final : public actor_zeta::basic_actor<calculator_actor> {
 public:
     explicit calculator_actor(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::coroutine_actor<calculator_actor>(ptr)
+        : actor_zeta::basic_actor<calculator_actor>(ptr)
         , add_(actor_zeta::make_behavior(resource(), this, &calculator_actor::add))
         , multiply_(actor_zeta::make_behavior(resource(), this, &calculator_actor::multiply))
         , square_(actor_zeta::make_behavior(resource(), this, &calculator_actor::square)) {
