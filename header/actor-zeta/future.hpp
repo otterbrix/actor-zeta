@@ -353,7 +353,7 @@ namespace actor_zeta {
             // When coroutine is member function, compiler passes 'this' as first argument
             template<typename First, typename... Args>
             promise_type(First&& first, Args&&...) noexcept
-                : resource_(extract_resource_impl(std::forward<First>(first)))
+                : resource_(extract_resource_impl(first))
                 , state_(nullptr) {
             }
 
@@ -611,7 +611,7 @@ namespace actor_zeta {
             // Constructor for actor member functions - extracts resource from actor*
             template<typename First, typename... Args>
             promise_type(First&& first, Args&&...) noexcept
-                : resource_(extract_resource_impl(std::forward<First>(first)))
+                : resource_(extract_resource_impl(first))
                 , state_(nullptr) {
             }
 
