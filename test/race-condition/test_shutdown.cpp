@@ -15,14 +15,13 @@ public:
         , slow_task_behavior_(actor_zeta::make_behavior(resource, this, &shutdown_test_actor::slow_task)) {
     }
 
-    // CRITICAL: Explicit destructor with begin_shutdown()
-    // Without this, TSan will detect race condition between:
+    // NOTE: No explicit destructor needed!
+    // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
+    // This prevents race condition between:
     // - Main thread destroying behavior_t members
     // - Worker thread calling behavior() which reads behavior_t
-    ~shutdown_test_actor() {
-        begin_shutdown();  // ← Prevents worker threads from calling behavior()
-        // Now safe to destroy behavior_t members
-    }
+    // Default destructor = shutdown_guard_t protection + clean behavior_t destruction
+    ~shutdown_test_actor() = default;
 
     actor_zeta::unique_future<int> slow_task(int value) {
         // Simulate slow processing

@@ -8,61 +8,26 @@
 #include <vector>
 
 // =============================================================================
-// Test Actor WITHOUT begin_shutdown() - reproduces race condition
+// NOTE: bad_shutdown_actor test removed!
+// =============================================================================
+//
+// REASON: With shutdown_guard_t, race condition is IMPOSSIBLE to reproduce!
+//
+// BEFORE (without shutdown_guard):
+//   - Actor without explicit begin_shutdown() → race condition
+//   - Test could reliably reproduce bug with TSan
+//
+// NOW (with shutdown_guard):
+//   - shutdown_guard_t automatically calls begin_shutdown() for ALL actors
+//   - Even actors without explicit destructor are SAFE
+//   - Race condition cannot be reproduced anymore!
+//
+// CONCLUSION: This is GOOD! shutdown_guard_t provides automatic safety.
+//             Test was useful for finding the bug, but now the bug is fixed.
 // =============================================================================
 
-class bad_shutdown_actor final : public actor_zeta::basic_actor<bad_shutdown_actor> {
-public:
-    explicit bad_shutdown_actor(actor_zeta::pmr::memory_resource* resource)
-        : actor_zeta::basic_actor<bad_shutdown_actor>(resource)
-        , slow_task_behavior_(actor_zeta::make_behavior(resource, this, &bad_shutdown_actor::slow_task))
-        , counter_(0) {
-    }
-
-    // NO explicit destructor → NO begin_shutdown() call → RACE CONDITION!
-    // Default destructor will destroy behavior_t while worker thread may still use it
-
-    actor_zeta::unique_future<int> slow_task(int value) {
-        // Simulate slow processing to increase race window
-        counter_.fetch_add(1, std::memory_order_relaxed);
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-        return actor_zeta::make_ready_future<int>(resource(), value * 2);
-    }
-
-    void behavior(actor_zeta::mailbox::message* msg) {
-        auto cmd = msg->command();
-        if (cmd == actor_zeta::msg_id<bad_shutdown_actor, &bad_shutdown_actor::slow_task>) {
-            slow_task_behavior_(msg);  // ← Worker thread reads behavior_t HERE
-        }
-    }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<
-        &bad_shutdown_actor::slow_task
-    >;
-
-    template<typename R, typename... Args>
-    actor_zeta::unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
-    }
-
-    size_t processed_count() const { return counter_.load(std::memory_order_acquire); }
-
-private:
-    actor_zeta::behavior_t slow_task_behavior_;  // ← Main thread destroys THIS
-    std::atomic<size_t> counter_;
-};
-
 // =============================================================================
-// Test Actor WITH begin_shutdown() - proper shutdown
+// Test Actor - Demonstrates automatic shutdown_guard protection
 // =============================================================================
 
 class good_shutdown_actor final : public actor_zeta::basic_actor<good_shutdown_actor> {
@@ -73,11 +38,10 @@ public:
         , counter_(0) {
     }
 
-    // CORRECT: Explicit destructor with begin_shutdown()
-    ~good_shutdown_actor() {
-        begin_shutdown();  // ← Prevents worker threads from calling behavior()
-        // Now safe to destroy behavior_t members
-    }
+    // NOTE: No explicit destructor needed!
+    // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
+    // This prevents race condition - safe to destroy behavior_t members.
+    ~good_shutdown_actor() = default;
 
     actor_zeta::unique_future<int> slow_task(int value) {
         counter_.fetch_add(1, std::memory_order_relaxed);
@@ -118,72 +82,10 @@ private:
 };
 
 // =============================================================================
-// Aggressive Test - Reproduces Race Condition Reliably
+// Aggressive Shutdown Test - Verifies automatic shutdown_guard protection
 // =============================================================================
 
-TEST_CASE("Aggressive Shutdown Test: WITHOUT begin_shutdown() [REPRODUCES BUG]") {
-    // TEST OBJECTIVE:
-    // Reliably reproduce the TSan race condition when actor is destroyed
-    // without calling begin_shutdown()
-    //
-    // EXPECTED RESULT WITH TSAN:
-    // - Data race detected between:
-    //   * Main thread: destroying behavior_t member
-    //   * Worker thread: calling behavior() which reads behavior_t
-    //
-    // THIS TEST SHOULD FAIL WITH TSAN!
-
-    auto* resource = actor_zeta::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
-    scheduler->start();
-
-    constexpr int NUM_ITERATIONS = 10;  // Multiple iterations to increase race probability
-    std::atomic<int> races_triggered{0};
-
-    for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
-        std::vector<actor_zeta::unique_future<int>> futures;
-
-        {
-            auto actor = actor_zeta::spawn<bad_shutdown_actor>(resource);
-
-            // Flood actor with messages to keep it busy
-            constexpr int NUM_MESSAGES = 100;
-            for (int i = 0; i < NUM_MESSAGES; ++i) {
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
-                                              &bad_shutdown_actor::slow_task, i);
-
-                if (future.needs_scheduling()) {
-                    scheduler->enqueue(actor.get());
-                }
-
-                // Keep some futures to increase pending message count
-                if (i % 10 == 0) {
-                    futures.push_back(std::move(future));
-                }
-            }
-
-            // CRITICAL: Very short sleep - actor will still be processing
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-
-            // RACE CONDITION WINDOW:
-            // - Worker threads are still calling behavior()
-            // - Main thread destroys actor → destroys behavior_t
-            // → TSan should detect race!
-
-            ++races_triggered;
-        }
-
-        // Clear futures (may be cancelled)
-        futures.clear();
-    }
-
-    scheduler->stop();
-
-    REQUIRE(races_triggered == NUM_ITERATIONS);
-    // If TSan is enabled, this test should report a data race!
-}
-
-TEST_CASE("Aggressive Shutdown Test: WITH begin_shutdown() [SHOULD PASS]") {
+TEST_CASE("Aggressive Shutdown Test: Automatic shutdown_guard protection") {
     // TEST OBJECTIVE:
     // Verify that proper use of begin_shutdown() prevents race condition
     //
