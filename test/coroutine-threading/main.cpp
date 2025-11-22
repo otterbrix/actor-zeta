@@ -1,7 +1,6 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
-#if HAVE_STD_COROUTINES
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
@@ -207,14 +206,3 @@ TEST_CASE("multiple concurrent coroutines resume in correct threads") {
 
     scheduler->stop();
 }
-
-#else // !HAVE_STD_COROUTINES
-
-#include <catch2/catch.hpp>
-
-TEST_CASE("coroutines not supported - skipping tests") {
-    WARN("C++20 coroutines not available, skipping threading tests");
-    REQUIRE(true);
-}
-
-#endif // HAVE_STD_COROUTINES

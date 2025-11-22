@@ -8,8 +8,6 @@
 #include <thread>
 #include <chrono>
 
-#if HAVE_STD_COROUTINES
-
 #include "define_actor.hpp"
 #include "define_supervisor.hpp"
 
@@ -65,5 +63,3 @@ constexpr size_t NUM_WORKERS = 4;
     REGISTER_BENCHMARK(type, 5, type, type, type, type, type);           \
     REGISTER_BENCHMARK(type, 6, type, type, type, type, type, type);     \
     REGISTER_BENCHMARK(type, 7, type, type, type, type, type, type, type)
-
-#endif

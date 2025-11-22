@@ -192,7 +192,6 @@ namespace actor_zeta { namespace detail {
         /// This is called from handler.ipp which doesn't know the concrete type T
         virtual void set_result_rtt(rtt&& value) noexcept = 0;
 
-#if HAVE_STD_COROUTINES
         /// @brief Resume stored coroutine (if any)
         /// @note Called from behavior_t::resume_if_suspended()
         /// @note Virtual with `final` override for devirtualization
@@ -205,7 +204,6 @@ namespace actor_zeta { namespace detail {
         /// @brief Check if stored coroutine is done
         /// @return true if coroutine exists and is done
         [[nodiscard]] virtual bool coroutine_done() const noexcept = 0;
-#endif // HAVE_STD_COROUTINES
 
 #ifndef NDEBUG
         [[nodiscard]] uint64_t generation() const noexcept { return generation_; }
@@ -240,9 +238,7 @@ namespace actor_zeta { namespace detail {
         explicit future_state(pmr::memory_resource* res) noexcept
             : future_state_base(res)
             , result_(res)  // Initialize empty rtt (no allocation, capacity=0)
-#if HAVE_STD_COROUTINES
             , coro_handle_()
-#endif
         {
             // result_ is empty rtt, will be filled via move assignment in set_result()
         }
@@ -257,11 +253,9 @@ namespace actor_zeta { namespace detail {
                 s = state_.load(std::memory_order_acquire);
             }
 
-#if HAVE_STD_COROUTINES
             if (coro_handle_ && !coro_handle_.done()) {
                 coro_handle_.destroy();
             }
-#endif
         }
 
         /// @brief Set successful result
@@ -331,7 +325,6 @@ namespace actor_zeta { namespace detail {
             return result;
         }
 
-#if HAVE_STD_COROUTINES
         /// @brief Resume stored coroutine (final - enables devirtualization)
         void resume_coroutine() noexcept final {
             if (coro_handle_ && !coro_handle_.done()) {
@@ -353,7 +346,6 @@ namespace actor_zeta { namespace detail {
         void set_coroutine(coroutine_handle<void> handle) noexcept {
             coro_handle_ = handle;
         }
-#endif // HAVE_STD_COROUTINES
 
     protected:
         void destroy() noexcept override {
@@ -365,9 +357,7 @@ namespace actor_zeta { namespace detail {
         // Embedded result (not pointer!) - eliminates ALL race conditions
         // Empty when constructed (capacity=0), filled via move assignment in set_result()
         rtt result_;
-#if HAVE_STD_COROUTINES
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
-#endif
     };
 
     /// @brief Specialization for void (no result storage needed)
@@ -376,18 +366,14 @@ namespace actor_zeta { namespace detail {
     public:
         explicit future_state(pmr::memory_resource* res) noexcept
             : future_state_base(res)
-#if HAVE_STD_COROUTINES
             , coro_handle_()
-#endif
         {}
 
         ~future_state() noexcept override {
-#if HAVE_STD_COROUTINES
             // Destroy coroutine if exists and not done
             if (coro_handle_ && !coro_handle_.done()) {
                 coro_handle_.destroy();
             }
-#endif
         }
 
         /// @brief Mark as ready (void has no result to store)
@@ -414,7 +400,6 @@ namespace actor_zeta { namespace detail {
             set_ready();
         }
 
-#if HAVE_STD_COROUTINES
         /// @brief Resume stored coroutine (final - enables devirtualization)
         void resume_coroutine() noexcept final {
             if (coro_handle_ && !coro_handle_.done()) {
@@ -436,7 +421,6 @@ namespace actor_zeta { namespace detail {
         void set_coroutine(coroutine_handle<void> handle) noexcept {
             coro_handle_ = handle;
         }
-#endif // HAVE_STD_COROUTINES
 
     protected:
         void destroy() noexcept override {
@@ -445,9 +429,7 @@ namespace actor_zeta { namespace detail {
         }
 
     private:
-#if HAVE_STD_COROUTINES
         coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
-#endif
     };
 
     // intrusive_ptr support for future_state_base

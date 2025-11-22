@@ -5,8 +5,6 @@
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <actor-zeta/config.hpp>
 
-#if HAVE_STD_COROUTINES
-
 template<typename... Args>
 class coro_ping_pong_actor final : public actor_zeta::basic_actor<coro_ping_pong_actor<Args...>> {
     using base_type = actor_zeta::basic_actor<coro_ping_pong_actor<Args...>>;
@@ -78,5 +76,3 @@ public:
         &coro_ping_pong_actor::pong
     >;
 };
-
-#endif

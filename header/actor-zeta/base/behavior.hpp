@@ -28,9 +28,7 @@ namespace actor_zeta { namespace base {
 
         behavior_t(actor_zeta::pmr::memory_resource*, action handler)
             : handler_(std::move(handler))
-#if HAVE_STD_COROUTINES
             , linked_state_(nullptr)
-#endif
         {}
 
         explicit operator bool() {
@@ -41,7 +39,6 @@ namespace actor_zeta { namespace base {
             handler_(msg);
         }
 
-#if HAVE_STD_COROUTINES
         /// @brief Link this behavior with a future_state (for coroutine resumption)
         /// @param state Pointer to future_state that may contain a suspended coroutine
         /// @note Called from make_behavior when message has a result_slot
@@ -72,13 +69,10 @@ namespace actor_zeta { namespace base {
         [[nodiscard]] detail::future_state_base* linked_state() const noexcept {
             return linked_state_;
         }
-#endif // HAVE_STD_COROUTINES
 
     private:
         action handler_;
-#if HAVE_STD_COROUTINES
         detail::future_state_base* linked_state_;  // Non-owning pointer to future_state
-#endif
     };
 
     template<class Value>
@@ -91,8 +85,6 @@ namespace actor_zeta { namespace base {
     behavior_t make_behavior(actor_zeta::pmr::memory_resource* resource, Actor* ptr, F&& f) {
         return {resource, make_handler(resource,ptr, std::forward<F>(f))};
     }
-
-#if HAVE_STD_COROUTINES
 
     /// @brief Resume all suspended coroutines in given behaviors
     /// @note Helper function to reduce boilerplate in behavior() method
@@ -130,13 +122,9 @@ namespace actor_zeta { namespace base {
         }(), ...);
     }
 
-#endif // HAVE_STD_COROUTINES
-
 }} // namespace actor_zeta::base
 
 namespace actor_zeta {
-#if HAVE_STD_COROUTINES
     using base::resume_all;
     using base::resume_all_if;
-#endif
 }

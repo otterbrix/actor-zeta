@@ -6,8 +6,6 @@
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/config.hpp>
 
-#if HAVE_STD_COROUTINES
-
 // ============================================================================
 // Test 1: promise_type exists and can be used for co_return
 // ============================================================================
@@ -724,12 +722,3 @@ TEST_CASE("coroutine cleanup does not crash") {
         REQUIRE(true);
     }
 }
-
-#else // !HAVE_STD_COROUTINES
-
-TEST_CASE("coroutines disabled") {
-    REQUIRE(true);  // Pass test if coroutines not available
-    WARN("C++20 coroutines not available - tests skipped");
-}
-
-#endif // HAVE_STD_COROUTINES

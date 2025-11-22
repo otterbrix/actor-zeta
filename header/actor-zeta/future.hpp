@@ -14,10 +14,8 @@
 
 namespace actor_zeta {
 
-#if HAVE_STD_COROUTINES
     template<typename T>
     struct future_awaiter;
-#endif
 
     template<typename T>
     class promise final {
@@ -292,7 +290,6 @@ namespace actor_zeta {
             return state_->memory_resource();
         }
 
-#if HAVE_STD_COROUTINES
         struct promise_type {
             using value_type = T;
 
@@ -398,7 +395,6 @@ namespace actor_zeta {
             pmr::memory_resource* resource_;
             detail::future_state<T>* state_;
         };
-#endif
 
     private:
         intrusive_ptr<detail::future_state<T>> state_;  // Changed from raw pointer to intrusive_ptr
@@ -570,7 +566,6 @@ namespace actor_zeta {
             return state_.get();  // Return raw pointer from intrusive_ptr
         }
 
-#if HAVE_STD_COROUTINES
         struct promise_type {
             using value_type = void;
 
@@ -656,7 +651,6 @@ namespace actor_zeta {
             pmr::memory_resource* resource_;
             detail::future_state<void>* state_;
         };
-#endif
 
     private:
         intrusive_ptr<detail::future_state<void>> state_;  // Changed from raw pointer to intrusive_ptr
@@ -709,8 +703,6 @@ namespace actor_zeta {
 }
 
 #include <actor-zeta/detail/coroutine.hpp>
-
-#if HAVE_STD_COROUTINES
 
 namespace actor_zeta {
 
@@ -832,5 +824,3 @@ namespace actor_zeta {
     }
 
 }
-
-#endif

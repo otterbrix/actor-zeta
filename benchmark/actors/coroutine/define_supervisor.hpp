@@ -6,8 +6,6 @@
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <actor-zeta/config.hpp>
 
-#if HAVE_STD_COROUTINES
-
 template<typename Actor>
 class coro_supervisor final : public actor_zeta::base::actor_mixin<coro_supervisor<Actor>> {
     actor_zeta::behavior_t prepare_behavior_;
@@ -95,5 +93,3 @@ public:
 
 protected:
 };
-
-#endif
