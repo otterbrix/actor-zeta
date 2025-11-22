@@ -55,9 +55,10 @@ private:
 /// @brief Client actor that uses co_await to call worker
 class client_actor final : public basic_actor<client_actor> {
 public:
-    explicit client_actor(pmr::memory_resource* resource, worker_actor* worker)
+    explicit client_actor(pmr::memory_resource* resource, worker_actor* worker, scheduler::sharing_scheduler* scheduler)
         : basic_actor<client_actor>(resource)
         , worker_(worker)
+        , scheduler_(scheduler)
         , process_(make_behavior(resource, this, &client_actor::process)) {
     }
 
@@ -72,6 +73,12 @@ public:
 
         // Call worker asynchronously
         auto future = send(worker_, address(), &worker_actor::compute, x);
+
+        // IMPORTANT: Check if worker needs scheduling and schedule it
+        // This is the key fix - we MUST schedule the receiver if it needs it
+        if (future.needs_scheduling() && scheduler_) {
+            scheduler_->enqueue(worker_);
+        }
 
         // CRITICAL TEST: co_await should suspend and resume in SAME thread
         int result = co_await std::move(future);
@@ -109,6 +116,7 @@ public:
 
 private:
     worker_actor* worker_;
+    scheduler::sharing_scheduler* scheduler_;
     behavior_t process_;
 
     std::atomic<std::thread::id> before_thread_id_{};
@@ -125,14 +133,15 @@ TEST_CASE("coroutine resumes in owner actor's thread, not sender's thread") {
 
     // Create actors
     auto worker = spawn<worker_actor>(resource);
-    auto client = spawn<client_actor>(resource, worker.get());
-
-    // Attach to scheduler
-    scheduler->enqueue(worker.get());
-    scheduler->enqueue(client.get());
+    auto client = spawn<client_actor>(resource, worker.get(), scheduler.get());
 
     // Send request from client to worker via coroutine
     auto result_future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+
+    // Schedule client to process the message (only if needed)
+    if (result_future.needs_scheduling()) {
+        scheduler->enqueue(client.get());
+    }
 
     // Wait for result with timeout
     int result = std::move(result_future).get();
@@ -170,19 +179,25 @@ TEST_CASE("multiple concurrent coroutines resume in correct threads") {
     scheduler->start();
 
     auto worker = spawn<worker_actor>(resource);
-    auto client1 = spawn<client_actor>(resource, worker.get());
-    auto client2 = spawn<client_actor>(resource, worker.get());
-    auto client3 = spawn<client_actor>(resource, worker.get());
-
-    scheduler->enqueue(worker.get());
-    scheduler->enqueue(client1.get());
-    scheduler->enqueue(client2.get());
-    scheduler->enqueue(client3.get());
+    auto client1 = spawn<client_actor>(resource, worker.get(), scheduler.get());
+    auto client2 = spawn<client_actor>(resource, worker.get(), scheduler.get());
+    auto client3 = spawn<client_actor>(resource, worker.get(), scheduler.get());
 
     // Send concurrent requests
     auto f1 = send(client1.get(), address_t::empty_address(), &client_actor::process, 10);
+    if (f1.needs_scheduling()) {
+        scheduler->enqueue(client1.get());
+    }
+
     auto f2 = send(client2.get(), address_t::empty_address(), &client_actor::process, 20);
+    if (f2.needs_scheduling()) {
+        scheduler->enqueue(client2.get());
+    }
+
     auto f3 = send(client3.get(), address_t::empty_address(), &client_actor::process, 30);
+    if (f3.needs_scheduling()) {
+        scheduler->enqueue(client3.get());
+    }
 
     // Wait for all results
     REQUIRE(std::move(f1).get() == 20);
