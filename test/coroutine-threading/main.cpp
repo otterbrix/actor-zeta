@@ -22,20 +22,18 @@ public:
         , compute_(make_behavior(resource, this, &worker_actor::compute)) {
     }
 
-    ~worker_actor() override {
-        begin_shutdown();
-    }
+    ~worker_actor() = default;
 
     /// @brief Simple computation - returns input * 2
     /// @note Records the thread ID where this runs
     unique_future<int> compute(int x) {
         worker_thread_id_.store(std::this_thread::get_id());
-        return x * 2;  // Immediate return
+        return make_ready_future(resource(), x * 2);
     }
 
     using dispatch_traits = dispatch_traits<&worker_actor::compute>;
 
-    void behavior(mailbox::message* msg) override {
+    void behavior(mailbox::message* msg) {
         switch (msg->command()) {
             case msg_id<worker_actor, &worker_actor::compute>:
                 compute_(msg);
@@ -63,9 +61,7 @@ public:
         , process_(make_behavior(resource, this, &client_actor::process)) {
     }
 
-    ~client_actor() override {
-        begin_shutdown();
-    }
+    ~client_actor() = default;
 
     /// @brief Coroutine method that calls worker and checks thread
     /// @return Tuple of (result, before_thread_id, after_thread_id)
@@ -78,7 +74,7 @@ public:
         auto future = send(worker_, address(), &worker_actor::compute, x);
 
         // CRITICAL TEST: co_await should suspend and resume in SAME thread
-        int result = co_await future;
+        int result = co_await std::move(future);
 
         // Record thread AFTER co_await
         auto after_thread = std::this_thread::get_id();
@@ -94,7 +90,7 @@ public:
 
     using dispatch_traits = dispatch_traits<&client_actor::process>;
 
-    void behavior(mailbox::message* msg) override {
+    void behavior(mailbox::message* msg) {
         // Resume suspended coroutines BEFORE processing new messages
         resume_all(process_);
 
@@ -132,11 +128,11 @@ TEST_CASE("coroutine resumes in owner actor's thread, not sender's thread") {
     auto client = spawn<client_actor>(resource, worker.get());
 
     // Attach to scheduler
-    scheduler->schedule(worker.get());
-    scheduler->schedule(client.get());
+    scheduler->enqueue(worker.get());
+    scheduler->enqueue(client.get());
 
     // Send request from client to worker via coroutine
-    auto result_future = send(client.get(), address_t{}, &client_actor::process, 21);
+    auto result_future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
 
     // Wait for result with timeout
     int result = std::move(result_future).get();
@@ -178,15 +174,15 @@ TEST_CASE("multiple concurrent coroutines resume in correct threads") {
     auto client2 = spawn<client_actor>(resource, worker.get());
     auto client3 = spawn<client_actor>(resource, worker.get());
 
-    scheduler->schedule(worker.get());
-    scheduler->schedule(client1.get());
-    scheduler->schedule(client2.get());
-    scheduler->schedule(client3.get());
+    scheduler->enqueue(worker.get());
+    scheduler->enqueue(client1.get());
+    scheduler->enqueue(client2.get());
+    scheduler->enqueue(client3.get());
 
     // Send concurrent requests
-    auto f1 = send(client1.get(), address_t{}, &client_actor::process, 10);
-    auto f2 = send(client2.get(), address_t{}, &client_actor::process, 20);
-    auto f3 = send(client3.get(), address_t{}, &client_actor::process, 30);
+    auto f1 = send(client1.get(), address_t::empty_address(), &client_actor::process, 10);
+    auto f2 = send(client2.get(), address_t::empty_address(), &client_actor::process, 20);
+    auto f3 = send(client3.get(), address_t::empty_address(), &client_actor::process, 30);
 
     // Wait for all results
     REQUIRE(std::move(f1).get() == 20);
