@@ -31,7 +31,7 @@ public:
         return make_ready_future(resource(), x * 2);
     }
 
-    using dispatch_traits = dispatch_traits<&worker_actor::compute>;
+    using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
     void behavior(mailbox::message* msg) {
         switch (msg->command()) {
@@ -88,7 +88,7 @@ public:
         co_return result;
     }
 
-    using dispatch_traits = dispatch_traits<&client_actor::process>;
+    using dispatch_traits = actor_zeta::dispatch_traits<&client_actor::process>;
 
     void behavior(mailbox::message* msg) {
         // Resume suspended coroutines BEFORE processing new messages
