@@ -29,10 +29,21 @@ TEST_CASE("promise_type in unique_future<T>") {
 // ============================================================================
 
 // Test actor with coroutine member functions
+// ============================================================================
+// IMPORTANT: This actor follows proper Actor Model principles:
+// - Methods are registered in dispatch_traits
+// - behavior() dispatches messages
+// - Tests MUST use send() instead of direct calls (actor->method())
+// ============================================================================
 class coroutine_test_actor final : public actor_zeta::basic_actor<coroutine_test_actor> {
 public:
     explicit coroutine_test_actor(actor_zeta::pmr::memory_resource* res)
-        : actor_zeta::basic_actor<coroutine_test_actor>(res) {}
+        : actor_zeta::basic_actor<coroutine_test_actor>(res)
+        , coro_int_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_int))
+        , coro_string_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_string))
+        , coro_void_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_void))
+        , coro_storage_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_storage)) {
+    }
 
     // Coroutine member functions - resource() extracted from 'this'
     actor_zeta::unique_future<int> coro_int() {
@@ -51,8 +62,35 @@ public:
         co_return 100;
     }
 
-    using dispatch_traits = actor_zeta::dispatch_traits<>;
-    void behavior(actor_zeta::mailbox::message*) {}
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &coroutine_test_actor::coro_int,
+        &coroutine_test_actor::coro_string,
+        &coroutine_test_actor::coro_void,
+        &coroutine_test_actor::coro_storage
+    >;
+
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_int>:
+                coro_int_(msg);
+                break;
+            case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_string>:
+                coro_string_(msg);
+                break;
+            case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_void>:
+                coro_void_(msg);
+                break;
+            case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_storage>:
+                coro_storage_(msg);
+                break;
+        }
+    }
+
+private:
+    actor_zeta::behavior_t coro_int_;
+    actor_zeta::behavior_t coro_string_;
+    actor_zeta::behavior_t coro_void_;
+    actor_zeta::behavior_t coro_storage_;
 };
 
 TEST_CASE("simple coroutines with co_return") {
@@ -60,15 +98,33 @@ TEST_CASE("simple coroutines with co_return") {
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("co_return int") {
-        auto future = actor->coro_int();
+        // FIXED: Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &coroutine_test_actor::coro_int
+        );
+
+        // Process message through actor
+        actor->resume(100);
+
         REQUIRE(future.valid());
-        REQUIRE(future.is_ready());  // IMMEDIATE mode - should be ready
+        REQUIRE(future.is_ready());
         int result = std::move(future).get();
         REQUIRE(result == 42);
     }
 
     SECTION("co_return string") {
-        auto future = actor->coro_string();
+        // FIXED: Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &coroutine_test_actor::coro_string
+        );
+
+        // Process message through actor
+        actor->resume(100);
+
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
         std::string result = std::move(future).get();
@@ -76,7 +132,16 @@ TEST_CASE("simple coroutines with co_return") {
     }
 
     SECTION("co_return void") {
-        auto future = actor->coro_void();
+        // FIXED: Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &coroutine_test_actor::coro_void
+        );
+
+        // Process message through actor
+        actor->resume(100);
+
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
         std::move(future).get();  // Should not throw
@@ -132,8 +197,15 @@ TEST_CASE("coroutine handle can be stored in future_state") {
                                         alignof(actor_zeta::detail::future_state<int>));
         auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
 
-        // Create a coroutine and get its handle
-        auto future = actor->coro_storage();
+        // FIXED: Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &coroutine_test_actor::coro_storage
+        );
+
+        // Process message
+        actor->resume(100);
 
         // Note: In real usage, await_suspend would call set_coroutine()
         // Here we just verify the method exists

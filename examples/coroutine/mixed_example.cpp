@@ -19,10 +19,10 @@ public:
         std::cout << "[Calculator " << id() << "] Created\n";
     }
 
-    ~calculator_actor() {
-        begin_shutdown();
-        std::cout << "[Calculator " << id() << "] Destroyed\n";
-    }
+    // NOTE: No explicit destructor needed!
+    // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
+    // This prevents race condition between main thread destroying actor and worker threads accessing it.
+    ~calculator_actor() = default;
 
     // ========================================
     // SYNC METHODS - regular functions with make_ready_future
