@@ -11,6 +11,7 @@
 #include <thread>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 std::atomic_int count_collection_part{0};
@@ -27,11 +28,7 @@ class collection_part_t;
 class collection_part_t final : public actor_zeta::basic_actor<collection_part_t> {
 public:
     collection_part_t(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<collection_part_t>(ptr)
-        , insert_(actor_zeta::make_behavior(resource(), this, &collection_part_t::insert))
-        , remove_(actor_zeta::make_behavior(resource(), this, &collection_part_t::remove))
-        , update_(actor_zeta::make_behavior(resource(), this, &collection_part_t::update))
-        , find_(actor_zeta::make_behavior(resource(), this, &collection_part_t::find)) {
+        : actor_zeta::basic_actor<collection_part_t>(ptr) {
         ++count_collection_part;
     }
 
@@ -74,32 +71,25 @@ public:
         &collection_part_t::find
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>: {
-                insert_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::insert, msg);
             }
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>: {
-                update_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::update, msg);
             }
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>: {
-                remove_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::remove, msg);
             }
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
-                find_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::find, msg);
             }
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
-    actor_zeta::behavior_t insert_;
-    actor_zeta::behavior_t remove_;
-    actor_zeta::behavior_t update_;
-    actor_zeta::behavior_t find_;
     std::unordered_map<std::string, std::string> data_;
 };
 

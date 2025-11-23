@@ -2,6 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -34,13 +35,12 @@ class good_shutdown_actor final : public actor_zeta::basic_actor<good_shutdown_a
 public:
     explicit good_shutdown_actor(actor_zeta::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<good_shutdown_actor>(resource)
-        , slow_task_behavior_(actor_zeta::make_behavior(resource, this, &good_shutdown_actor::slow_task))
         , counter_(0) {
     }
 
     // NOTE: No explicit destructor needed!
     // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
-    // This prevents race condition - safe to destroy behavior_t members.
+    // This prevents race condition - safe to destroy dispatch() members.
     ~good_shutdown_actor() = default;
 
     actor_zeta::unique_future<int> slow_task(int value) {
@@ -49,11 +49,12 @@ public:
         return actor_zeta::make_ready_future<int>(resource(), value * 2);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<good_shutdown_actor, &good_shutdown_actor::slow_task>) {
-            slow_task_behavior_(msg);
+            return dispatch(this, &good_shutdown_actor::slow_task, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -69,7 +70,7 @@ public:
         return enqueue_sync_impl<R>(
             sender,
             cmd,
-            [this](auto* msg) { behavior(msg); },
+            [this](auto* msg) { return behavior(msg); },
             std::forward<Args>(args)...
         );
     }
@@ -77,7 +78,6 @@ public:
     size_t processed_count() const { return counter_.load(std::memory_order_acquire); }
 
 private:
-    actor_zeta::behavior_t slow_task_behavior_;
     std::atomic<size_t> counter_;
 };
 

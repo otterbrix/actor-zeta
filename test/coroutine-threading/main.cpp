@@ -2,6 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 #include <thread>
@@ -18,8 +19,7 @@ using namespace actor_zeta;
 class worker_actor final : public basic_actor<worker_actor> {
 public:
     explicit worker_actor(pmr::memory_resource* resource)
-        : basic_actor<worker_actor>(resource)
-        , compute_(make_behavior(resource, this, &worker_actor::compute)) {
+        : basic_actor<worker_actor>(resource) {
     }
 
     ~worker_actor() = default;
@@ -33,14 +33,14 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
-    void behavior(mailbox::message* msg) {
+    unique_future<void> behavior(mailbox::message* msg) {
         switch (msg->command()) {
             case msg_id<worker_actor, &worker_actor::compute>:
-                compute_(msg);
-                break;
+                return dispatch(this, &worker_actor::compute, msg);
             default:
                 break;
         }
+        return make_ready_future_void(resource());
     }
 
     std::thread::id worker_thread_id() const {
@@ -48,7 +48,6 @@ public:
     }
 
 private:
-    behavior_t compute_;
     std::atomic<std::thread::id> worker_thread_id_{};
 };
 
@@ -58,8 +57,7 @@ public:
     explicit client_actor(pmr::memory_resource* resource, worker_actor* worker, scheduler::sharing_scheduler* scheduler)
         : basic_actor<client_actor>(resource)
         , worker_(worker)
-        , scheduler_(scheduler)
-        , process_(make_behavior(resource, this, &client_actor::process)) {
+        , scheduler_(scheduler) {
     }
 
     ~client_actor() = default;
@@ -97,17 +95,17 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&client_actor::process>;
 
-    void behavior(mailbox::message* msg) {
-        // Resume suspended coroutines BEFORE processing new messages
-        resume_all(process_);
-
+    unique_future<void> behavior(mailbox::message* msg) {
         switch (msg->command()) {
             case msg_id<client_actor, &client_actor::process>:
-                process_(msg);
-                break;
+                return dispatch(this, &client_actor::process, msg);
             default:
                 break;
         }
+
+        // Note: Actor does NOT re-schedule itself
+        // Test will handle scheduling via polling loop when needed
+        return make_ready_future_void(resource());
     }
 
     std::thread::id before_thread_id() const { return before_thread_id_.load(); }
@@ -117,7 +115,6 @@ public:
 private:
     worker_actor* worker_;
     scheduler::sharing_scheduler* scheduler_;
-    behavior_t process_;
 
     std::atomic<std::thread::id> before_thread_id_{};
     std::atomic<std::thread::id> after_thread_id_{};
@@ -143,7 +140,7 @@ TEST_CASE("coroutine resumes in owner actor's thread, not sender's thread") {
         scheduler->enqueue(client.get());
     }
 
-    // Wait for result with timeout
+    // Just wait for result - let scheduler handle execution
     int result = std::move(result_future).get();
 
     // Give scheduler time to finish processing
@@ -199,7 +196,7 @@ TEST_CASE("multiple concurrent coroutines resume in correct threads") {
         scheduler->enqueue(client3.get());
     }
 
-    // Wait for all results
+    // Wait for all results - clients will keep re-scheduling themselves while coroutines are suspended
     REQUIRE(std::move(f1).get() == 20);
     REQUIRE(std::move(f2).get() == 40);
     REQUIRE(std::move(f3).get() == 60);

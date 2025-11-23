@@ -533,7 +533,19 @@ namespace actor_zeta { namespace base {
                     message_guard guard(this, std::move(msg));
 
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
-                        self()->behavior(guard.get());
+                        auto behavior_future = self()->behavior(guard.get());
+
+                        // ❌ НЕТ .get() ЗДЕСЬ!
+                        // behavior_future может быть:
+                        // - ready (если behavior сделал return без co_await)
+                        // - suspended (если behavior сделал co_await)
+
+                        // Просто игнорируем future - результат уже связан с msg->result_slot()
+                        // через dispatch() → link_future_to_slot()
+
+                        // NOTE: Если behavior делает co_await, актор блокируется здесь в своем потоке
+                        // Это ОК - пользователь сам выбрал блокировку!
+                        (void)behavior_future;  // Explicitly discard unused future
                     }
 
                     ++handled;

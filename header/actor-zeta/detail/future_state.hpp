@@ -3,6 +3,7 @@
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 #include <actor-zeta/detail/coroutine.hpp>
+#include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/config.hpp>
 #include <atomic>
 #include <cassert>
@@ -188,6 +189,15 @@ namespace actor_zeta { namespace detail {
             return resource_;
         }
 
+        /// @brief Set continuation target for result propagation
+        /// @param target Target future_state to receive result when this becomes ready
+        /// @note Thread-safe: can be called before or after set_result_rtt()
+        /// @note IMPORTANT: Increments THIS refcount to keep source alive during propagation
+        void set_continuation(intrusive_ptr<future_state_base> target) noexcept {
+            add_ref();  // Keep THIS (source_state) alive while continuation exists
+            continuation_ = std::move(target);
+        }
+
         /// @brief Set result from type-erased rtt (virtual, for handler compatibility)
         /// This is called from handler.ipp which doesn't know the concrete type T
         virtual void set_result_rtt(rtt&& value) noexcept = 0;
@@ -216,6 +226,7 @@ namespace actor_zeta { namespace detail {
         pmr::memory_resource* resource_;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
+        intrusive_ptr<future_state_base> continuation_;  // Target for result propagation
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
@@ -280,8 +291,42 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
+        /// @note WITH continuation propagation support
         void set_result_rtt(rtt&& value) noexcept override {
-            set_result(std::move(value));
+            // STEP 1: Atomic transition pending → setting (CAS protection!)
+            auto expected = future_state_enum::pending;
+            if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire)) {
+                return;  // Already set, cancelled, or concurrent set → ignore
+            }
+
+            // STEP 2: Store result (protected by state==setting)
+            result_.swap(value);
+
+            // STEP 3: Publish ready state BEFORE continuation propagation
+            // Memory ordering: release ensures result_ write is visible before state change
+            state_.store(future_state_enum::ready, std::memory_order_release);
+
+            // STEP 4: Propagate to continuation (if exists)
+            bool had_continuation = false;
+            if (continuation_) {
+                had_continuation = true;
+                // CRITICAL: MOVE result_ (not copy!) - transfer ownership through chain
+                continuation_->set_result_rtt(std::move(result_));  // Recursive call!
+                continuation_->set_state(future_state_enum::ready);
+                continuation_ = nullptr;  // Release continuation ownership
+            }
+
+#if HAVE_ATOMIC_WAIT
+            state_.notify_one();  // Wake waiting thread (if any)
+#endif
+
+            // STEP 5: Release ref added in set_continuation()
+            // This may destroy THIS state if no other refs exist
+            if (had_continuation) {
+                release();
+            }
         }
 
         /// @brief Get result reference (caller must ensure is_ready())

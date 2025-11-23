@@ -2,6 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -13,7 +14,6 @@ class stress_actor final : public actor_zeta::basic_actor<stress_actor> {
 public:
     explicit stress_actor(actor_zeta::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<stress_actor>(resource)
-        , compute_behavior_(actor_zeta::make_behavior(resource, this, &stress_actor::compute))
         , processed_count_(0) {
     }
 
@@ -26,11 +26,12 @@ public:
         return actor_zeta::make_ready_future<int>(resource(), result);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<stress_actor, &stress_actor::compute>) {
-            compute_behavior_(msg);
+            return dispatch(this, &stress_actor::compute, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     std::size_t processed_count() const {
@@ -42,7 +43,6 @@ public:
     >;
 
 private:
-    actor_zeta::behavior_t compute_behavior_;
     std::atomic<std::size_t> processed_count_;
 };
 

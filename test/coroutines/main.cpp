@@ -5,6 +5,7 @@
 #include <actor-zeta/future.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/config.hpp>
+#include <actor-zeta/dispatch.hpp>
 
 // ============================================================================
 // Test 1: promise_type exists and can be used for co_return
@@ -36,11 +37,7 @@ TEST_CASE("promise_type in unique_future<T>") {
 class coroutine_test_actor final : public actor_zeta::basic_actor<coroutine_test_actor> {
 public:
     explicit coroutine_test_actor(actor_zeta::pmr::memory_resource* res)
-        : actor_zeta::basic_actor<coroutine_test_actor>(res)
-        , coro_int_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_int))
-        , coro_string_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_string))
-        , coro_void_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_void))
-        , coro_storage_(actor_zeta::make_behavior(res, this, &coroutine_test_actor::coro_storage)) {
+        : actor_zeta::basic_actor<coroutine_test_actor>(res) {
     }
 
     // Coroutine member functions - resource() extracted from 'this'
@@ -67,28 +64,19 @@ public:
         &coroutine_test_actor::coro_storage
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_int>:
-                coro_int_(msg);
-                break;
+                return dispatch(this, &coroutine_test_actor::coro_int, msg);
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_string>:
-                coro_string_(msg);
-                break;
+                return dispatch(this, &coroutine_test_actor::coro_string, msg);
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_void>:
-                coro_void_(msg);
-                break;
+                return dispatch(this, &coroutine_test_actor::coro_void, msg);
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_storage>:
-                coro_storage_(msg);
-                break;
+                return dispatch(this, &coroutine_test_actor::coro_storage, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
-
-private:
-    actor_zeta::behavior_t coro_int_;
-    actor_zeta::behavior_t coro_string_;
-    actor_zeta::behavior_t coro_void_;
-    actor_zeta::behavior_t coro_storage_;
 };
 
 TEST_CASE("simple coroutines with co_return") {
@@ -527,9 +515,7 @@ TEST_CASE("sync methods with unique_future return type") {
 class future_test_actor final : public actor_zeta::basic_actor<future_test_actor> {
 public:
     explicit future_test_actor(actor_zeta::pmr::memory_resource* res)
-        : actor_zeta::basic_actor<future_test_actor>(res)
-        , sync_add_(actor_zeta::make_behavior(res, this, &future_test_actor::sync_add))
-        , async_mul_(actor_zeta::make_behavior(res, this, &future_test_actor::async_multiply)) {
+        : actor_zeta::basic_actor<future_test_actor>(res) {
     }
 
     // Sync method returning ready future via make_ready_future()
@@ -547,20 +533,15 @@ public:
         &future_test_actor::async_multiply
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<future_test_actor, &future_test_actor::sync_add>:
-                sync_add_(msg);
-                break;
+                return dispatch(this, &future_test_actor::sync_add, msg);
             case actor_zeta::msg_id<future_test_actor, &future_test_actor::async_multiply>:
-                async_mul_(msg);
-                break;
+                return dispatch(this, &future_test_actor::async_multiply, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
-
-private:
-    actor_zeta::behavior_t sync_add_;
-    actor_zeta::behavior_t async_mul_;
 };
 
 TEST_CASE("Handler integration - unique_future<T> return types") {

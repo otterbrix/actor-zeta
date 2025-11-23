@@ -1,4 +1,5 @@
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <iostream>
 #include <chrono>
@@ -12,10 +13,7 @@ class calculator_actor;
 class calculator_actor final : public actor_zeta::basic_actor<calculator_actor> {
 public:
     explicit calculator_actor(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<calculator_actor>(ptr)
-        , add_(actor_zeta::make_behavior(resource(), this, &calculator_actor::add))
-        , multiply_(actor_zeta::make_behavior(resource(), this, &calculator_actor::multiply))
-        , square_(actor_zeta::make_behavior(resource(), this, &calculator_actor::square)) {
+        : actor_zeta::basic_actor<calculator_actor>(ptr) {
         std::cout << "[Calculator " << id() << "] Created\n";
     }
 
@@ -67,34 +65,25 @@ public:
         &calculator_actor::square
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
-        //  NEW: Resume any suspended coroutines before processing message
-        // This enables STATE mode - coroutines can suspend and resume later
-        actor_zeta::resume_all(square_);  // Only async behaviors need resume
-
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::add>: {
-                add_(msg);
-                break;
+                return actor_zeta::dispatch(this, &calculator_actor::add, msg);
             }
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::multiply>: {
-                multiply_(msg);
-                break;
+                return actor_zeta::dispatch(this, &calculator_actor::multiply, msg);
             }
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::square>: {
-                square_(msg);
-                break;
+                return actor_zeta::dispatch(this, &calculator_actor::square, msg);
             }
             default:
                 std::cerr << "[Calculator] Unknown message\n";
                 break;
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
-    actor_zeta::behavior_t add_;
-    actor_zeta::behavior_t multiply_;
-    actor_zeta::behavior_t square_;
 };
 
 int main() {

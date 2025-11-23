@@ -12,6 +12,7 @@
 #include "test/tooltestsuites/scheduler_test.hpp"
 #include <actor-zeta.hpp>
 #include <actor-zeta/spawn.hpp>
+#include <actor-zeta/dispatch.hpp>
 
 using actor_zeta::pmr::memory_resource;
 class dummy_supervisor;
@@ -21,7 +22,6 @@ class dummy_supervisor final {
 public:
     dummy_supervisor(memory_resource* resource_ptr)
         : resource_(resource_ptr)
-        , create_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create))
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
     }
@@ -36,11 +36,12 @@ public:
 
     actor_zeta::unique_future<void> create();
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create>) {
-            create_(msg);
+            return dispatch(this, &dummy_supervisor::create, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     void enqueue_impl(actor_zeta::message_ptr msg) {
@@ -54,7 +55,6 @@ public:
 
 private:
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::behavior_t create_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::list<std::unique_ptr<storage_t, actor_zeta::pmr::deleter_t>> storage_;
     std::set<int64_t> ids_;
@@ -66,8 +66,8 @@ public:
         : actor_zeta::basic_actor<storage_t>(resource_ptr) {
     }
 
-    void behavior(actor_zeta::mailbox::message*) {
-
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message*) {
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~storage_t() = default;

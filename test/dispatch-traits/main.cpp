@@ -2,14 +2,12 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 
 class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
     explicit test_actor(actor_zeta::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_actor>(ptr)
-        , method1_(actor_zeta::make_behavior(ptr, this, &test_actor::method1))
-        , method2_(actor_zeta::make_behavior(ptr, this, &test_actor::method2))
-        , method3_(actor_zeta::make_behavior(ptr, this, &test_actor::method3))
         , call_count1_(0)
         , call_count2_(0)
         , call_count3_(0) {
@@ -40,18 +38,16 @@ public:
         &test_actor::method3
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<test_actor, &test_actor::method1>:
-                method1_(msg);
-                break;
+                return dispatch(this, &test_actor::method1, msg);
             case actor_zeta::msg_id<test_actor, &test_actor::method2>:
-                method2_(msg);
-                break;
+                return dispatch(this, &test_actor::method2, msg);
             case actor_zeta::msg_id<test_actor, &test_actor::method3>:
-                method3_(msg);
-                break;
+                return dispatch(this, &test_actor::method3, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     int call_count1() const { return call_count1_; }
@@ -61,9 +57,6 @@ public:
     std::string last_value2() const { return last_value2_; }
 
 private:
-    actor_zeta::behavior_t method1_;
-    actor_zeta::behavior_t method2_;
-    actor_zeta::behavior_t method3_;
     int call_count1_;
     int call_count2_;
     int call_count3_;

@@ -1,6 +1,7 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
+#include <actor-zeta/dispatch.hpp>
 
 #include <iostream>
 #include <string>
@@ -22,20 +23,17 @@ public:
 
     explicit worker_actor(actor_zeta::pmr::memory_resource* ptr, std::string name)
         : actor_zeta::basic_actor<worker_actor>(ptr)
-        , name_(std::move(name))
-        , process_task_(actor_zeta::make_behavior(resource(), this, &worker_actor::process_task))
-        , get_status_(actor_zeta::make_behavior(resource(), this, &worker_actor::get_status)) {
+        , name_(std::move(name)) {
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<worker_actor, &worker_actor::process_task>:
-                process_task_(msg);
-                break;
+                return actor_zeta::dispatch(this, &worker_actor::process_task, msg);
             case actor_zeta::msg_id<worker_actor, &worker_actor::get_status>:
-                get_status_(msg);
-                break;
+                return actor_zeta::dispatch(this, &worker_actor::get_status, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     std::string name() const { return name_; }
@@ -44,8 +42,6 @@ public:
 private:
     std::string name_;
     size_t tasks_processed_ = 0;
-    actor_zeta::behavior_t process_task_;
-    actor_zeta::behavior_t get_status_;
 };
 
 actor_zeta::unique_future<void> worker_actor::process_task(const std::string& task) {
@@ -67,11 +63,7 @@ public:
     supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* scheduler)
         : actor_zeta::base::actor_mixin<supervisor_actor>()
         , resource_(ptr)
-        , scheduler_(scheduler)
-        , create_worker_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::create_worker))
-        , assign_task_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::assign_task))
-        , stop_workers_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::stop_workers))
-        , check_status_(actor_zeta::make_behavior(resource_, this, &supervisor_actor::check_status)) {
+        , scheduler_(scheduler) {
     }
 
     actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
@@ -126,17 +118,18 @@ public:
         return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::create_worker>) {
-            create_worker_(msg);
+            return actor_zeta::dispatch(this, &supervisor_actor::create_worker, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::assign_task>) {
-            assign_task_(msg);
+            return actor_zeta::dispatch(this, &supervisor_actor::assign_task, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::stop_workers>) {
-            stop_workers_(msg);
+            return actor_zeta::dispatch(this, &supervisor_actor::stop_workers, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::check_status>) {
-            check_status_(msg);
+            return actor_zeta::dispatch(this, &supervisor_actor::check_status, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     size_t worker_count() const { return workers_.size(); }
@@ -171,11 +164,6 @@ private:
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> workers_;
     size_t next_worker_ = 0;
     std::mutex mutex_;
-
-    actor_zeta::behavior_t create_worker_;
-    actor_zeta::behavior_t assign_task_;
-    actor_zeta::behavior_t stop_workers_;
-    actor_zeta::behavior_t check_status_;
 };
 
 int main() {

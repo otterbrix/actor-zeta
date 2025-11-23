@@ -2,6 +2,7 @@
 
 #include "test/tooltestsuites/scheduler_test.hpp"
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <iostream>
 #include <list>
 
@@ -26,8 +27,6 @@ public:
     dummy_supervisor(actor_zeta::pmr::memory_resource* resource, uint64_t threads, uint64_t throughput)
         : actor_mixin<dummy_supervisor>()
         , resource_(resource)
-        , create_storage_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create_storage))
-        , create_test_handlers_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create_test_handlers))
         , executor_(new actor_zeta::test::scheduler_test_t(threads, throughput)) {
         scheduler_test()->start();
         constructor_counter++;
@@ -40,12 +39,13 @@ public:
         destructor_counter++;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_storage>) {
-            create_storage_(msg);
+            return dispatch(this, &dummy_supervisor::create_storage, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_test_handlers>) {
-            create_test_handlers_(msg);
+            return dispatch(this, &dummy_supervisor::create_test_handlers, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
@@ -90,8 +90,6 @@ protected:
 
 private:
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::behavior_t create_storage_;
-    actor_zeta::behavior_t create_test_handlers_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::list<std::unique_ptr<storage_t,actor_zeta::pmr::deleter_t>> storages_;
     std::list<std::unique_ptr<test_handlers,actor_zeta::pmr::deleter_t>> test_handlers_;
@@ -120,43 +118,24 @@ public:
 
 public:
     explicit storage_t(actor_zeta::pmr::memory_resource* resource_)
-        : actor_zeta::basic_actor<storage_t>(resource_)
-        , init_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::init))
-        , search_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::search))
-        , add_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::add))
-        , delete_table_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::delete_table))
-        , create_table_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::create_table)) {
+        : actor_zeta::basic_actor<storage_t>(resource_) {
         constructor_counter++;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<storage_t, &storage_t::init>) {
-            init_(msg);
+            return dispatch(this, &storage_t::init, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::search>) {
-            search_(msg);
+            return dispatch(this, &storage_t::search, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::add>) {
-            add_(msg);
+            return dispatch(this, &storage_t::add, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::delete_table>) {
-            delete_table_(msg);
+            return dispatch(this, &storage_t::delete_table, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::create_table>) {
-            create_table_(msg);
+            return dispatch(this, &storage_t::create_table, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~storage_t() {
@@ -214,13 +193,6 @@ public:
         &storage_t::delete_table,
         &storage_t::create_table
     >;
-
-private:
-    actor_zeta::behavior_t init_;
-    actor_zeta::behavior_t search_;
-    actor_zeta::behavior_t add_;
-    actor_zeta::behavior_t delete_table_;
-    actor_zeta::behavior_t create_table_;
 };
 
 uint64_t storage_t::constructor_counter = 0;
@@ -244,31 +216,27 @@ public:
 
 public:
     test_handlers(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<test_handlers>(ptr)
-        , ptr_0_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_0))
-        , ptr_1_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_1))
-        , ptr_2_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_2))
-        , ptr_3_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_3))
-        , ptr_4_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_4)) {
+        : actor_zeta::basic_actor<test_handlers>(ptr) {
         init();
     }
 
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_0>) {
-            ptr_0_(msg);
+            return dispatch(this, &test_handlers::ptr_0, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_1>) {
-            ptr_1_(msg);
+            return dispatch(this, &test_handlers::ptr_1, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_2>) {
-            ptr_2_(msg);
+            return dispatch(this, &test_handlers::ptr_2, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_3>) {
-            ptr_3_(msg);
+            return dispatch(this, &test_handlers::ptr_3, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_4>) {
-            ptr_4_(msg);
+            return dispatch(this, &test_handlers::ptr_4, msg);
         } else {
             TRACE("+++");
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~test_handlers() = default;
@@ -318,12 +286,6 @@ private:
         TRACE("private init");
         init_counter++;
     }
-
-    actor_zeta::behavior_t ptr_0_;
-    actor_zeta::behavior_t ptr_1_;
-    actor_zeta::behavior_t ptr_2_;
-    actor_zeta::behavior_t ptr_3_;
-    actor_zeta::behavior_t ptr_4_;
 };
 
 uint64_t test_handlers::init_counter = 0;

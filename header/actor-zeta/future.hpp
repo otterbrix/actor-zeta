@@ -285,6 +285,22 @@ namespace actor_zeta {
             return state_.get();  // Return raw pointer from intrusive_ptr
         }
 
+        /// @brief Release ownership of state (transfer to continuation chain)
+        /// @return Raw pointer to state (caller takes ownership via refcount)
+        /// @note After this call, future is INVALID (state_ = nullptr)
+        /// @note Uses intrusive_ptr::detach() which does NOT decrement refcount
+        /// @note Thread-safe: atomic operation without race condition
+        ///
+        /// Example usage:
+        /// @code
+        /// auto* raw_state = future.release_state();  // Ownership transferred
+        /// raw_state->set_continuation(target);       // Link states
+        /// // raw_state now owned by continuation chain (refcount unchanged)
+        /// @endcode
+        [[nodiscard]] detail::future_state<T>* release_state() noexcept {
+            return state_.detach();  // intrusive_ptr::detach() returns ptr without decrement
+        }
+
         [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
             assert(state_ && "memory_resource() called on moved-from or invalid future");
             return state_->memory_resource();
@@ -564,6 +580,14 @@ namespace actor_zeta {
 
         [[nodiscard]] detail::future_state<void>* get_state() const noexcept {
             return state_.get();  // Return raw pointer from intrusive_ptr
+        }
+
+        /// @brief Release ownership of state (transfer to continuation chain)
+        /// @return Raw pointer to state (caller takes ownership via refcount)
+        /// @note After this call, future is INVALID (state_ = nullptr)
+        /// @note Uses intrusive_ptr::detach() which does NOT decrement refcount
+        [[nodiscard]] detail::future_state<void>* release_state() noexcept {
+            return state_.detach();  // intrusive_ptr::detach() returns ptr without decrement
         }
 
         struct promise_type {

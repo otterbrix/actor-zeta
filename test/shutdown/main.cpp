@@ -4,6 +4,7 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <thread>
 #include <chrono>
 #include <vector>
@@ -12,8 +13,7 @@
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
     explicit worker_actor(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<worker_actor>(ptr)
-        , ping_(actor_zeta::make_behavior(resource(), this, &worker_actor::ping)) {
+        : actor_zeta::basic_actor<worker_actor>(ptr) {
     }
 
     actor_zeta::unique_future<void> ping() {
@@ -21,16 +21,14 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
-            ping_(msg);
+            return dispatch(this, &worker_actor::ping, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::ping>;
-
-private:
-    actor_zeta::behavior_t ping_;
 };
 
 // Balancer actor that manually enqueues and schedules
@@ -57,8 +55,9 @@ public:
         workers_.emplace_back(std::move(worker));
     }
 
-    void behavior(actor_zeta::mailbox::message* /*msg*/) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* /*msg*/) {
         // Balancer doesn't process messages directly - it forwards them to workers
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     template<typename R, typename... Args>

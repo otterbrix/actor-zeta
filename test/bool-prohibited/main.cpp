@@ -2,16 +2,13 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 
 // Good actor - uses void (fire-and-forget) and other types (request-response)
 class good_actor final : public actor_zeta::basic_actor<good_actor> {
 public:
     explicit good_actor(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<good_actor>(ptr)
-        , ping_(actor_zeta::make_behavior(resource(), this, &good_actor::ping))
-        , calculate_(actor_zeta::make_behavior(resource(), this, &good_actor::calculate))
-        , check_status_(actor_zeta::make_behavior(resource(), this, &good_actor::check_status))
-        , get_name_(actor_zeta::make_behavior(resource(), this, &good_actor::get_name)) {
+        : actor_zeta::basic_actor<good_actor>(ptr) {
     }
 
     // ALLOWED: void - fire-and-forget
@@ -36,17 +33,18 @@ public:
         return actor_zeta::make_ready_future<std::string>(resource(), std::string("good_actor"));
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<good_actor, &good_actor::ping>) {
-            ping_(msg);
+            return dispatch(this, &good_actor::ping, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::calculate>) {
-            calculate_(msg);
+            return dispatch(this, &good_actor::calculate, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::check_status>) {
-            check_status_(msg);
+            return dispatch(this, &good_actor::check_status, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::get_name>) {
-            get_name_(msg);
+            return dispatch(this, &good_actor::get_name, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -59,10 +57,6 @@ public:
     int get_ping_count() const { return ping_count_; }
 
 private:
-    actor_zeta::behavior_t ping_;
-    actor_zeta::behavior_t calculate_;
-    actor_zeta::behavior_t check_status_;
-    actor_zeta::behavior_t get_name_;
     int ping_count_ = 0;
 };
 

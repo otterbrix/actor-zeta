@@ -2,6 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -12,8 +13,7 @@ class refcount_stress_actor final : public actor_zeta::basic_actor<refcount_stre
 public:
     explicit refcount_stress_actor(actor_zeta::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<refcount_stress_actor>(resource)
-        , increment_behavior_(actor_zeta::make_behavior(resource, this, &refcount_stress_actor::increment))
-        , get_value_behavior_(actor_zeta::make_behavior(resource, this, &refcount_stress_actor::get_value)) {
+        , value_{0} {
     }
 
     actor_zeta::unique_future<void> increment(int delta) {
@@ -25,13 +25,14 @@ public:
         return actor_zeta::make_ready_future<int>(resource(), value_.load(std::memory_order_relaxed));
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<refcount_stress_actor, &refcount_stress_actor::increment>) {
-            increment_behavior_(msg);
+            return dispatch(this, &refcount_stress_actor::increment, msg);
         } else if (cmd == actor_zeta::msg_id<refcount_stress_actor, &refcount_stress_actor::get_value>) {
-            get_value_behavior_(msg);
+            return dispatch(this, &refcount_stress_actor::get_value, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -40,9 +41,7 @@ public:
     >;
 
 private:
-    actor_zeta::behavior_t increment_behavior_;
-    actor_zeta::behavior_t get_value_behavior_;
-    mutable std::atomic<int> value_{0};
+    mutable std::atomic<int> value_;
 };
 
 // =============================================================================

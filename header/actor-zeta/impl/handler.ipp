@@ -13,6 +13,72 @@ namespace actor_zeta {
 }
 
 namespace actor_zeta { namespace base {
+
+    /// @brief Link future result to message result_slot via continuation (NON-BLOCKING)
+    /// @param source Future from method call (e.g., (ptr->*f)(args...))
+    /// @param target_slot Message's result_slot to receive result
+    /// @note Uses continuation mechanism - NEVER calls .get() on suspended futures
+    /// @note Thread-safe: CAS protection in set_result_rtt()
+    /// @note Refcount management: source state kept alive by continuation_ link
+    ///
+    /// @details
+    /// FAST PATH (source ready):
+    ///   - Extract result via .get()
+    ///   - Set target_slot->result_ directly
+    ///   - Set target_slot->state_ = ready
+    ///   - Total: 1 allocation (target_slot), NO blocking
+    ///
+    /// SLOW PATH (source not ready):
+    ///   - Call source.release_state() (returns raw pointer, no refcount change)
+    ///   - Call source_state->set_continuation(target_slot)
+    ///     * Increments source_state refcount (keeps it alive)
+    ///     * Stores target_slot in source_state->continuation_
+    ///   - When source becomes ready:
+    ///     * set_result_rtt() propagates result to continuation_
+    ///     * Decrements source_state refcount (may destroy it)
+    ///   - Total: 0 additional allocations, NO blocking
+    ///
+    /// Example usage:
+    /// @code
+    /// // BEFORE (blocking):
+    /// T value = std::move(future).get();  // BLOCKS if not ready!
+    /// if (auto slot = msg->result_slot()) {
+    ///     slot->set_result_rtt(detail::rtt(slot->memory_resource(), std::move(value)));
+    /// }
+    ///
+    /// // AFTER (non-blocking):
+    /// if (auto slot = msg->result_slot()) {
+    ///     link_future_to_slot(std::move(future), slot);  // NEVER blocks!
+    /// }
+    /// @endcode
+    template<typename T>
+    void link_future_to_slot(
+        unique_future<T> source,
+        intrusive_ptr<detail::future_state_base> target_slot
+    ) noexcept {
+        // FAST PATH: Already ready - transfer result immediately
+        if (source.is_ready()) {
+            if constexpr (std::is_void_v<T>) {
+                std::move(source).get();  // Consume void future
+                target_slot->set_result_rtt(detail::rtt(target_slot->memory_resource(), int{0}));
+            } else {
+                T value = std::move(source).get();  // Extract result
+                target_slot->set_result_rtt(detail::rtt(target_slot->memory_resource(), std::move(value)));
+            }
+            target_slot->set_state(detail::future_state_enum::ready);
+            return;
+        }
+
+        // SLOW PATH: NOT ready - set continuation (NO BLOCKING!)
+        // release_state() transfers ownership WITHOUT decrementing refcount
+        auto* source_state = source.release_state();
+
+        // set_continuation() increments source_state refcount to keep it alive
+        // When source becomes ready, set_result_rtt() will:
+        //   1. Propagate result to target_slot
+        //   2. Decrement source_state refcount (potentially destroying it)
+        source_state->set_continuation(target_slot);
+    }
     // clang-format off
         template <class List, std::size_t I>
         using forward_arg =
@@ -140,16 +206,9 @@ namespace actor_zeta { namespace base {
             using T = typename type_traits::is_unique_future<result_type>::value_type;
             result_type future = (ptr->*f)((actor_zeta::detail::get<I, args_type_list>(args))...);
 
-            if constexpr (std::is_void<T>::value) {
-                std::move(future).get();
-                if (auto slot = msg->result_slot()) {
-                    slot->set_result_rtt(detail::rtt(slot->memory_resource(), int{0}));
-                }
-            } else {
-                T value = std::move(future).get();
-                if (auto slot = msg->result_slot()) {
-                    slot->set_result_rtt(detail::rtt(slot->memory_resource(), std::move(value)));
-                }
+            // Use continuation-based linking (NON-BLOCKING!)
+            if (auto slot = msg->result_slot()) {
+                link_future_to_slot(std::move(future), slot);
             }
             msg->set_error(mailbox::slot_error_code::ok);
         }
@@ -189,16 +248,9 @@ namespace actor_zeta { namespace base {
                     using T = typename type_traits::is_unique_future<result_type>::value_type;
                     result_type future = (ptr->*func)();
 
-                    if constexpr (std::is_void<T>::value) {
-                        std::move(future).get();
-                        if (auto slot = msg->result_slot()) {
-                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), int{0}));
-                        }
-                    } else {
-                        T value = std::move(future).get();
-                        if (auto slot = msg->result_slot()) {
-                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), std::move(value)));
-                        }
+                    // Use continuation-based linking (NON-BLOCKING!)
+                    if (auto slot = msg->result_slot()) {
+                        link_future_to_slot(std::move(future), slot);
                     }
                     msg->set_error(mailbox::slot_error_code::ok);
                 }
@@ -231,16 +283,9 @@ namespace actor_zeta { namespace base {
                     using T = typename type_traits::is_unique_future<result_type>::value_type;
                     result_type future = (ptr->*func)(std::forward<original_arg_type_0>(static_cast<original_arg_type_0>(tmp.get<decay_arg_type_0>(0))));
 
-                    if constexpr (std::is_void<T>::value) {
-                        std::move(future).get();
-                        if (auto slot = msg->result_slot()) {
-                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), int{0}));
-                        }
-                    } else {
-                        T value = std::move(future).get();
-                        if (auto slot = msg->result_slot()) {
-                            slot->set_result_rtt(detail::rtt(slot->memory_resource(), std::move(value)));
-                        }
+                    // Use continuation-based linking (NON-BLOCKING!)
+                    if (auto slot = msg->result_slot()) {
+                        link_future_to_slot(std::move(future), slot);
                     }
                     msg->set_error(mailbox::slot_error_code::ok);
                 }

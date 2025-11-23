@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
@@ -22,32 +23,28 @@ public:
     >;
 
     worker_t(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<worker_t>(ptr)
-        , download_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::download_with_result))
-        , work_data_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::work_data_with_result)) {
+        : actor_zeta::basic_actor<worker_t>(ptr) {
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         std::cerr << "[Worker " << id() << "] behavior() called, cmd=" << cmd
                   << ", error_before=" << static_cast<int>(msg->error()) << std::endl;
 
         switch (cmd) {
             case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>: {
-                download_with_result_(msg);
+                auto result = actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
                 std::cerr << "[Worker " << id() << "] After handler, error=" << static_cast<int>(msg->error()) << std::endl;
-                break;
+                return result;
             }
             case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>: {
-                work_data_with_result_(msg);
-                break;
+                return actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
             }
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
-    actor_zeta::behavior_t download_with_result_;
-    actor_zeta::behavior_t work_data_with_result_;
     std::string tmp_;
 };
 
@@ -74,7 +71,6 @@ public:
     supervisor_lite(memory_resource* ptr)
         : actor_zeta::base::actor_mixin<supervisor_lite>()
         , resource_(ptr)
-        , create_(actor_zeta::make_behavior(resource_,  this, &supervisor_lite::create))
         , e_(new actor_zeta::scheduler::sharing_scheduler(2, 1000)) {
         e_->start();
     }
@@ -93,11 +89,12 @@ public:
         return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>) {
-            create_(msg);
+            return actor_zeta::dispatch(this, &supervisor_lite::create, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -143,7 +140,6 @@ private:
     }
 
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::behavior_t create_;
     actor_zeta::scheduler::sharing_scheduler* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};
