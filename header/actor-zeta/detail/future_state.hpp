@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdint>
 #include <thread>  // for std::this_thread::yield()
+#include <iostream>  // for debug output
 
 namespace actor_zeta { namespace detail {
 
@@ -291,31 +292,55 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
-        /// @note WITH continuation propagation support
+        /// @note WITH continuation propagation support AND coroutine resumption
         void set_result_rtt(rtt&& value) noexcept override {
+            std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this)
+                      << " state=" << static_cast<int>(state_.load(std::memory_order_relaxed))
+                      << " has_coro=" << (coro_handle_ && !coro_handle_.done())
+                      << " has_continuation=" << (continuation_ != nullptr) << std::endl;
+
             // STEP 1: Atomic transition pending → setting (CAS protection!)
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
                                                std::memory_order_acq_rel,
                                                std::memory_order_acquire)) {
+                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this)
+                          << " CAS FAILED, state already set (expected=pending, actual=" << static_cast<int>(expected) << ")" << std::endl;
                 return;  // Already set, cancelled, or concurrent set → ignore
             }
 
             // STEP 2: Store result (protected by state==setting)
             result_.swap(value);
 
-            // STEP 3: Publish ready state BEFORE continuation propagation
+            // STEP 3: Publish ready state BEFORE continuation/coroutine handling
             // Memory ordering: release ensures result_ write is visible before state change
             state_.store(future_state_enum::ready, std::memory_order_release);
+            std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this) << " state set to READY" << std::endl;
 
-            // STEP 4: Propagate to continuation (if exists)
+            // STEP 4a: Resume coroutine if suspended (BEFORE continuation propagation!)
+            // Coroutine will extract result via await_resume() → .get()
+            // Then co_return propagates to continuation
+            if (coro_handle_ && !coro_handle_.done()) {
+                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this) << " Resuming suspended coroutine" << std::endl;
+                coro_handle_.resume();  // Resume coroutine - it will call .get() in await_resume()
+                // After resume, coroutine may have propagated result to continuation
+                // Do NOT access result_ or continuation_ here - may be moved/cleared!
+                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this) << " Coroutine resumed, returning" << std::endl;
+                return;
+            }
+
+            // STEP 4b: Propagate to continuation (if exists and no coroutine)
             bool had_continuation = false;
             if (continuation_) {
                 had_continuation = true;
+                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this)
+                          << " Propagating to continuation=" << static_cast<void*>(continuation_.get()) << std::endl;
                 // CRITICAL: MOVE result_ (not copy!) - transfer ownership through chain
                 continuation_->set_result_rtt(std::move(result_));  // Recursive call!
                 continuation_->set_state(future_state_enum::ready);
                 continuation_ = nullptr;  // Release continuation ownership
+            } else {
+                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this) << " No continuation, result stays here" << std::endl;
             }
 
 #if HAVE_ATOMIC_WAIT

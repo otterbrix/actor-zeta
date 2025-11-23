@@ -65,21 +65,29 @@ public:
     /// @brief Coroutine method that calls worker and checks thread
     /// @return Tuple of (result, before_thread_id, after_thread_id)
     unique_future<int> process(int x) {
+        std::cerr << "[process] START x=" << x << std::endl;
+
         // Record thread BEFORE co_await
         auto before_thread = std::this_thread::get_id();
         before_thread_id_.store(before_thread);
+        std::cerr << "[process] before_thread recorded" << std::endl;
 
         // Call worker asynchronously
+        std::cerr << "[process] Calling send() to worker..." << std::endl;
         auto future = send(worker_, address(), &worker_actor::compute, x);
+        std::cerr << "[process] send() returned, needs_scheduling=" << future.needs_scheduling() << std::endl;
 
         // IMPORTANT: Check if worker needs scheduling and schedule it
         // This is the key fix - we MUST schedule the receiver if it needs it
         if (future.needs_scheduling() && scheduler_) {
+            std::cerr << "[process] Enqueueing worker" << std::endl;
             scheduler_->enqueue(worker_);
         }
 
         // CRITICAL TEST: co_await should suspend and resume in SAME thread
+        std::cerr << "[process] BEFORE co_await" << std::endl;
         int result = co_await std::move(future);
+        std::cerr << "[process] AFTER co_await, result=" << result << std::endl;
 
         // Record thread AFTER co_await
         auto after_thread = std::this_thread::get_id();
@@ -90,19 +98,23 @@ public:
             thread_mismatch_detected_.store(true);
         }
 
+        std::cerr << "[process] About to co_return result=" << result << std::endl;
         co_return result;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&client_actor::process>;
 
     unique_future<void> behavior(mailbox::message* msg) {
+        std::cerr << "[client_actor::behavior] START, command=" << msg->command() << std::endl;
         switch (msg->command()) {
             case msg_id<client_actor, &client_actor::process>:
+                std::cerr << "[client_actor::behavior] Matched process command, calling dispatch()" << std::endl;
                 return dispatch(this, &client_actor::process, msg);
             default:
                 break;
         }
 
+        std::cerr << "[client_actor::behavior] No match, returning ready void" << std::endl;
         // Note: Actor does NOT re-schedule itself
         // Test will handle scheduling via polling loop when needed
         return make_ready_future_void(resource());
@@ -135,13 +147,46 @@ TEST_CASE("coroutine resumes in owner actor's thread, not sender's thread") {
     // Send request from client to worker via coroutine
     auto result_future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
 
-    // Schedule client to process the message (only if needed)
-    if (result_future.needs_scheduling()) {
-        scheduler->enqueue(client.get());
-    }
+    int result = 0;
 
-    // Just wait for result - let scheduler handle execution
-    int result = std::move(result_future).get();
+    // Check if we need to schedule the actor
+    std::cerr << "[TEST] needs_scheduling = " << result_future.needs_scheduling() << std::endl;
+
+    if (result_future.needs_scheduling()) {
+        // Actor needs scheduling - enqueue it
+        std::cerr << "[TEST] Enqueueing client actor" << std::endl;
+        scheduler->enqueue(client.get());
+
+        // IMPORTANT: After enqueue(), continuation propagates result to message slot
+        // We CANNOT call .get() on result_future anymore (it's moved-from)
+        // Instead, we wait via polling on is_ready() which works through continuation
+
+        // Polling: Wait until future becomes ready (via continuation propagation)
+        auto start = std::chrono::steady_clock::now();
+        int iterations = 0;
+        while (!result_future.is_ready()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            iterations++;
+
+            // Timeout protection (10 seconds)
+            if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
+                std::cerr << "[TEST] TIMEOUT after " << iterations << " iterations" << std::endl;
+                FAIL("Timeout waiting for result");
+            }
+        }
+
+        std::cerr << "[TEST] Future ready after " << iterations << " iterations" << std::endl;
+        std::cerr << "[TEST] result_future.valid() = " << result_future.valid() << std::endl;
+        std::cerr << "[TEST] result_future.is_ready() = " << result_future.is_ready() << std::endl;
+        // Now future is ready - safe to get result
+        std::cerr << "[TEST] Calling .get()..." << std::endl;
+        result = std::move(result_future).get();
+        std::cerr << "[TEST] Got result = " << result << std::endl;
+    } else {
+        // Actor already processed the message synchronously
+        std::cerr << "[TEST] Calling .get() immediately (sync path)" << std::endl;
+        result = std::move(result_future).get();
+    }
 
     // Give scheduler time to finish processing
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

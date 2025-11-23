@@ -6,6 +6,7 @@
 #include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/impl/handler.ipp>
+#include <iostream>  // for debug output
 
 namespace actor_zeta {
 
@@ -81,8 +82,12 @@ namespace actor_zeta {
                 result_type future = (self->*method)(std::forward<arg_type>(arg));
 
                 // Link result to msg->result_slot() via continuation (non-blocking!)
+                std::cerr << "[dispatch] Checking msg->result_slot()..." << std::endl;
                 if (auto slot = msg->result_slot()) {
+                    std::cerr << "[dispatch] slot exists, calling link_future_to_slot()" << std::endl;
                     base::link_future_to_slot(std::move(future), slot);
+                } else {
+                    std::cerr << "[dispatch] slot is nullptr, NOT linking!" << std::endl;
                 }
                 msg->set_error(mailbox::slot_error_code::ok);
             }

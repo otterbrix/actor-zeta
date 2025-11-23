@@ -12,6 +12,7 @@
 #include <actor-zeta/scheduler/resumable.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
+#include <actor-zeta/impl/handler.ipp>  // For link_future_to_slot
 
 #include <actor-zeta/mailbox/mailbox.hpp>
 #include <actor-zeta/mailbox/default_mailbox.hpp>
@@ -535,17 +536,24 @@ namespace actor_zeta { namespace base {
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
                         auto behavior_future = self()->behavior(guard.get());
 
-                        // ❌ НЕТ .get() ЗДЕСЬ!
-                        // behavior_future может быть:
-                        // - ready (если behavior сделал return без co_await)
-                        // - suspended (если behavior сделал co_await)
-
-                        // Просто игнорируем future - результат уже связан с msg->result_slot()
-                        // через dispatch() → link_future_to_slot()
-
-                        // NOTE: Если behavior делает co_await, актор блокируется здесь в своем потоке
-                        // Это ОК - пользователь сам выбрал блокировку!
-                        (void)behavior_future;  // Explicitly discard unused future
+                        // CRITICAL: Only link future if it's valid and has state!
+                        // If behavior() returns ready future (no co_await), it might be empty after return_value().
+                        // Don't try to link empty futures - they have no promise state to keep alive.
+                        if (behavior_future.valid()) {
+                            if (auto slot = guard.get()->result_slot()) {
+                                // Link behavior_future<void> to result_slot via continuation
+                                // This keeps promise state alive non-blocking
+                                base::link_future_to_slot(std::move(behavior_future), slot);
+                            } else {
+                                // No result_slot (fire-and-forget) - create dummy slot for continuation
+                                // This keeps promise state alive without blocking the actor thread
+                                auto dummy_slot = pmr::make_counted<detail::future_state<void>>(resource());
+                                base::link_future_to_slot(std::move(behavior_future), dummy_slot);
+                                // dummy_slot will be destroyed when behavior_future completes
+                            }
+                        }
+                        // If !valid(), behavior() completed synchronously (no coroutine suspension)
+                        // Promise state already destroyed, nothing to keep alive
                     }
 
                     ++handled;

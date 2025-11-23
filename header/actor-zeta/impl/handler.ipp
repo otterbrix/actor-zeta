@@ -5,6 +5,7 @@
 #include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
+#include <iostream>  // for debug output
 
 // Forward declaration for unique_future (will be included via future.hpp in user code)
 namespace actor_zeta {
@@ -56,21 +57,31 @@ namespace actor_zeta { namespace base {
         unique_future<T> source,
         intrusive_ptr<detail::future_state_base> target_slot
     ) noexcept {
+        auto* source_ptr = source.get_state();
+        std::cerr << "[link_future_to_slot] source=" << static_cast<void*>(source_ptr)
+                  << " target=" << static_cast<void*>(target_slot.get())
+                  << " source.is_ready()=" << source.is_ready() << std::endl;
+
         // FAST PATH: Already ready - transfer result immediately
         if (source.is_ready()) {
+            std::cerr << "[link_future_to_slot] FAST PATH: source ready, extracting result..." << std::endl;
             if constexpr (std::is_void_v<T>) {
                 std::move(source).get();  // Consume void future
                 target_slot->set_result_rtt(detail::rtt(target_slot->memory_resource(), int{0}));
             } else {
                 T value = std::move(source).get();  // Extract result
+                std::cerr << "[link_future_to_slot] Extracted value, calling target_slot->set_result_rtt()" << std::endl;
                 target_slot->set_result_rtt(detail::rtt(target_slot->memory_resource(), std::move(value)));
             }
-            target_slot->set_state(detail::future_state_enum::ready);
+            // NOTE: Do NOT call set_state() here - set_result_rtt() already set the state!
+            // If set_result_rtt() resumed a coroutine, the state is handled by the coroutine.
+            std::cerr << "[link_future_to_slot] FAST PATH done" << std::endl;
             return;
         }
 
         // SLOW PATH: NOT ready - set continuation (NO BLOCKING!)
         // release_state() transfers ownership WITHOUT decrementing refcount
+        std::cerr << "[link_future_to_slot] SLOW PATH: source NOT ready, setting continuation" << std::endl;
         auto* source_state = source.release_state();
 
         // set_continuation() increments source_state refcount to keep it alive
@@ -78,6 +89,8 @@ namespace actor_zeta { namespace base {
         //   1. Propagate result to target_slot
         //   2. Decrement source_state refcount (potentially destroying it)
         source_state->set_continuation(target_slot);
+
+        std::cerr << "[link_future_to_slot] SLOW PATH done, continuation set" << std::endl;
     }
     // clang-format off
         template <class List, std::size_t I>

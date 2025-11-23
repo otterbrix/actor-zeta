@@ -317,14 +317,16 @@ namespace actor_zeta {
                                                 alignof(detail::future_state<T>));
                 state_ = new (mem) detail::future_state<T>(resource_);
 
-                auto handle = detail::coroutine_handle<promise_type>::from_promise(*this);
-                state_->set_coroutine(handle);
+                // NOTE: Do NOT set coroutine handle here!
+                // Coroutine handle is ONLY set by await_suspend() when THIS future is awaited.
+                // Promise's own state should NOT have coroutine handle - it causes infinite recursion.
 
                 // Use adopt_ref - refcount starts at 1, future adopts that reference
                 return unique_future<T>(adopt_ref, state_, false);
             }
 
             detail::suspend_never initial_suspend() noexcept {
+                // Start immediately - coroutine runs until first co_await or co_return
                 return {};
             }
 
@@ -333,15 +335,21 @@ namespace actor_zeta {
             }
 
             void return_value(T&& value) noexcept {
+                std::cerr << "[return_value] T&& called" << std::endl;
                 assert(state_ && "return_value() with null state");
                 detail::rtt result(resource_, std::forward<T>(value));
-                state_->set_result(std::move(result));
+                std::cerr << "[return_value] Calling set_result_rtt()..." << std::endl;
+                state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
+                std::cerr << "[return_value] set_result_rtt() returned" << std::endl;
             }
 
             void return_value(const T& value) noexcept {
+                std::cerr << "[return_value] const T& called" << std::endl;
                 assert(state_ && "return_value() with null state");
                 detail::rtt result(resource_, value);
-                state_->set_result(std::move(result));
+                std::cerr << "[return_value] Calling set_result_rtt()..." << std::endl;
+                state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
+                std::cerr << "[return_value] set_result_rtt() returned" << std::endl;
             }
 
             void return_value(unique_future<T>&& ready_future) noexcept {
@@ -349,7 +357,7 @@ namespace actor_zeta {
                 assert(ready_future.valid() && "return_value() with invalid future");
                 T value = std::move(ready_future).get();
                 detail::rtt result(resource_, std::move(value));
-                state_->set_result(std::move(result));
+                state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
             }
 
             void unhandled_exception() noexcept {
@@ -601,14 +609,18 @@ namespace actor_zeta {
                                                 alignof(detail::future_state<void>));
                 state_ = new (mem) detail::future_state<void>(resource_);
 
-                auto handle = detail::coroutine_handle<promise_type>::from_promise(*this);
-                state_->set_coroutine(handle);
+                // NOTE: Do NOT set coroutine handle here!
+                // Coroutine handle is ONLY set by await_suspend() when THIS future is awaited.
+                // Promise's own state should NOT have coroutine handle - it causes infinite recursion.
 
                 // Use adopt_ref - refcount starts at 1, future adopts that reference
                 return unique_future<void>(adopt_ref, state_, false);
             }
 
-            detail::suspend_never initial_suspend() noexcept { return {}; }
+            detail::suspend_never initial_suspend() noexcept {
+                // Start immediately - coroutine runs until first co_await or co_return
+                return {};
+            }
 
             detail::suspend_always final_suspend() noexcept { return {}; }
 
