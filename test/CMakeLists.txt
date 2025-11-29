@@ -3,7 +3,6 @@
 add_subdirectory(tooltestsuites)
 
 add_subdirectory(actor-id)
-add_subdirectory(behavior)
 add_subdirectory(bool-prohibited)
 add_subdirectory(continuation)
 add_subdirectory(coroutines)

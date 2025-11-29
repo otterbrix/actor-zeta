@@ -4,6 +4,8 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/dispatch.hpp>
 
+#include <vector>
+
 using namespace actor_zeta;
 
 /// @brief Worker актор - обрабатывает запросы
@@ -34,29 +36,26 @@ public:
 };
 
 
-/// @brief Client актор - как balancer, но на корутинах
+/// @brief Client актор - использует только address_t для связи с worker
+/// Resume управляется supervisor'ом снаружи
 class client_actor final : public basic_actor<client_actor> {
 public:
-    explicit client_actor(pmr::memory_resource* resource, worker_actor* worker)
+    explicit client_actor(pmr::memory_resource* resource, address_t worker_address)
         : basic_actor<client_actor>(resource)
-        , worker_(worker)
+        , worker_address_(worker_address)
         , final_result_(0) {
     }
 
-    /// @brief Корутина с inline execution (как balancer)
+    /// @brief Корутина - отправляет запрос и ждёт результат
+    /// Suspend/resume управляется supervisor'ом
     unique_future<int> process(int x) {
         std::cerr << "[client::process] START x=" << x << std::endl;
 
-        // Отправляем запрос worker'у
-        auto future = send(worker_, address(), &worker_actor::compute, x);
+        // Отправляем запрос worker'у через address_t (только адрес!)
+        auto future = send(worker_address_, address(), &worker_actor::compute, x);
 
-        // Inline execution - как в balancer!
-        while (!future.is_ready()) {
-            std::cerr << "[client::process] Worker not ready, resuming..." << std::endl;
-            worker_->resume(1);
-        }
-
-        // co_await на ГОТОВУЮ future - НЕ suspend!
+        // co_await - suspend если не готово
+        // Supervisor возобновит корутину когда future станет ready
         int result = co_await std::move(future);
         std::cerr << "[client::process] Got result: " << result << std::endl;
 
@@ -88,8 +87,40 @@ public:
     ~client_actor() = default;
 
 private:
-    worker_actor* worker_;
+    address_t worker_address_;
     std::atomic<int> final_result_;
+};
+
+
+/// @brief Простой supervisor - управляет resume() акторов
+/// Это отдельная сущность которая знает о всех акторах
+/// Для теста: принимает конкретные типы акторов
+class simple_supervisor {
+public:
+    void set_actors(worker_actor* w, client_actor* c = nullptr) {
+        worker_ = w;
+        client_ = c;
+    }
+
+    /// @brief Запускает акторов пока future не станет ready
+    template<typename T>
+    void run_until_ready(unique_future<T>& future, int max_iterations = 1000) {
+        int iterations = 0;
+        while (!future.is_ready() && iterations < max_iterations) {
+            run_once();
+            ++iterations;
+        }
+    }
+
+    /// @brief Запускает один цикл resume для всех акторов
+    void run_once() {
+        if (client_) client_->resume(1);
+        if (worker_) worker_->resume(1);
+    }
+
+private:
+    worker_actor* worker_ = nullptr;
+    client_actor* client_ = nullptr;
 };
 
 
@@ -97,32 +128,41 @@ TEST_CASE("worker only") {
     auto* resource = pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource);
 
+    // Supervisor управляет resume
+    simple_supervisor supervisor;
+    supervisor.set_actors(worker.get());
+
     auto future = send(worker.get(), address_t::empty_address(), &worker_actor::compute, 21);
-    worker->resume(1);
+
+    // Supervisor запускает акторов
+    supervisor.run_until_ready(future);
 
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).get() == 42);
 }
 
 
-TEST_CASE("client-worker coroutine (like balancer)") {
+TEST_CASE("client-worker coroutine with supervisor") {
     auto* resource = pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource);
-    auto client = spawn<client_actor>(resource, worker.get());
+    auto client = spawn<client_actor>(resource, worker->address());
+
+    // Supervisor знает о всех акторах и управляет их resume
+    simple_supervisor supervisor;
+    supervisor.set_actors(worker.get(), client.get());
 
     // Отправляем сообщение client'у
     auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
 
-    // Resume client - он внутри вызовет worker->resume() (inline execution)
-    client->resume(1);
+    // Supervisor управляет resume всех акторов
+    supervisor.run_until_ready(future);
 
-    // Результат готов сразу
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).get() == 52);  // 21 * 2 + 10 = 52
 
     // Проверяем через get_result()
     auto result_future = send(client.get(), address_t::empty_address(), &client_actor::get_result);
-    client->resume(1);
+    supervisor.run_until_ready(result_future);
 
     REQUIRE(result_future.is_ready());
     REQUIRE(std::move(result_future).get() == 52);

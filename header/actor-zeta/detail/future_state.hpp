@@ -9,7 +9,6 @@
 #include <cassert>
 #include <cstdint>
 #include <thread>  // for std::this_thread::yield()
-#include <iostream>  // for debug output
 
 namespace actor_zeta { namespace detail {
 
@@ -288,18 +287,12 @@ namespace actor_zeta { namespace detail {
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
         /// @note WITH continuation propagation support AND coroutine resumption
         void set_result_rtt(rtt&& value) noexcept override {
-            std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this)
-                      << " state=" << static_cast<int>(state_.load(std::memory_order_relaxed))
-                      << " has_coro=" << (coro_handle_ && !coro_handle_.done())
-                      << " has_continuation=" << (continuation_ != nullptr) << std::endl;
 
             // STEP 1: Atomic transition pending → setting (CAS protection!)
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
                                                std::memory_order_acq_rel,
                                                std::memory_order_acquire)) {
-                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this)
-                          << " CAS FAILED, state already set (expected=pending, actual=" << static_cast<int>(expected) << ")" << std::endl;
                 return;  // Already set, cancelled, or concurrent set → ignore
             }
 
@@ -309,33 +302,25 @@ namespace actor_zeta { namespace detail {
             // STEP 3: Publish ready state BEFORE continuation/coroutine handling
             // Memory ordering: release ensures result_ write is visible before state change
             state_.store(future_state_enum::ready, std::memory_order_release);
-            std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this) << " state set to READY" << std::endl;
 
             // STEP 4a: DO NOT resume coroutine here - violates thread affinity!
             // Coroutine must be resumed by actor owner in its thread via Manual Polling.
             // Actor calls extract_coroutine_handle() and stores handle, then in behavior()
             // checks is_ready() and calls resume().
             if (coro_handle_ && !coro_handle_.done()) {
-                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this)
-                          << " Coroutine suspended, NOT resuming (actor must poll)" << std::endl;
             }
 
             // STEP 4b: Propagate to continuation (if exists and no coroutine)
             bool had_continuation = false;
             if (continuation_) {
                 had_continuation = true;
-                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this)
-                          << " Propagating to continuation=" << static_cast<void*>(continuation_.get())
-                          << " result_.size()=" << result_.size() << std::endl;
 
                 // CRITICAL: MOVE result_ (not copy!) - transfer ownership through chain
                 continuation_->set_result_rtt(std::move(result_));  // Recursive call!
                 // NOTE: continuation_->set_result_rtt() already set state to ready (line 317)
                 // Do NOT call set_state() again - causes race condition!
                 continuation_ = nullptr;  // Release continuation ownership
-                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this) << " Continuation propagation done" << std::endl;
             } else {
-                std::cerr << "[set_result_rtt] this=" << static_cast<void*>(this) << " No continuation, result stays here" << std::endl;
             }
 
 #if HAVE_ATOMIC_WAIT
@@ -375,8 +360,6 @@ namespace actor_zeta { namespace detail {
 
         /// @brief Take result (move out, mark as consumed)
         [[nodiscard]] rtt take_result() noexcept {
-            std::cerr << "[take_result] this=" << static_cast<void*>(this)
-                      << " result_.size()=" << result_.size() << std::endl;
             // Transition: ready → consuming (protects move operation)
             auto expected = future_state_enum::ready;
             bool transitioned = transition(expected, future_state_enum::consuming);
@@ -385,7 +368,6 @@ namespace actor_zeta { namespace detail {
 
             // Move result out while state==consuming protects from concurrent destructor
             rtt result = std::move(result_);
-            std::cerr << "[take_result] moved result, result.size()=" << result.size() << std::endl;
 
             // Transition: consuming → consumed (move complete, safe to destruct)
             state_.store(future_state_enum::consumed, std::memory_order_release);
@@ -419,9 +401,6 @@ namespace actor_zeta { namespace detail {
         /// @note Source becomes invalid after this - OK because source future
         ///       is destroyed immediately after link_future_to_slot returns
         void propagate_result_to(future_state_base* target) noexcept override {
-            std::cerr << "[propagate_result_to] this=" << static_cast<void*>(this)
-                      << " target=" << static_cast<void*>(target)
-                      << " result_.size()=" << result_.size() << std::endl;
             target->set_result_rtt(std::move(result_));
         }
 
@@ -503,8 +482,6 @@ namespace actor_zeta { namespace detail {
         /// @brief Copy result to target state (void has no result)
         /// @note For void futures, we just mark target as ready
         void propagate_result_to(future_state_base* target) noexcept override {
-            std::cerr << "[propagate_result_to<void>] this=" << static_cast<void*>(this)
-                      << " target=" << static_cast<void*>(target) << std::endl;
             // Void future - just mark target as ready
             target->set_state(future_state_enum::ready);
         }

@@ -2,7 +2,6 @@
 
 #include "traits_actor.hpp"
 #include <actor-zeta/base/actor_mixin.hpp>
-#include <actor-zeta/base/behavior.hpp>
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
@@ -12,7 +11,6 @@
 #include <actor-zeta/scheduler/resumable.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
-#include <actor-zeta/impl/handler.ipp>  // For link_future_to_slot
 
 #include <actor-zeta/mailbox/mailbox.hpp>
 #include <actor-zeta/mailbox/default_mailbox.hpp>
@@ -536,19 +534,12 @@ namespace actor_zeta { namespace base {
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
                         auto behavior_future = self()->behavior(guard.get());
 
-                        // NEW DESIGN: dispatch() no longer links future to msg->result_slot()!
-                        // NOTE: link_future_to_slot is now called in dispatch() where type T is known.
-                        // This solves the problem of losing type information when converting
-                        // unique_future<T> to unique_future<void> in behavior() return.
-                        //
-                        // The behavior_future (unique_future<void>) is still useful for:
+                        // The behavior_future (unique_future<void>) is useful for:
                         // 1. Coroutine management - tracking suspended coroutines
                         // 2. Complex async algorithms inside actors
                         //
                         // TODO: Add coroutine tracking here if needed
                         if (behavior_future.get_state() != nullptr) {
-                            std::cerr << "[resume] behavior_future.state=" << static_cast<void*>(behavior_future.get_state())
-                                      << " is_ready=" << behavior_future.is_ready() << std::endl;
                             // Future state is kept alive by behavior_future until it goes out of scope
                         }
                     }

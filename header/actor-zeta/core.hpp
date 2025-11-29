@@ -3,8 +3,6 @@
 // clang-format off
 #include <actor-zeta/base/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
-#include <actor-zeta/base/handler.hpp>
-#include <actor-zeta/impl/handler.ipp>
 #include <actor-zeta/future.hpp>
 // clang-format on
 
@@ -17,10 +15,7 @@
 namespace actor_zeta {
 
     using base::address_t;
-    using base::make_handler;
     using base::basic_actor;
-    using base::behavior_t;
-    using base::make_behavior;
 
     using mailbox::message;
     using mailbox::message_ptr;

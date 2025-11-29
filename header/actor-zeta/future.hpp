@@ -10,7 +10,6 @@
 #include <chrono>
 #include <thread>
 #include <utility>
-#include <iostream>
 
 namespace actor_zeta {
 
@@ -188,8 +187,6 @@ namespace actor_zeta {
         }
 
         T get() && {
-            std::cerr << "[unique_future<T>::get] this=" << static_cast<void*>(this)
-                      << " state_=" << static_cast<void*>(state_.get()) << std::endl;
             assert(state_ && "get() on invalid future");
 
             int spin_count = 0;
@@ -324,7 +321,6 @@ namespace actor_zeta {
                                                 alignof(detail::future_state<T>));
                 state_ = new (mem) detail::future_state<T>(resource_);
 
-                std::cerr << "[promise::get_return_object] Created coroutine promise state=" << static_cast<void*>(state_) << std::endl;
 
                 // Save coroutine handle in promise state for Manual Polling
                 // Actor can extract it via extract_coroutine_handle() and resume later
@@ -332,7 +328,6 @@ namespace actor_zeta {
                 auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
                 state_->set_coroutine(handle);  // Implicit conversion to coroutine_handle<void>
 
-                std::cerr << "[promise::get_return_object] Set coroutine handle in state" << std::endl;
 
                 // Use adopt_ref - refcount starts at 1, future adopts that reference
                 return unique_future<T>(adopt_ref, state_, false);
@@ -344,7 +339,6 @@ namespace actor_zeta {
             }
 
             detail::suspend_always final_suspend() noexcept {
-                std::cerr << "[final_suspend] promise_type for unique_future<T>, state=" << static_cast<void*>(state_) << std::endl;
                 return {};
             }
 
@@ -358,21 +352,15 @@ namespace actor_zeta {
             }
 
             void return_value(T&& value) noexcept {
-                std::cerr << "[return_value] T&& called" << std::endl;
                 assert(state_ && "return_value() with null state");
                 detail::rtt result(resource_, std::forward<T>(value));
-                std::cerr << "[return_value] Calling set_result_rtt()..." << std::endl;
                 state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
-                std::cerr << "[return_value] set_result_rtt() returned" << std::endl;
             }
 
             void return_value(const T& value) noexcept {
-                std::cerr << "[return_value] const T& called" << std::endl;
                 assert(state_ && "return_value() with null state");
                 detail::rtt result(resource_, value);
-                std::cerr << "[return_value] Calling set_result_rtt()..." << std::endl;
                 state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
-                std::cerr << "[return_value] set_result_rtt() returned" << std::endl;
             }
 
             void return_value(unique_future<T>&& ready_future) noexcept {
@@ -501,8 +489,6 @@ namespace actor_zeta {
             : state_(reinterpret_cast<detail::future_state<void>*>(other.get_state()))
             , needs_scheduling_(other.needs_scheduling())
             , is_ready_void_(false) {
-            std::cerr << "[unique_future<void> conversion ctor] other.state_=" << static_cast<void*>(other.get_state())
-                      << " → this.state_=" << static_cast<void*>(state_.get()) << std::endl;
             // Note: get_state() returns raw pointer, intrusive_ptr constructor calls add_ref()
             // This creates a SHARED view - both futures point to same state with separate refcounts
             // This is safe because:
@@ -916,21 +902,16 @@ namespace actor_zeta {
             , promise_state_(prom_state) {}
 
         [[nodiscard]] bool await_ready() const noexcept {
-            bool ready = future_.is_ready();
-            std::cerr << "[awaiter::await_ready] future.is_ready()=" << ready
-                      << " future.state=" << static_cast<const void*>(future_.get_state()) << std::endl;
-            return ready;
+            return future_.is_ready();
         }
 
         bool await_suspend(std::coroutine_handle<> handle) noexcept {
             if (future_.is_ready()) {
-                std::cerr << "[awaiter::await_suspend] future already ready, not suspending" << std::endl;
                 return false;
             }
 
             auto* state = future_.get_state();
             if (!state) {
-                std::cerr << "[awaiter::await_suspend] future has no state, not suspending" << std::endl;
                 return false;
             }
 
@@ -943,16 +924,13 @@ namespace actor_zeta {
             //
             // Result flow: worker → awaited.result_ → await_resume() → co_return → promise.result_
             // NO continuation chain needed!
-            std::cerr << "[awaiter::await_suspend] Setting coroutine handle in awaited state=" << static_cast<void*>(state) << std::endl;
             state->set_coroutine(handle);
 
             // Re-check after set_coroutine() to close race window
             if (future_.is_ready()) {
-                std::cerr << "[awaiter::await_suspend] future became ready after set_coroutine, not suspending" << std::endl;
                 return false;  // Don't suspend - another thread set result
             }
 
-            std::cerr << "[awaiter::await_suspend] Suspending coroutine, awaited state=" << static_cast<void*>(state) << std::endl;
             return true;
         }
 

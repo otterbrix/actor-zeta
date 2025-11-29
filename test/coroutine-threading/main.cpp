@@ -109,37 +109,29 @@ private:
 
 
 /// @brief Client актор - как balancer, но на корутинах
+/// Использует только address_t для связи с worker
 class client_actor final : public basic_actor<client_actor> {
 public:
-    explicit client_actor(pmr::memory_resource* resource, worker_actor* worker, const std::string& name)
+    explicit client_actor(pmr::memory_resource* resource, address_t worker_address, const std::string& name)
         : basic_actor<client_actor>(resource)
-        , worker_(worker)
+        , worker_address_(worker_address)
         , name_(name)
         , final_result_(0) {
     }
 
-    /// @brief Корутина с inline execution (как balancer)
+    /// @brief Корутина - отправляет запрос и ждёт результат
+    /// Resume управляется снаружи (тестом или scheduler)
     unique_future<int> process(int x) {
         auto tid_start = thread_id_str();
         g_log.log("\n[%::process] === START === thread=% x=%", name_, tid_start, x);
         process_start_thread_ = tid_start;
 
-        // Отправляем запрос worker'у
+        // Отправляем запрос worker'у через address_t
         g_log.log("[%::process] Sending to worker...", name_);
-        auto future = send(worker_, address(), &worker_actor::compute, x);
+        auto future = send(worker_address_, address(), &worker_actor::compute, x);
         g_log.log("[%::process] future.is_ready()=%", name_, future.is_ready());
 
-        // Inline execution - как в balancer!
-        int resume_count = 0;
-        while (!future.is_ready()) {
-            ++resume_count;
-            g_log.log("[%::process] Worker not ready, resuming... (attempt #%)", name_, resume_count);
-            worker_->resume(1);
-            g_log.log("[%::process] After worker resume, future.is_ready()=%", name_, future.is_ready());
-        }
-        g_log.log("[%::process] Worker done after % resume(s)", name_, resume_count);
-
-        // co_await на ГОТОВУЮ future - НЕ suspend!
+        // co_await - suspend если не готово, продолжит когда готово
         auto tid_before_await = thread_id_str();
         g_log.log("[%::process] Before co_await, thread=%", name_, tid_before_await);
 
@@ -148,11 +140,6 @@ public:
         auto tid_after_await = thread_id_str();
         g_log.log("[%::process] After co_await, thread=% result=%", name_, tid_after_await, result);
         process_after_await_thread_ = tid_after_await;
-
-        // Проверка: thread должен быть тот же (не suspend!)
-        if (tid_before_await != tid_after_await) {
-            g_log.log("[%::process] !!! WARNING: Thread changed after co_await !!!", name_);
-        }
 
         final_result_ = result + 10;
         g_log.log("[%::process] final_result=%", name_, final_result_.load());
@@ -200,7 +187,7 @@ public:
     ~client_actor() = default;
 
 private:
-    worker_actor* worker_;
+    address_t worker_address_;
     std::string name_;
     std::atomic<int> final_result_;
     std::string last_behavior_thread_;
@@ -238,13 +225,22 @@ TEST_CASE("single-thread: worker only") {
 TEST_CASE("single-thread: client-worker") {
     auto* resource = pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
-    auto client = spawn<client_actor>(resource, worker.get(), "Client");
+    auto client = spawn<client_actor>(resource, worker->address(), "Client");
 
     g_log.log("\n========== TEST: single-thread: client-worker ==========");
     auto main_thread = thread_id_str();
     g_log.log("[TEST] Main thread: %", main_thread);
 
     auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+
+    // Тест управляет resume снаружи:
+    // 1. Resume client - отправит сообщение worker'у, suspend на co_await
+    client->resume(1);
+
+    // 2. Resume worker - обработает запрос
+    worker->resume(1);
+
+    // 3. Resume client - получит результат и завершится
     client->resume(1);
 
     REQUIRE(future.is_ready());
@@ -270,7 +266,7 @@ TEST_CASE("single-thread: client-worker") {
 TEST_CASE("multi-thread: client resumes worker in same thread") {
     auto* resource = pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
-    auto client = spawn<client_actor>(resource, worker.get(), "Client");
+    auto client = spawn<client_actor>(resource, worker->address(), "Client");
 
     g_log.log("\n========== TEST: multi-thread: client resumes worker ==========");
     auto main_thread = thread_id_str();
@@ -324,8 +320,8 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
     // Each client has its OWN worker (no shared state, no race condition)
     auto worker1 = spawn<worker_actor>(resource, "Worker1");
     auto worker2 = spawn<worker_actor>(resource, "Worker2");
-    auto client1 = spawn<client_actor>(resource, worker1.get(), "Client1");
-    auto client2 = spawn<client_actor>(resource, worker2.get(), "Client2");
+    auto client1 = spawn<client_actor>(resource, worker1->address(), "Client1");
+    auto client2 = spawn<client_actor>(resource, worker2->address(), "Client2");
 
     g_log.log("\n========== TEST: multi-thread: two clients in parallel (separate workers) ==========");
     auto main_thread = thread_id_str();
@@ -390,7 +386,7 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
 TEST_CASE("multi-thread: verify coroutine thread affinity") {
     auto* resource = pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
-    auto client = spawn<client_actor>(resource, worker.get(), "Client");
+    auto client = spawn<client_actor>(resource, worker->address(), "Client");
 
     g_log.log("\n========== TEST: multi-thread: verify coroutine thread affinity ==========");
     auto main_thread = thread_id_str();
@@ -479,7 +475,7 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
 
             // Each thread creates its OWN worker and client (no shared state)
             auto local_worker = spawn<worker_actor>(resource, "Worker" + std::to_string(i));
-            auto local_client = spawn<client_actor>(resource, local_worker.get(), "Client" + std::to_string(i));
+            auto local_client = spawn<client_actor>(resource, local_worker->address(), "Client" + std::to_string(i));
 
             auto future = send(local_client.get(), address_t::empty_address(), &client_actor::process, (i + 1) * 10);
             local_client->resume(1);

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
+#include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/base/forwards.hpp>
 
