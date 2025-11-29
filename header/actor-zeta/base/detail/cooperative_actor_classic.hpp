@@ -536,24 +536,21 @@ namespace actor_zeta { namespace base {
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
                         auto behavior_future = self()->behavior(guard.get());
 
-                        // CRITICAL: Only link future if it's valid and has state!
-                        // If behavior() returns ready future (no co_await), it might be empty after return_value().
-                        // Don't try to link empty futures - they have no promise state to keep alive.
-                        if (behavior_future.valid()) {
-                            if (auto slot = guard.get()->result_slot()) {
-                                // Link behavior_future<void> to result_slot via continuation
-                                // This keeps promise state alive non-blocking
-                                base::link_future_to_slot(std::move(behavior_future), slot);
-                            } else {
-                                // No result_slot (fire-and-forget) - create dummy slot for continuation
-                                // This keeps promise state alive without blocking the actor thread
-                                auto dummy_slot = pmr::make_counted<detail::future_state<void>>(resource());
-                                base::link_future_to_slot(std::move(behavior_future), dummy_slot);
-                                // dummy_slot will be destroyed when behavior_future completes
-                            }
+                        // NEW DESIGN: dispatch() no longer links future to msg->result_slot()!
+                        // NOTE: link_future_to_slot is now called in dispatch() where type T is known.
+                        // This solves the problem of losing type information when converting
+                        // unique_future<T> to unique_future<void> in behavior() return.
+                        //
+                        // The behavior_future (unique_future<void>) is still useful for:
+                        // 1. Coroutine management - tracking suspended coroutines
+                        // 2. Complex async algorithms inside actors
+                        //
+                        // TODO: Add coroutine tracking here if needed
+                        if (behavior_future.get_state() != nullptr) {
+                            std::cerr << "[resume] behavior_future.state=" << static_cast<void*>(behavior_future.get_state())
+                                      << " is_ready=" << behavior_future.is_ready() << std::endl;
+                            // Future state is kept alive by behavior_future until it goes out of scope
                         }
-                        // If !valid(), behavior() completed synchronously (no coroutine suspension)
-                        // Promise state already destroyed, nothing to keep alive
                     }
 
                     ++handled;

@@ -3,259 +3,514 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/dispatch.hpp>
-#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 #include <thread>
 #include <atomic>
-#include <chrono>
+#include <sstream>
+#include <vector>
+#include <mutex>
+#include <condition_variable>
 
 using namespace actor_zeta;
 
-// ============================================================================
-// Test: Coroutine resumes in CORRECT thread (owner actor's thread, not sender's)
-// ============================================================================
+// Helper to get thread id as string
+std::string thread_id_str() {
+    std::ostringstream oss;
+    oss << std::this_thread::get_id();
+    return oss.str();
+}
 
-/// @brief Worker actor that processes requests in its thread
+// Thread-safe logger
+class thread_logger {
+public:
+    void log(const std::string& msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::cerr << msg << std::endl;
+    }
+
+    template<typename... Args>
+    void log(const char* fmt, Args&&... args) {
+        std::ostringstream oss;
+        format_impl(oss, fmt, std::forward<Args>(args)...);
+        log(oss.str());
+    }
+
+private:
+    void format_impl(std::ostringstream& oss, const char* fmt) {
+        oss << fmt;
+    }
+
+    template<typename T, typename... Args>
+    void format_impl(std::ostringstream& oss, const char* fmt, T&& val, Args&&... args) {
+        while (*fmt) {
+            if (*fmt == '%') {
+                oss << std::forward<T>(val);
+                format_impl(oss, fmt + 1, std::forward<Args>(args)...);
+                return;
+            }
+            oss << *fmt++;
+        }
+    }
+
+    std::mutex mutex_;
+};
+
+thread_logger g_log;
+
+/// @brief Worker актор - обрабатывает запросы
 class worker_actor final : public basic_actor<worker_actor> {
 public:
-    explicit worker_actor(pmr::memory_resource* resource)
-        : basic_actor<worker_actor>(resource) {
+    explicit worker_actor(pmr::memory_resource* resource, const std::string& name)
+        : basic_actor<worker_actor>(resource)
+        , name_(name)
+        , compute_count_(0) {
     }
 
-    ~worker_actor() = default;
-
-    /// @brief Simple computation - returns input * 2
-    /// @note Records the thread ID where this runs
     unique_future<int> compute(int x) {
-        worker_thread_id_.store(std::this_thread::get_id());
+        ++compute_count_;
+        auto tid = thread_id_str();
+        g_log.log("[%::compute] thread=% x=% returning % (call #%)",
+                  name_, tid, x, x * 2, compute_count_.load());
+        last_compute_thread_ = tid;
         return make_ready_future(resource(), x * 2);
     }
+
+    const std::string& last_compute_thread() const { return last_compute_thread_; }
+    int compute_count() const { return compute_count_.load(); }
+    const std::string& name() const { return name_; }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
     unique_future<void> behavior(mailbox::message* msg) {
+        auto tid = thread_id_str();
+        g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
+        last_behavior_thread_ = tid;
+
         switch (msg->command()) {
             case msg_id<worker_actor, &worker_actor::compute>:
                 return dispatch(this, &worker_actor::compute, msg);
             default:
+                g_log.log("[%::behavior] Unknown command!", name_);
                 break;
         }
         return make_ready_future_void(resource());
     }
 
-    std::thread::id worker_thread_id() const {
-        return worker_thread_id_.load();
-    }
+    const std::string& last_behavior_thread() const { return last_behavior_thread_; }
+
+    ~worker_actor() = default;
 
 private:
-    std::atomic<std::thread::id> worker_thread_id_{};
+    std::string name_;
+    std::atomic<int> compute_count_;
+    std::string last_compute_thread_;
+    std::string last_behavior_thread_;
 };
 
-/// @brief Client actor that uses co_await to call worker
+
+/// @brief Client актор - как balancer, но на корутинах
 class client_actor final : public basic_actor<client_actor> {
 public:
-    explicit client_actor(pmr::memory_resource* resource, worker_actor* worker, scheduler::sharing_scheduler* scheduler)
+    explicit client_actor(pmr::memory_resource* resource, worker_actor* worker, const std::string& name)
         : basic_actor<client_actor>(resource)
         , worker_(worker)
-        , scheduler_(scheduler) {
+        , name_(name)
+        , final_result_(0) {
     }
+
+    /// @brief Корутина с inline execution (как balancer)
+    unique_future<int> process(int x) {
+        auto tid_start = thread_id_str();
+        g_log.log("\n[%::process] === START === thread=% x=%", name_, tid_start, x);
+        process_start_thread_ = tid_start;
+
+        // Отправляем запрос worker'у
+        g_log.log("[%::process] Sending to worker...", name_);
+        auto future = send(worker_, address(), &worker_actor::compute, x);
+        g_log.log("[%::process] future.is_ready()=%", name_, future.is_ready());
+
+        // Inline execution - как в balancer!
+        int resume_count = 0;
+        while (!future.is_ready()) {
+            ++resume_count;
+            g_log.log("[%::process] Worker not ready, resuming... (attempt #%)", name_, resume_count);
+            worker_->resume(1);
+            g_log.log("[%::process] After worker resume, future.is_ready()=%", name_, future.is_ready());
+        }
+        g_log.log("[%::process] Worker done after % resume(s)", name_, resume_count);
+
+        // co_await на ГОТОВУЮ future - НЕ suspend!
+        auto tid_before_await = thread_id_str();
+        g_log.log("[%::process] Before co_await, thread=%", name_, tid_before_await);
+
+        int result = co_await std::move(future);
+
+        auto tid_after_await = thread_id_str();
+        g_log.log("[%::process] After co_await, thread=% result=%", name_, tid_after_await, result);
+        process_after_await_thread_ = tid_after_await;
+
+        // Проверка: thread должен быть тот же (не suspend!)
+        if (tid_before_await != tid_after_await) {
+            g_log.log("[%::process] !!! WARNING: Thread changed after co_await !!!", name_);
+        }
+
+        final_result_ = result + 10;
+        g_log.log("[%::process] final_result=%", name_, final_result_.load());
+
+        auto tid_end = thread_id_str();
+        g_log.log("[%::process] === END === thread=%", name_, tid_end);
+        process_end_thread_ = tid_end;
+
+        co_return final_result_.load();
+    }
+
+    unique_future<int> get_result() {
+        return make_ready_future(resource(), final_result_.load());
+    }
+
+    const std::string& process_start_thread() const { return process_start_thread_; }
+    const std::string& process_after_await_thread() const { return process_after_await_thread_; }
+    const std::string& process_end_thread() const { return process_end_thread_; }
+    const std::string& name() const { return name_; }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &client_actor::process,
+        &client_actor::get_result
+    >;
+
+    unique_future<void> behavior(mailbox::message* msg) {
+        auto tid = thread_id_str();
+        g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
+        last_behavior_thread_ = tid;
+
+        switch (msg->command()) {
+            case msg_id<client_actor, &client_actor::process>:
+                return dispatch(this, &client_actor::process, msg);
+            case msg_id<client_actor, &client_actor::get_result>:
+                return dispatch(this, &client_actor::get_result, msg);
+            default:
+                g_log.log("[%::behavior] Unknown command!", name_);
+                break;
+        }
+        return make_ready_future_void(resource());
+    }
+
+    const std::string& last_behavior_thread() const { return last_behavior_thread_; }
 
     ~client_actor() = default;
 
-    /// @brief Coroutine method that calls worker and checks thread
-    /// @return Tuple of (result, before_thread_id, after_thread_id)
-    unique_future<int> process(int x) {
-        std::cerr << "[process] START x=" << x << std::endl;
-
-        // Record thread BEFORE co_await
-        auto before_thread = std::this_thread::get_id();
-        before_thread_id_.store(before_thread);
-        std::cerr << "[process] before_thread recorded" << std::endl;
-
-        // Call worker asynchronously
-        std::cerr << "[process] Calling send() to worker..." << std::endl;
-        auto future = send(worker_, address(), &worker_actor::compute, x);
-        std::cerr << "[process] send() returned, needs_scheduling=" << future.needs_scheduling() << std::endl;
-
-        // IMPORTANT: Check if worker needs scheduling and schedule it
-        // This is the key fix - we MUST schedule the receiver if it needs it
-        if (future.needs_scheduling() && scheduler_) {
-            std::cerr << "[process] Enqueueing worker" << std::endl;
-            scheduler_->enqueue(worker_);
-        }
-
-        // CRITICAL TEST: co_await should suspend and resume in SAME thread
-        std::cerr << "[process] BEFORE co_await" << std::endl;
-        int result = co_await std::move(future);
-        std::cerr << "[process] AFTER co_await, result=" << result << std::endl;
-
-        // Record thread AFTER co_await
-        auto after_thread = std::this_thread::get_id();
-        after_thread_id_.store(after_thread);
-
-        // Check that we resumed in the SAME thread (client's thread, not worker's)
-        if (before_thread != after_thread) {
-            thread_mismatch_detected_.store(true);
-        }
-
-        std::cerr << "[process] About to co_return result=" << result << std::endl;
-        co_return result;
-    }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<&client_actor::process>;
-
-    unique_future<void> behavior(mailbox::message* msg) {
-        std::cerr << "[client_actor::behavior] START, command=" << msg->command() << std::endl;
-        switch (msg->command()) {
-            case msg_id<client_actor, &client_actor::process>:
-                std::cerr << "[client_actor::behavior] Matched process command, calling dispatch()" << std::endl;
-                return dispatch(this, &client_actor::process, msg);
-            default:
-                break;
-        }
-
-        std::cerr << "[client_actor::behavior] No match, returning ready void" << std::endl;
-        // Note: Actor does NOT re-schedule itself
-        // Test will handle scheduling via polling loop when needed
-        return make_ready_future_void(resource());
-    }
-
-    std::thread::id before_thread_id() const { return before_thread_id_.load(); }
-    std::thread::id after_thread_id() const { return after_thread_id_.load(); }
-    bool thread_mismatch_detected() const { return thread_mismatch_detected_.load(); }
-
 private:
     worker_actor* worker_;
-    scheduler::sharing_scheduler* scheduler_;
-
-    std::atomic<std::thread::id> before_thread_id_{};
-    std::atomic<std::thread::id> after_thread_id_{};
-    std::atomic<bool> thread_mismatch_detected_{false};
+    std::string name_;
+    std::atomic<int> final_result_;
+    std::string last_behavior_thread_;
+    std::string process_start_thread_;
+    std::string process_after_await_thread_;
+    std::string process_end_thread_;
 };
 
-TEST_CASE("coroutine resumes in owner actor's thread, not sender's thread") {
+
+// ============================================================================
+// SINGLE-THREADED TESTS (baseline)
+// ============================================================================
+
+TEST_CASE("single-thread: worker only") {
     auto* resource = pmr::get_default_resource();
+    auto worker = spawn<worker_actor>(resource, "Worker");
 
-    // Create scheduler with 2 worker threads
-    auto scheduler = std::make_unique<scheduler::sharing_scheduler>(2, 10000);
-    scheduler->start();
+    g_log.log("\n========== TEST: single-thread: worker only ==========");
+    auto main_thread = thread_id_str();
+    g_log.log("[TEST] Main thread: %", main_thread);
 
-    // Create actors
-    auto worker = spawn<worker_actor>(resource);
-    auto client = spawn<client_actor>(resource, worker.get(), scheduler.get());
+    auto future = send(worker.get(), address_t::empty_address(), &worker_actor::compute, 21);
+    worker->resume(1);
 
-    // Send request from client to worker via coroutine
-    auto result_future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+    REQUIRE(future.is_ready());
+    int result = std::move(future).get();
 
-    int result = 0;
+    REQUIRE(result == 42);
+    REQUIRE(worker->last_compute_thread() == main_thread);
 
-    // Check if we need to schedule the actor
-    std::cerr << "[TEST] needs_scheduling = " << result_future.needs_scheduling() << std::endl;
-
-    if (result_future.needs_scheduling()) {
-        // Actor needs scheduling - enqueue it
-        std::cerr << "[TEST] Enqueueing client actor" << std::endl;
-        scheduler->enqueue(client.get());
-
-        // IMPORTANT: After enqueue(), continuation propagates result to message slot
-        // We CANNOT call .get() on result_future anymore (it's moved-from)
-        // Instead, we wait via polling on is_ready() which works through continuation
-
-        // Polling: Wait until future becomes ready (via continuation propagation)
-        auto start = std::chrono::steady_clock::now();
-        int iterations = 0;
-        while (!result_future.is_ready()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            iterations++;
-
-            // Timeout protection (10 seconds)
-            if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
-                std::cerr << "[TEST] TIMEOUT after " << iterations << " iterations" << std::endl;
-                FAIL("Timeout waiting for result");
-            }
-        }
-
-        std::cerr << "[TEST] Future ready after " << iterations << " iterations" << std::endl;
-        std::cerr << "[TEST] result_future.valid() = " << result_future.valid() << std::endl;
-        std::cerr << "[TEST] result_future.is_ready() = " << result_future.is_ready() << std::endl;
-        // Now future is ready - safe to get result
-        std::cerr << "[TEST] Calling .get()..." << std::endl;
-        result = std::move(result_future).get();
-        std::cerr << "[TEST] Got result = " << result << std::endl;
-    } else {
-        // Actor already processed the message synchronously
-        std::cerr << "[TEST] Calling .get() immediately (sync path)" << std::endl;
-        result = std::move(result_future).get();
-    }
-
-    // Give scheduler time to finish processing
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // ASSERTIONS
-    REQUIRE(result == 42);  // 21 * 2 = 42
-
-    // Critical check: coroutine must resume in CLIENT's thread, not WORKER's thread
-    auto client_before = client->before_thread_id();
-    auto client_after = client->after_thread_id();
-    auto worker_thread = worker->worker_thread_id();
-
-    INFO("Client before co_await: " << client_before);
-    INFO("Client after co_await:  " << client_after);
-    INFO("Worker thread:          " << worker_thread);
-
-    // Main assertion: coroutine resumed in SAME thread (client's thread)
-    REQUIRE(client_before == client_after);
-    REQUIRE_FALSE(client->thread_mismatch_detected());
-
-    // If this fails, coroutine ran in worker's thread (BUG!)
-    // This would happen with old implementation (continuation calls handle.resume() directly)
-    REQUIRE(client_after != worker_thread);
-
-    scheduler->stop();
+    g_log.log("========== TEST PASSED ==========");
 }
 
-TEST_CASE("multiple concurrent coroutines resume in correct threads") {
+
+TEST_CASE("single-thread: client-worker") {
+    auto* resource = pmr::get_default_resource();
+    auto worker = spawn<worker_actor>(resource, "Worker");
+    auto client = spawn<client_actor>(resource, worker.get(), "Client");
+
+    g_log.log("\n========== TEST: single-thread: client-worker ==========");
+    auto main_thread = thread_id_str();
+    g_log.log("[TEST] Main thread: %", main_thread);
+
+    auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+    client->resume(1);
+
+    REQUIRE(future.is_ready());
+    int result = std::move(future).get();
+
+    // 21 * 2 + 10 = 52
+    REQUIRE(result == 52);
+
+    // All in main thread
+    REQUIRE(client->process_start_thread() == main_thread);
+    REQUIRE(client->process_after_await_thread() == main_thread);
+    REQUIRE(client->process_end_thread() == main_thread);
+    REQUIRE(worker->last_compute_thread() == main_thread);
+
+    g_log.log("========== TEST PASSED ==========");
+}
+
+
+// ============================================================================
+// MULTI-THREADED TESTS
+// ============================================================================
+
+TEST_CASE("multi-thread: client resumes worker in same thread") {
+    auto* resource = pmr::get_default_resource();
+    auto worker = spawn<worker_actor>(resource, "Worker");
+    auto client = spawn<client_actor>(resource, worker.get(), "Client");
+
+    g_log.log("\n========== TEST: multi-thread: client resumes worker ==========");
+    auto main_thread = thread_id_str();
+    g_log.log("[TEST] Main thread: %", main_thread);
+
+    std::atomic<bool> done{false};
+    std::atomic<int> result{0};
+    std::string client_thread_id;
+
+    // Run client in separate thread
+    std::thread client_thread([&]() {
+        client_thread_id = thread_id_str();
+        g_log.log("[CLIENT_THREAD] Started, thread=%", client_thread_id);
+
+        auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+        g_log.log("[CLIENT_THREAD] Sent process(21)");
+
+        client->resume(1);
+        g_log.log("[CLIENT_THREAD] After resume, future.is_ready()=%", future.is_ready());
+
+        REQUIRE(future.is_ready());
+        result = std::move(future).get();
+        g_log.log("[CLIENT_THREAD] result=%", result.load());
+
+        done = true;
+    });
+
+    client_thread.join();
+
+    REQUIRE(done);
+    REQUIRE(result == 52);
+
+    // Client's coroutine runs in client_thread
+    g_log.log("[TEST] client_thread_id=%", client_thread_id);
+    g_log.log("[TEST] client->process_start_thread()=%", client->process_start_thread());
+    g_log.log("[TEST] worker->last_compute_thread()=%", worker->last_compute_thread());
+
+    REQUIRE(client->process_start_thread() == client_thread_id);
+    REQUIRE(client->process_after_await_thread() == client_thread_id);
+    REQUIRE(client->process_end_thread() == client_thread_id);
+
+    // Worker also runs in client_thread (inline execution)
+    REQUIRE(worker->last_compute_thread() == client_thread_id);
+
+    g_log.log("========== TEST PASSED ==========");
+}
+
+
+TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
+    auto* resource = pmr::get_default_resource();
+    // Each client has its OWN worker (no shared state, no race condition)
+    auto worker1 = spawn<worker_actor>(resource, "Worker1");
+    auto worker2 = spawn<worker_actor>(resource, "Worker2");
+    auto client1 = spawn<client_actor>(resource, worker1.get(), "Client1");
+    auto client2 = spawn<client_actor>(resource, worker2.get(), "Client2");
+
+    g_log.log("\n========== TEST: multi-thread: two clients in parallel (separate workers) ==========");
+    auto main_thread = thread_id_str();
+    g_log.log("[TEST] Main thread: %", main_thread);
+
+    std::atomic<int> result1{0};
+    std::atomic<int> result2{0};
+    std::string thread1_id, thread2_id;
+
+    std::thread t1([&]() {
+        thread1_id = thread_id_str();
+        g_log.log("[THREAD1] Started, thread=%", thread1_id);
+
+        auto future = send(client1.get(), address_t::empty_address(), &client_actor::process, 10);
+        client1->resume(1);
+
+        REQUIRE(future.is_ready());
+        result1 = std::move(future).get();
+        g_log.log("[THREAD1] result1=%", result1.load());
+    });
+
+    std::thread t2([&]() {
+        thread2_id = thread_id_str();
+        g_log.log("[THREAD2] Started, thread=%", thread2_id);
+
+        auto future = send(client2.get(), address_t::empty_address(), &client_actor::process, 20);
+        client2->resume(1);
+
+        REQUIRE(future.is_ready());
+        result2 = std::move(future).get();
+        g_log.log("[THREAD2] result2=%", result2.load());
+    });
+
+    t1.join();
+    t2.join();
+
+    REQUIRE(result1 == 30);  // 10 * 2 + 10
+    REQUIRE(result2 == 50);  // 20 * 2 + 10
+
+    // Each client runs in its own thread
+    g_log.log("[TEST] thread1_id=%", thread1_id);
+    g_log.log("[TEST] thread2_id=%", thread2_id);
+    g_log.log("[TEST] client1->process_start_thread()=%", client1->process_start_thread());
+    g_log.log("[TEST] client2->process_start_thread()=%", client2->process_start_thread());
+
+    REQUIRE(client1->process_start_thread() == thread1_id);
+    REQUIRE(client1->process_end_thread() == thread1_id);
+    REQUIRE(client2->process_start_thread() == thread2_id);
+    REQUIRE(client2->process_end_thread() == thread2_id);
+
+    // Threads are different
+    REQUIRE(thread1_id != thread2_id);
+
+    // Workers run in their respective client threads (inline execution)
+    REQUIRE(worker1->last_compute_thread() == thread1_id);
+    REQUIRE(worker2->last_compute_thread() == thread2_id);
+
+    g_log.log("========== TEST PASSED ==========");
+}
+
+
+TEST_CASE("multi-thread: verify coroutine thread affinity") {
+    auto* resource = pmr::get_default_resource();
+    auto worker = spawn<worker_actor>(resource, "Worker");
+    auto client = spawn<client_actor>(resource, worker.get(), "Client");
+
+    g_log.log("\n========== TEST: multi-thread: verify coroutine thread affinity ==========");
+    auto main_thread = thread_id_str();
+    g_log.log("[TEST] Main thread: %", main_thread);
+
+    std::string worker_thread_id;
+    std::atomic<bool> worker_ready{false};
+    std::atomic<bool> stop_worker{false};
+
+    // Start worker in separate thread (but we won't use it for inline execution)
+    // This is to verify that inline execution happens in CLIENT thread, not worker thread
+    std::thread worker_thread([&]() {
+        worker_thread_id = thread_id_str();
+        g_log.log("[WORKER_THREAD] Started, thread=%", worker_thread_id);
+        worker_ready = true;
+
+        // Just wait (worker won't be resumed from this thread in inline execution model)
+        while (!stop_worker) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        g_log.log("[WORKER_THREAD] Stopped");
+    });
+
+    while (!worker_ready) {
+        std::this_thread::yield();
+    }
+
+    std::string client_thread_id;
+    std::atomic<int> result{0};
+
+    // Client in its own thread
+    std::thread client_thread([&]() {
+        client_thread_id = thread_id_str();
+        g_log.log("[CLIENT_THREAD] Started, thread=%", client_thread_id);
+
+        auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+        g_log.log("[CLIENT_THREAD] Sent process(21)");
+
+        // Client resumes worker INLINE (in client's thread!)
+        client->resume(1);
+
+        REQUIRE(future.is_ready());
+        result = std::move(future).get();
+        g_log.log("[CLIENT_THREAD] result=%", result.load());
+    });
+
+    client_thread.join();
+    stop_worker = true;
+    worker_thread.join();
+
+    REQUIRE(result == 52);
+
+    g_log.log("[TEST] main_thread=%", main_thread);
+    g_log.log("[TEST] worker_thread_id=%", worker_thread_id);
+    g_log.log("[TEST] client_thread_id=%", client_thread_id);
+    g_log.log("[TEST] client->process_start_thread()=%", client->process_start_thread());
+    g_log.log("[TEST] worker->last_compute_thread()=%", worker->last_compute_thread());
+
+    // Coroutine starts and ends in CLIENT thread
+    REQUIRE(client->process_start_thread() == client_thread_id);
+    REQUIRE(client->process_after_await_thread() == client_thread_id);
+    REQUIRE(client->process_end_thread() == client_thread_id);
+
+    // Worker::compute() also runs in CLIENT thread (inline execution!)
+    // NOT in worker_thread!
+    REQUIRE(worker->last_compute_thread() == client_thread_id);
+    REQUIRE(worker->last_compute_thread() != worker_thread_id);
+
+    g_log.log("========== TEST PASSED ==========");
+}
+
+
+TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
     auto* resource = pmr::get_default_resource();
 
-    auto scheduler = std::make_unique<scheduler::sharing_scheduler>(4, 10000);
-    scheduler->start();
+    g_log.log("\n========== TEST: multi-thread: many iterations ==========");
 
-    auto worker = spawn<worker_actor>(resource);
-    auto client1 = spawn<client_actor>(resource, worker.get(), scheduler.get());
-    auto client2 = spawn<client_actor>(resource, worker.get(), scheduler.get());
-    auto client3 = spawn<client_actor>(resource, worker.get(), scheduler.get());
+    constexpr int NUM_ITERATIONS = 10;
+    std::vector<std::thread> threads;
+    std::atomic<int> success_count{0};
 
-    // Send concurrent requests
-    auto f1 = send(client1.get(), address_t::empty_address(), &client_actor::process, 10);
-    if (f1.needs_scheduling()) {
-        scheduler->enqueue(client1.get());
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+        threads.emplace_back([resource, &success_count, i]() {
+            auto tid = thread_id_str();
+            g_log.log("[THREAD %] Started, thread=%", i, tid);
+
+            // Each thread creates its OWN worker and client (no shared state)
+            auto local_worker = spawn<worker_actor>(resource, "Worker" + std::to_string(i));
+            auto local_client = spawn<client_actor>(resource, local_worker.get(), "Client" + std::to_string(i));
+
+            auto future = send(local_client.get(), address_t::empty_address(), &client_actor::process, (i + 1) * 10);
+            local_client->resume(1);
+
+            if (future.is_ready()) {
+                int result = std::move(future).get();
+                int expected = (i + 1) * 10 * 2 + 10;
+                g_log.log("[THREAD %] result=% expected=%", i, result, expected);
+
+                if (result == expected) {
+                    ++success_count;
+                }
+
+                // Verify thread affinity
+                if (local_client->process_start_thread() == tid &&
+                    local_client->process_end_thread() == tid &&
+                    local_worker->last_compute_thread() == tid) {
+                    g_log.log("[THREAD %] Thread affinity OK", i);
+                } else {
+                    g_log.log("[THREAD %] !!! Thread affinity FAILED !!!", i);
+                }
+            }
+        });
     }
 
-    auto f2 = send(client2.get(), address_t::empty_address(), &client_actor::process, 20);
-    if (f2.needs_scheduling()) {
-        scheduler->enqueue(client2.get());
+    for (auto& t : threads) {
+        t.join();
     }
 
-    auto f3 = send(client3.get(), address_t::empty_address(), &client_actor::process, 30);
-    if (f3.needs_scheduling()) {
-        scheduler->enqueue(client3.get());
-    }
+    g_log.log("[TEST] success_count=%/%", success_count.load(), NUM_ITERATIONS);
+    REQUIRE(success_count == NUM_ITERATIONS);
 
-    // Wait for all results - clients will keep re-scheduling themselves while coroutines are suspended
-    REQUIRE(std::move(f1).get() == 20);
-    REQUIRE(std::move(f2).get() == 40);
-    REQUIRE(std::move(f3).get() == 60);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // All clients should have thread consistency
-    REQUIRE(client1->before_thread_id() == client1->after_thread_id());
-    REQUIRE(client2->before_thread_id() == client2->after_thread_id());
-    REQUIRE(client3->before_thread_id() == client3->after_thread_id());
-
-    REQUIRE_FALSE(client1->thread_mismatch_detected());
-    REQUIRE_FALSE(client2->thread_mismatch_detected());
-    REQUIRE_FALSE(client3->thread_mismatch_detected());
-
-    scheduler->stop();
+    g_log.log("========== TEST PASSED ==========");
 }

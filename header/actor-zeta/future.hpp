@@ -14,8 +14,13 @@
 
 namespace actor_zeta {
 
+    // Forward declarations
     template<typename T>
     struct future_awaiter;
+
+    template<typename T>
+    struct awaiter;  // Forward declaration (defined later, used by promise::await_transform)
+
 
     template<typename T>
     class promise final {
@@ -183,6 +188,8 @@ namespace actor_zeta {
         }
 
         T get() && {
+            std::cerr << "[unique_future<T>::get] this=" << static_cast<void*>(this)
+                      << " state_=" << static_cast<void*>(state_.get()) << std::endl;
             assert(state_ && "get() on invalid future");
 
             int spin_count = 0;
@@ -317,9 +324,15 @@ namespace actor_zeta {
                                                 alignof(detail::future_state<T>));
                 state_ = new (mem) detail::future_state<T>(resource_);
 
-                // NOTE: Do NOT set coroutine handle here!
-                // Coroutine handle is ONLY set by await_suspend() when THIS future is awaited.
-                // Promise's own state should NOT have coroutine handle - it causes infinite recursion.
+                std::cerr << "[promise::get_return_object] Created coroutine promise state=" << static_cast<void*>(state_) << std::endl;
+
+                // Save coroutine handle in promise state for Manual Polling
+                // Actor can extract it via extract_coroutine_handle() and resume later
+                // NOTE: This is safe because automatic resume in set_result_rtt() is disabled
+                auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
+                state_->set_coroutine(handle);  // Implicit conversion to coroutine_handle<void>
+
+                std::cerr << "[promise::get_return_object] Set coroutine handle in state" << std::endl;
 
                 // Use adopt_ref - refcount starts at 1, future adopts that reference
                 return unique_future<T>(adopt_ref, state_, false);
@@ -331,7 +344,17 @@ namespace actor_zeta {
             }
 
             detail::suspend_always final_suspend() noexcept {
+                std::cerr << "[final_suspend] promise_type for unique_future<T>, state=" << static_cast<void*>(state_) << std::endl;
                 return {};
+            }
+
+            // CRITICAL: await_transform enables continuation chain for nested co_await
+            // When coroutine does `co_await send(other_actor, ...)`, we need to link:
+            // awaited_future (from send) → promise_state (this coroutine's return value)
+            // This ensures result propagates correctly through the chain.
+            template<typename U>
+            auto await_transform(unique_future<U>&& future) noexcept {
+                return awaiter<U>{std::move(future), state_};
             }
 
             void return_value(T&& value) noexcept {
@@ -463,6 +486,32 @@ namespace actor_zeta {
             , is_ready_void_(other.is_ready_void_) {
             other.needs_scheduling_ = false;
             other.is_ready_void_ = false;
+        }
+
+        /// @brief Converting constructor from unique_future<T> (any T)
+        /// @details Creates a void view of the typed future state WITHOUT moving ownership.
+        ///          Both futures share the same state (via intrusive_ptr refcounting).
+        ///          The typed result is preserved in the state (via RTT), but this future
+        ///          acts as void (cannot call .get() to retrieve typed value).
+        ///          Continuation chain works correctly - typed result propagates through RTT.
+        /// @note This enables returning unique_future<T> from dispatch() and converting
+        ///       to unique_future<void> in behavior(), solving the return type conflict.
+        template<typename T>
+        unique_future(unique_future<T>&& other) noexcept
+            : state_(reinterpret_cast<detail::future_state<void>*>(other.get_state()))
+            , needs_scheduling_(other.needs_scheduling())
+            , is_ready_void_(false) {
+            std::cerr << "[unique_future<void> conversion ctor] other.state_=" << static_cast<void*>(other.get_state())
+                      << " → this.state_=" << static_cast<void*>(state_.get()) << std::endl;
+            // Note: get_state() returns raw pointer, intrusive_ptr constructor calls add_ref()
+            // This creates a SHARED view - both futures point to same state with separate refcounts
+            // This is safe because:
+            // 1. Both future_state<T> and future_state<void> have identical memory layout
+            // 2. Both inherit from future_state_base with same virtual methods
+            // 3. We only call base class methods through this pointer (continuation, coroutine)
+            // 4. Typed result stored in RTT (type-erased), continuation chain works correctly
+            // 5. Never call typed methods on void future (no .get() that extracts typed value)
+            // 6. Both futures keep state alive - last one to destroy releases it
         }
 
         unique_future& operator=(unique_future&& other) noexcept {
@@ -609,9 +658,11 @@ namespace actor_zeta {
                                                 alignof(detail::future_state<void>));
                 state_ = new (mem) detail::future_state<void>(resource_);
 
-                // NOTE: Do NOT set coroutine handle here!
-                // Coroutine handle is ONLY set by await_suspend() when THIS future is awaited.
-                // Promise's own state should NOT have coroutine handle - it causes infinite recursion.
+                // Save coroutine handle in promise state for Manual Polling
+                // Actor can extract it via extract_coroutine_handle() and resume later
+                // NOTE: This is safe because automatic resume in set_result_rtt() is disabled
+                auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
+                state_->set_coroutine(handle);  // Implicit conversion to coroutine_handle<void>
 
                 // Use adopt_ref - refcount starts at 1, future adopts that reference
                 return unique_future<void>(adopt_ref, state_, false);
@@ -854,9 +905,60 @@ namespace actor_zeta {
         }
     };
 
+    // Awaiter with continuation support (used by promise::await_transform)
     template<typename T>
-    auto operator co_await(unique_future<T> f) noexcept {
-        return future_awaiter<T>{std::move(f)};
-    }
+    struct awaiter {
+        unique_future<T> future_;
+        detail::future_state_base* promise_state_;  // Promise state for continuation
+
+        explicit awaiter(unique_future<T>&& f, detail::future_state_base* prom_state = nullptr) noexcept
+            : future_(std::move(f))
+            , promise_state_(prom_state) {}
+
+        [[nodiscard]] bool await_ready() const noexcept {
+            bool ready = future_.is_ready();
+            std::cerr << "[awaiter::await_ready] future.is_ready()=" << ready
+                      << " future.state=" << static_cast<const void*>(future_.get_state()) << std::endl;
+            return ready;
+        }
+
+        bool await_suspend(std::coroutine_handle<> handle) noexcept {
+            if (future_.is_ready()) {
+                std::cerr << "[awaiter::await_suspend] future already ready, not suspending" << std::endl;
+                return false;
+            }
+
+            auto* state = future_.get_state();
+            if (!state) {
+                std::cerr << "[awaiter::await_suspend] future has no state, not suspending" << std::endl;
+                return false;
+            }
+
+            // PURE COROUTINE APPROACH: Only set coroutine handle, NO continuation!
+            // When awaited future becomes ready:
+            //   1. set_result_rtt() calls resume_coroutine() (if has_coroutine())
+            //   2. Coroutine resumes, await_resume() extracts result via .get()
+            //   3. Coroutine continues to co_return result
+            //   4. return_value() writes result to promise_state
+            //
+            // Result flow: worker → awaited.result_ → await_resume() → co_return → promise.result_
+            // NO continuation chain needed!
+            std::cerr << "[awaiter::await_suspend] Setting coroutine handle in awaited state=" << static_cast<void*>(state) << std::endl;
+            state->set_coroutine(handle);
+
+            // Re-check after set_coroutine() to close race window
+            if (future_.is_ready()) {
+                std::cerr << "[awaiter::await_suspend] future became ready after set_coroutine, not suspending" << std::endl;
+                return false;  // Don't suspend - another thread set result
+            }
+
+            std::cerr << "[awaiter::await_suspend] Suspending coroutine, awaited state=" << static_cast<void*>(state) << std::endl;
+            return true;
+        }
+
+        T await_resume() {
+            return std::move(future_).get();
+        }
+    };
 
 }
