@@ -29,12 +29,12 @@ public:
     actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         std::cerr << "[Worker " << id() << "] behavior() called, cmd=" << cmd
-                  << ", error_before=" << static_cast<int>(msg->error()) << std::endl;
+                  << ", state_before=" << static_cast<int>(msg->state()) << std::endl;
 
         switch (cmd) {
             case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>: {
                 auto result = actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
-                std::cerr << "[Worker " << id() << "] After handler, error=" << static_cast<int>(msg->error()) << std::endl;
+                std::cerr << "[Worker " << id() << "] After handler, state=" << static_cast<int>(msg->state()) << std::endl;
                 return result;
             }
             case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>: {

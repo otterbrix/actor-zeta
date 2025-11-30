@@ -298,11 +298,12 @@ if (future.is_ready()) {
    } catch (...) {  // Never caught - exceptions disabled!
    }
 
-   // GOOD: Check error code
-   auto result = std::move(future).get();
-   if (future.error() != slot_error_code::ok) {
-       // Handle error
+   // GOOD: Check state before get()
+   if (future.is_cancelled()) {
+       // Handle cancellation
+       return;
    }
+   auto result = std::move(future).get();  // Safe - not cancelled
    ```
 
 ---
@@ -340,18 +341,14 @@ auto future = send(actor, ...);
 Futures only delete messages if actor has processed them:
 
 ```cpp
-// In unique_future::release_message_ref()
-if (slot_->error() != slot_error_code::pending) {
-    // Actor processed → future owns → DELETE
-    mailbox::message_ptr auto_delete(slot_);
-} else {
-    // Actor hasn't processed → mailbox owns → DON'T delete
-}
+// Future state determines ownership:
+// - pending → actor hasn't processed yet → mailbox owns
+// - ready/error/cancelled → actor processed → future owns
 ```
 
-**Key insight:** Only delete if `error != pending`:
-- `pending` → actor hasn't called `set_error()` → mailbox still owns
-- `ok/error` → actor called `set_error()` AND `msg.release()` → future owns
+**Key insight:** State determines ownership:
+- `pending` → actor hasn't processed → mailbox still owns
+- `ready/error/cancelled` → actor processed AND released → future owns
 
 ---
 
@@ -383,8 +380,8 @@ while (!is_ready()) {
 **1. C++20 Atomic Wait/Notify**
 ```cpp
 // Zero overhead, zero CPU
-slot_->error_.wait(slot_error_code::pending);
-slot_->error_.notify_one();
+state_.wait(future_state_enum::pending);
+state_.notify_one();
 ```
 - Requires: C++20 standard
 - Benefit: Zero memory overhead, zero CPU usage
@@ -486,7 +483,7 @@ while (!future.is_ready()) {
 
 ### 2. No Exception Support
 
-Errors via `slot_error_code` enum only.
+Errors via `future_state_enum` (pending/ready/error/cancelled) only.
 
 **Design constraint:** `-fno-exceptions` build requirement.
 

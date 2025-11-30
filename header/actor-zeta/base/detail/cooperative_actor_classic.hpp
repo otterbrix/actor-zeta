@@ -514,10 +514,18 @@ namespace actor_zeta { namespace base {
                         // 1. Coroutine management - tracking suspended coroutines
                         // 2. Complex async algorithms inside actors
                         //
-                        // TODO: Add coroutine tracking here if needed
-                        if (behavior_future.get_state() != nullptr) {
-                            // Future state is kept alive by behavior_future until it goes out of scope
-                        }
+                        // NOTE: behavior_future is intentionally NOT tracked by the framework.
+                        // User code must store pending coroutines manually in behavior():
+                        //
+                        //   auto future = dispatch(this, &MyActor::async_method, msg);
+                        //   if (!future.is_ready()) {
+                        //       pending_.push_back(std::move(future));
+                        //   }
+                        //   return make_ready_future_void(resource());
+                        //
+                        // Then poll via poll_pending() method (see CLAUDE.md for full pattern).
+                        // This design ensures user controls thread affinity for coroutine resumption.
+                        (void)behavior_future;  // Suppress unused warning
                     }
 
                     ++handled;

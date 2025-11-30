@@ -10,24 +10,6 @@
 namespace actor_zeta {
 
 namespace detail {
-    // Helper: unwrap unique_future<T> to T for handler integration
-    template<typename T>
-    struct unwrap_future {
-        using type = T;
-    };
-
-    template<typename T>
-    struct unwrap_future<type_traits::is_unique_future<T>> {
-        using type = typename type_traits::is_unique_future<T>::value_type;
-    };
-
-    template<typename T>
-    using unwrap_future_t = typename std::conditional_t<
-        type_traits::is_unique_future_v<T>,
-        typename type_traits::is_unique_future<T>::value_type,
-        T
-    >;
-
     // Helper: check if two type_lists have the same decayed types
     template<typename ExpectedList, typename ProvidedList>
     struct args_match_after_decay;

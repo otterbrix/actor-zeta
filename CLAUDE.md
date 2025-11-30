@@ -305,13 +305,14 @@ public:
         , command2_(actor_zeta::make_behavior(resource(), this, &MyActor::handle_command2)) {
     }
 
-    void behavior(actor_zeta::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command1>) {
             command1_(msg);
         } else if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command2>) {
             command2_(msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~MyActor() override = default;
@@ -504,12 +505,12 @@ Switch between profiles using the dropdown in CLion's toolbar.
 ✅ **These are LEGITIMATE APIs** - do not "fix" them:
 - `make_behavior(resource, this, &Class::method)` - creates behavior with automatic argument unpacking
 - `behavior_t` - type-erased behavior object
-- `void behavior(message*)` - virtual method called by base class
+- `unique_future<void> behavior(mailbox::message*)` - virtual method called by base class
 - Direct `message*` usage in low-level code
 
 **Current API (all code should use this):**
 - Define `dispatch_traits<&Actor::method...>` with method pointers
-- Implement `behavior(message*)` to dispatch based on `msg_id<Actor, &Actor::method>`
+- Implement `unique_future<void> behavior(mailbox::message*)` to dispatch based on `msg_id<Actor, &Actor::method>`
 - Create `behavior_t` members using `make_behavior(resource, this, &Actor::method)`
 - Send messages using `send(actor, sender, &Actor::method, args...)`
 
@@ -614,6 +615,72 @@ while (!future.is_ready()) {
 int result = std::move(future).get();
 ```
 
+### Coroutine Patterns
+
+**4. Typed Coroutines with co_await**
+```cpp
+class MyActor : public basic_actor<MyActor> {
+    // ✅ Typed coroutines support co_await
+    unique_future<int> compute_async(int x) {
+        auto future = send(worker_, address(), &Worker::process, x);
+        int result = co_await std::move(future);  // OK!
+        co_return result + 10;
+    }
+};
+```
+
+**5. Void Coroutines**
+```cpp
+// ✅ unique_future<void> coroutines fully support co_await:
+unique_future<void> async_void_method() {
+    co_await send(other_actor, address(), &OtherActor::do_work);  // OK!
+    co_return;
+}
+
+// ✅ Simple void coroutine (no co_await) - also OK:
+unique_future<void> simple_void() {
+    co_return;  // OK
+}
+```
+
+**6. Storing Pending Coroutines (CRITICAL)**
+```cpp
+class MyActor : public basic_actor<MyActor> {
+    unique_future<void> behavior(mailbox::message* msg) {
+        switch (msg->command()) {
+            case msg_id<MyActor, &MyActor::async_method>: {
+                // CRITICAL: Store pending coroutine!
+                // If destroyed immediately, coroutine is destroyed → refcount underflow!
+                auto future = dispatch(this, &MyActor::async_method, msg);
+                if (!future.is_ready()) {
+                    pending_.push_back(std::move(future));
+                }
+                return make_ready_future_void(resource());
+            }
+        }
+        return make_ready_future_void(resource());
+    }
+
+    // Poll and resume pending coroutines
+    bool poll_pending() {
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (it->awaiting_ready()) {
+                it->resume();
+                if (it->is_ready()) {
+                    it = pending_.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+        return !pending_.empty();
+    }
+
+private:
+    std::vector<unique_future<int>> pending_;
+};
+```
+
 ### Best Practices
 
 ✅ **DO:**
@@ -622,6 +689,8 @@ int result = std::move(future).get();
 - Ensure actor outlives all futures
 - Use fire-and-forget for notifications/logging
 - Move futures when calling `get()`
+- **Store pending coroutines** in behavior() to prevent premature destruction
+- Use **typed coroutines** (`unique_future<T>`) when you need `co_await`
 
 ❌ **DON'T:**
 - Call `get()` in tight loop without `is_ready()` check
@@ -653,10 +722,11 @@ public:
         : actor_zeta::basic_actor<Worker>(ptr)
         , compute_(actor_zeta::make_behavior(resource(), this, &Worker::compute)) {}
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<Worker, &Worker::compute>) {
             compute_(msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:

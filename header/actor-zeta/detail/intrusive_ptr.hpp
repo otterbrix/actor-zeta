@@ -122,11 +122,6 @@ namespace actor_zeta {
         }
 
         template<class C>
-        intrusive_ptr<C> downcast() const noexcept {
-            return (ptr_) ? dynamic_cast<C*>(get()) : nullptr;
-        }
-
-        template<class C>
         intrusive_ptr<C> upcast() const noexcept {
             return (ptr_) ? static_cast<C*>(get()) : nullptr;
         }
@@ -210,14 +205,6 @@ namespace actor_zeta {
     template<class T, class U>
     intrusive_ptr<T> static_pointer_cast(intrusive_ptr<U> const& r) noexcept {
         return r.template upcast<T>();
-    }
-
-    template<class T, class U>
-    intrusive_ptr<T> const_pointer_cast(intrusive_ptr<U> const& r) noexcept; // never throws
-
-    template<class T, class U>
-    intrusive_ptr<T> dynamic_pointer_cast(intrusive_ptr<U> const& r) noexcept {
-        return r.template downcast<T>();
     }
 
     template<class T, class... args>

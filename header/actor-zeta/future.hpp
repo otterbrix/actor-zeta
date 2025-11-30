@@ -656,20 +656,21 @@ namespace actor_zeta {
         /// @warning After this call, `other` is in moved-from state and MUST NOT be used!
         template<typename T>
         unique_future(unique_future<T>&& other) noexcept
-            : state_(reinterpret_cast<detail::future_state<void>*>(other.release_state()), false)
+            : state_(static_cast<detail::future_state<void>*>(
+                  static_cast<detail::future_state_base*>(other.release_state())), false)
             , needs_scheduling_(other.needs_scheduling())
             , is_ready_void_(false) {
-            // FIX Issue #2: True move semantics
+            // FIX: Use static_cast through future_state_base instead of reinterpret_cast
             // - release_state() returns raw pointer WITHOUT decrementing refcount
+            // - Cast through base class (future_state_base*) is well-defined
             // - intrusive_ptr(ptr, false) adopts the reference (no add_ref)
             // - other.state_ is now nullptr (truly moved)
             //
             // This is safe because:
-            // 1. Both future_state<T> and future_state<void> have identical memory layout
-            // 2. Both inherit from future_state_base with same virtual methods
-            // 3. We only call base class methods through this pointer (continuation, coroutine)
-            // 4. Typed result stored in RTT (type-erased), continuation chain works correctly
-            // 5. Never call typed methods on void future (no .get() that extracts typed value)
+            // 1. Both future_state<T> and future_state<void> inherit from future_state_base
+            // 2. We only call base class methods through this pointer (continuation, coroutine)
+            // 3. Typed result stored in RTT (type-erased), continuation chain works correctly
+            // 4. Never call typed methods on void future (no .get() that extracts typed value)
             //
             // IMPORTANT: other is now in moved-from state!
             other.set_needs_scheduling(false);
@@ -871,6 +872,13 @@ namespace actor_zeta {
             }
 
             detail::suspend_always final_suspend() noexcept { return {}; }
+
+            // Enable co_await inside void coroutines (same as typed version)
+            // This allows: unique_future<void> method() { co_await send(...); co_return; }
+            template<typename U>
+            auto await_transform(unique_future<U>&& future) noexcept {
+                return awaiter<U>{std::move(future), state_};
+            }
 
             void return_void() noexcept {
                 assert(state_ && "return_void() with null state");
