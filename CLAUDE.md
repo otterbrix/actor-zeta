@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Table of Contents
+
+- [Critical: Read Full Files](#critical-read-full-files-before-making-changes)
+- [Core Principles](#core-principles)
+- [Project Overview](#project-overview)
+- [Quick Start](#quick-start-commands)
+- [File Structure](#file-structure-reference)
+- [Architecture](#architecture-deep-dive)
+- [Code Conventions](#code-conventions)
+- [Build Configurations](#common-build-configurations)
+- [CMake Options](#cmake-options-reference)
+- [Testing](#testing)
+- [Examples](#examples)
+- [Dependencies](#dependencies)
+- [CLion Workflows](#clion-specific-workflows)
+- [When Making Changes](#when-making-changes)
+- [Common Mistakes](#common-mistakes-to-avoid)
+- [Recent Changes](#recent-changes)
+- [Promise/Future System](#promisefuture-system)
+
+---
+
 ## 🚨 CRITICAL: READ FULL FILES BEFORE MAKING CHANGES
 
 **ALWAYS read entire header files (at least the full file, not just snippets) before making changes.** This codebase has intricate template metaprogramming, PMR allocators, and cooperative actor patterns. Reading 50-100 lines will cause you to:
@@ -21,9 +43,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-actor-zeta is a C++17/20 **header-only** virtual actor model implementation with cooperative scheduling, custom memory management, and no dependencies on RTTI or exceptions.
+actor-zeta is a C++20 **header-only** virtual actor model implementation with cooperative scheduling, custom memory management, and no dependencies on RTTI or exceptions.
 
-**Minimum C++ standard: C++17**
+**Minimum C++ standard: C++20**
 
 ## Quick Start Commands
 
@@ -63,7 +85,6 @@ conan profile detect --force
 conan install . -of build -s build_type=Debug --build=missing
 cmake -B build -GNinja \
   -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_STANDARD=17 \
   -DALLOW_EXAMPLES=ON \
   -DALLOW_TESTS=ON \
   -DRTTI_DISABLE=ON \
@@ -151,7 +172,7 @@ The library implements **cooperative actors** with custom memory management:
 5. Send messages: `send(actor, sender, &MyActor::method, arg1, arg2)`
 6. Scheduler runs actor's message handlers cooperatively
 
-### Message System (`header/actor-zeta/mailbox/`)
+### Message System
 
 - **message** - Intrusive-pointer-based message with type erasure
 - **message_id** - Unique message identification
@@ -161,7 +182,9 @@ The library implements **cooperative actors** with custom memory management:
 
 Messages are **immutable** after creation. Use `make_message()` to create.
 
-### Scheduler (`header/actor-zeta/scheduler/`)
+**Key concept:** Messages now created in **receiver's** memory resource (not sender's) to avoid cross-arena migration issues.
+
+### Scheduler
 
 Cooperative scheduling, not preemptive:
 - **scheduler_t** - Abstract interface: `start()`, `stop()`, `schedule(resumable_t*)`
@@ -170,7 +193,7 @@ Cooperative scheduling, not preemptive:
 
 Actors run until they yield control (no timeslicing).
 
-### Memory Management (`header/actor-zeta/detail/pmr/`)
+### Memory Management
 
 **CRITICAL:** This is a custom PMR implementation, not std::pmr.
 
@@ -184,7 +207,7 @@ Actors run until they yield control (no timeslicing).
 
 **Never use `new MyActor` directly** - breaks memory resource tracking.
 
-### Type System (`header/actor-zeta/detail/`)
+### Type System
 
 Since RTTI is disabled:
 - **rtt.hpp** - Custom runtime type information (replaces `typeid`)
@@ -323,7 +346,7 @@ On Linux with Clang, CMake auto-detects and configures:
 - `compiler-rt` instead of `libgcc`
 - Linker flags in `LINKFLAGS` variable
 
-**If adding linker options:** Check `CMakeLists.txt` lines 123-181 for Clang-specific handling.
+**If adding linker options:** Check `CMakeLists.txt` for Clang-specific handling.
 
 ## Common Build Configurations
 
@@ -331,7 +354,6 @@ On Linux with Clang, CMake auto-detects and configures:
 ```bash
 cmake -B build -GNinja \
   -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_STANDARD=17 \
   -DALLOW_EXAMPLES=ON \
   -DALLOW_TESTS=ON \
   -DENABLE_TESTS_MEASUREMENTS=ON \
@@ -343,19 +365,8 @@ cmake -B build -GNinja \
 ```bash
 cmake -B build -GNinja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_STANDARD=17 \
   -DRTTI_DISABLE=ON \
   -DEXCEPTIONS_DISABLE=ON
-```
-
-### CI Testing (multiple standards)
-```bash
-# Test with C++17, 20
-for std in 17 20; do
-  cmake -B build-cpp$std -DCMAKE_CXX_STANDARD=$std -DALLOW_TESTS=ON
-  cmake --build build-cpp$std
-  (cd build-cpp$std && ctest)
-done
 ```
 
 ## CMake Options Reference
@@ -368,7 +379,7 @@ done
 | `ALLOW_BENCHMARK` | OFF | Build benchmark suite |
 | `RTTI_DISABLE` | ON | Disable RTTI (`-fno-rtti`) |
 | `EXCEPTIONS_DISABLE` | ON | Disable exceptions (`-fno-exceptions`) |
-| `CMAKE_CXX_STANDARD` | 17 | C++ standard (17, 20) |
+| `CMAKE_CXX_STANDARD` | 20 | C++ standard (C++20 only) |
 
 ## Testing
 
@@ -450,12 +461,11 @@ conan install . -of cmake-build-debug/conan -s build_type=Debug --build=missing
 -DCMAKE_TOOLCHAIN_FILE=cmake-build-debug/conan/Debug/generators/conan_toolchain.cmake
 ```
 
-### Using CLion with Different C++ Standards
+### Using CLion with Different Build Types
 
 Create multiple CMake profiles in CLion (`Settings → Build → CMake → +`):
-- **Debug-C++11**: `-DCMAKE_CXX_STANDARD=11 -DALLOW_TESTS=ON`
-- **Debug-C++17**: `-DCMAKE_CXX_STANDARD=17 -DALLOW_TESTS=ON -DALLOW_EXAMPLES=ON`
-- **Release-C++20**: `-DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20`
+- **Debug**: `-DALLOW_TESTS=ON -DALLOW_EXAMPLES=ON`
+- **Release**: `-DCMAKE_BUILD_TYPE=Release`
 
 Switch between profiles using the dropdown in CLion's toolbar.
 
@@ -470,37 +480,32 @@ Switch between profiles using the dropdown in CLion's toolbar.
 ## Common Mistakes to Avoid
 
 ### Memory Management
-❌ Using `new`/`delete` instead of `spawn()`
-❌ Using `std::shared_ptr` for actors (use `intrusive_ptr` instead)
-❌ Assuming `std::pmr` exists (this is a C++11 library with custom PMR)
-❌ Using `std::memcpy` for non-trivial types (breaks `std::string`, etc.)
-❌ Cross-arena migration for type-erased containers (RTT, message) - only same-arena supported
-❌ Using alignment < `sizeof(void*)` with `posix_memalign` (adjust to minimum valid alignment)
+- ❌ Using `new`/`delete` instead of `spawn()`
+- ❌ Using `std::shared_ptr` for actors (use `intrusive_ptr` instead)
+- ❌ Assuming `std::pmr` exists (this is a custom PMR, not std::pmr)
+- ❌ Using `std::memcpy` for non-trivial types (breaks `std::string`, etc.)
+- ❌ Cross-arena migration for type-erased containers (RTT, message) - only same-arena supported
+- ❌ Using alignment < `sizeof(void*)` with `posix_memalign`
 
-### Standard Library Replacements (MUST NOT USE)
-❌ **`std::function`** → Use `actor_zeta::detail::unique_function` instead (move-only, PMR-aware)
-❌ **`std::shared_ptr`** → Use `actor_zeta::detail::intrusive_ptr` instead (intrusive ref counting)
-❌ **`std::optional`** → Use custom optional or raw pointers with null checks (C++11 compatibility)
+### Standard Library Replacements
+- ❌ `std::function` → Use `actor_zeta::detail::unique_function` instead
+- ❌ `std::shared_ptr` → Use `actor_zeta::detail::intrusive_ptr` instead
+- ❌ `std::optional` → Use custom optional or raw pointers with null checks (C++11 compatibility)
 
-### RTTI and Exceptions (DISABLED)
-❌ Using `throw` or `try/catch` (exceptions disabled with `-fno-exceptions`)
-❌ Using `typeid` or `dynamic_cast` (RTTI disabled with `-fno-rtti`)
-❌ Any code relying on exception handling or runtime type information
+### RTTI and Exceptions
+- ❌ Using `throw` or `try/catch` (exceptions disabled)
+- ❌ Using `typeid` or `dynamic_cast` (RTTI disabled)
 
 ### Code Reading
-❌ Reading only part of a header file (miss template specializations, friend functions)
-❌ Skipping implementation files (.ipp) when modifying headers
+- ❌ Reading only part of a header file (miss template specializations)
+- ❌ Skipping implementation files (.ipp) when modifying headers
 
-### API Usage (IMPORTANT)
-✅ **`make_behavior()` and `message*` are LEGITIMATE APIs** - do not "fix" them
-✅ **`behavior(message*)` method signature is CORRECT** - used by base class `cooperative_actor`
-✅ **`behavior_t` with `make_behavior()`** - provides compile-time message unpacking
-
-**These are NOT old/deprecated APIs:**
+### API Usage
+✅ **These are LEGITIMATE APIs** - do not "fix" them:
 - `make_behavior(resource, this, &Class::method)` - creates behavior with automatic argument unpacking
-- `behavior_t` - type-erased behavior object that unpacks message arguments
-- `void behavior(message*)` - virtual method called by base class, must use pointer
-- Direct `message*` usage in low-level code (tests, custom actors)
+- `behavior_t` - type-erased behavior object
+- `void behavior(message*)` - virtual method called by base class
+- Direct `message*` usage in low-level code
 
 **Current API (all code should use this):**
 - Define `dispatch_traits<&Actor::method...>` with method pointers
@@ -508,482 +513,187 @@ Switch between profiles using the dropdown in CLion's toolbar.
 - Create `behavior_t` members using `make_behavior(resource, this, &Actor::method)`
 - Send messages using `send(actor, sender, &Actor::method, args...)`
 
-## Recent Important Fixes (Session Memory)
+## Recent Changes
 
-### RTT (Runtime Type Container) - Same-Arena Only Migration
-- **Issue:** Cross-arena migration used `std::memcpy` which broke non-trivial types like `std::string`
-- **Solution:** RTT allocator-extended move constructor now **only supports same-arena migration**
-- **Implementation:** Added `assert(resource == other.memory_resource_)` to prevent cross-arena usage
-- **Reason:** Type-erased containers can't properly copy non-trivial types without runtime type info
-- **Files affected:**
-  - `header/actor-zeta/detail/rtt.hpp` - allocator-extended constructor and move assignment
-  - `test/message/main.cpp` - removed cross-arena migration tests
+**For detailed change history, see [`CHANGELOG.md`](CHANGELOG.md).**
 
-### Message Cross-Arena Migration
-- **Behavior:** Messages inherit RTT's same-arena-only limitation
-- **Move semantics:** Safe within same arena (pointer stealing), prohibited across arenas
+### Key Recent Improvements (2025-01)
 
-### Test Memory Resource - `posix_memalign` Requirements
-- **Issue:** `posix_memalign` requires alignment ≥ `sizeof(void*)` and power of 2
-- **Solution:** Adjust alignment to minimum `sizeof(void*)` if smaller
-- **Files affected:** `test/unique_function/main.cpp`
+**Actor State Management:**
+- Unified state management with single `atomic<actor_state>` (replaced 3 atomics)
+- Atomic state transitions prevent invalid states
 
-### Conan 2.x + CMake Integration
-- **Issue:** `cmake_layout` in `conanfile.txt` created nested directory structures
-- **Solution:** Removed `[layout]` section from `conanfile.txt`
-- **Toolchain path:** `build/${BUILD_TYPE}/conan_toolchain.cmake` (NOT in `generators/` subdirectory)
-- **Files affected:**
-  - `conanfile.txt` - removed cmake_layout
-  - `.github/workflows/ubuntu_clang.yaml` - fixed toolchain path
-  - `.github/workflows/ubuntu_gcc.yaml` - fixed toolchain path
-  - `.github/workflows/macos.yml` - fixed toolchain path
+**Message System:**
+- Messages now created in **receiver's** memory resource (eliminates cross-arena issues)
+- API change: `enqueue_impl(sender, cmd, args...)` instead of `enqueue_impl(message_ptr)`
+- For library users: No changes needed
+- For custom actors/balancers: Update `enqueue_impl()` signature if overridden
 
-### Shutdown Race Condition Fix (lifo_inbox blocked state)
-- **Issue:** Assertion failure `assert(!blocked())` in `lifo_inbox.hpp:64` during scheduler shutdown
-- **Root cause:** Race condition when `resume_core_()` calls `inbox().empty()` while inbox is in `blocked` state
-  - Thread 1 (actor): Processes messages, inbox becomes empty, tries to call `empty()` to check if should block
-  - Thread 2 (balancer): Calls `enqueue()` + `schedule()` manually, may set inbox to blocked state
-  - Thread 1: Resumes but inbox is now blocked, calling `empty()` triggers assertion
-- **Solution:** Check `inbox().blocked()` BEFORE calling `inbox().empty()` in `resume_core_()`
-- **Implementation:**
-  ```cpp
-  // Check if inbox is blocked first to avoid assertion in empty()
-  if (inbox().blocked()) {
-      // Inbox is blocked, try to resume (another thread may have enqueued)
-      return scheduler::resume_result::resume;
-  }
+**Scheduler:**
+- Manual scheduling pattern (actors no longer self-schedule)
+- `resume()` returns `resume_info` with execution statistics
+- Shutdown race condition fixed
 
-  if (inbox().empty()) {
-      return inbox().try_block()
-             ? scheduler::resume_result::awaiting
-             : scheduler::resume_result::resume;
-  }
-  ```
-- **Why this works:**
-  - `blocked()` has no preconditions, safe to call anytime
-  - `empty()` requires `!blocked()` precondition per API contract
-  - If blocked, we should resume anyway to check for new messages
-- **Reproduces in:** Balancer pattern with manual `enqueue()` + `schedule()` calls
-- **Files affected:**
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:321` - added blocked() check in resume()
-  - `test/shutdown/main.cpp` - new test case reproduces the bug with balancer pattern
+**Promise/Future:**
+- Exponential backoff in `get()` (99% CPU reduction)
+- Multiple bug fixes (memory leaks, PMR resource usage, thread safety)
 
-### CI/CD - Compiler C++20 Support
-- **Issue:** Old GCC/Clang versions don't support C++20
-- **Solution:** Added matrix exclusions for C++20 builds with older compilers
-- **Excluded from C++20:**
-  - GCC 7, 8, 9, 10
-  - Clang 9, 10
-- **Files affected:** Both Ubuntu workflow files
+**Build System:**
+- Conan 2.x integration fixed
+- CI matrix updated for C++20 compiler support
 
-### Manual Scheduling - Removed Auto-Scheduling from Actors
-- **Change:** Actors no longer self-schedule when messages are enqueued
-- **Reason:** Transitioning to fully manual scheduling for better control (load balancing, custom schedulers)
-- **Implementation:** Removed `intrusive_ptr_add_ref(this)` from `enqueue_impl()` when `unblocked_reader` occurs
-- **Behavior:**
-  - **Before:** Actor automatically scheduled itself when transitioning from blocked to unblocked
-  - **After:** Caller must explicitly call `scheduler->schedule(actor)` after `enqueue()`
-- **Usage pattern (balancer example):**
-  ```cpp
-  bool enqueue_impl(message_ptr msg) override {
-      auto& worker = workers_[cursor_++ % workers_.size()];
-      worker->enqueue(std::move(msg));        // Enqueue message
-      scheduler_->schedule(worker.get());      // Manual schedule - caller responsibility
-      return true;
-  }
-  ```
-- **Files affected:**
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp` - removed auto-scheduling from enqueue_impl()
-  - `test/shutdown/main.cpp` - balancer_actor example demonstrates manual scheduling pattern
-- **Note:** Line numbers are historical and may have changed after subsequent refactoring
+**See [`CHANGELOG.md`](CHANGELOG.md) for detailed descriptions and migration guides.**
 
-### Resume Info - Extended Actor Resume Result
-- **Feature:** `resume()` now returns `resume_info` struct with execution statistics
-- **Motivation:** Enable graceful shutdown monitoring and scheduler observability
-- **Implementation:**
-  ```cpp
-  struct resume_info {
-      resume_result result;           // Execution status (resume/awaiting/done/shutdown)
-      size_t messages_processed;      // Number of messages processed in this resume call
+## Promise/Future System
 
-      // Implicit conversion to resume_result for backward compatibility
-      operator resume_result() const noexcept { return result; }
-  };
-  ```
-- **Key design decisions:**
-  - **Implicit conversion:** Scheduler code doesn't need changes, can still switch on `resume_info` as `resume_result`
-  - **Messages processed:** Actual count of messages handled (not remaining - can't be reliably counted in lock-free inbox)
-  - **Simple API:** No conditions, modes, or extra fields - just result + count
-- **Use cases:**
-  - **Graceful shutdown:** Monitor `messages_processed` to know when actor has drained all messages
-  - **Scheduler telemetry:** Track actor execution statistics (throughput, fairness)
-  - **Load balancing:** Make scheduling decisions based on processing counts
-- **Files affected:**
-  - `header/actor-zeta/scheduler/resumable.hpp:21-40` - added `resume_info` struct
-  - `header/actor-zeta/scheduler/resumable.hpp:45` - changed virtual `resume()` signature to return `resume_info`
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:27-34` - updated `resume()` methods
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:86-150` - `resume_core_()` now returns `resume_info` with message count
-  - `header/actor-zeta/impl/scheduler/sharing_scheduler.ipp:142-148` - shutdown_helper returns `resume_info`
-- **Backward compatibility:** Existing scheduler code works unchanged via implicit conversion
+**For complete guide with patterns and examples, see [`PROMISE_FUTURE_GUIDE.md`](PROMISE_FUTURE_GUIDE.md).**
 
-### Actor State Refactoring - Unified State Management
-- **Change:** Replaced three atomic flags with single `atomic<actor_state>` using bit flags
-- **Motivation:** Simplify synchronization, prevent invalid state combinations, enable atomic state transitions
-- **Implementation:**
-  ```cpp
-  // Before (three separate atomics):
-  std::atomic<bool> resuming_{false};      // Concurrent resume() detection
-  std::atomic<bool> is_scheduled_{false};  // Actor in scheduler queue?
-  std::atomic<bool> destroying_{false};    // Actor is being destroyed
+### Quick Overview
 
-  // After (single atomic enum):
-  std::atomic<actor_state> state_{actor_state::idle};  // Combined execution state
+Actor-zeta supports **async request-response** via `promise<T>` and `unique_future<T>`:
 
-  // actor_state enum with bit flags:
-  enum class actor_state : uint8_t {
-      idle                         = 0b000,  // Not scheduled, not running
-      scheduled                    = 0b001,  // In scheduler queue
-      running                      = 0b010,  // Executing resume()
-      running_scheduled            = 0b011,  // Running + needs reschedule
-      idle_destroying              = 0b100,  // Being destroyed
-      scheduled_destroying         = 0b101,  // INVALID: can't schedule destroying actor
-      running_destroying           = 0b110,  // Destroying while running
-      running_scheduled_destroying = 0b111   // INVALID: can't reschedule destroying actor
-  };
-  ```
-- **Key benefits:**
-  - **Single atomic** - simpler synchronization, one CAS instead of multiple operations
-  - **Invalid states impossible** - enum constrains valid combinations
-  - **Atomic transitions** - CAS validates state transitions (idle→scheduled, scheduled→running_scheduled)
-  - **Clear semantics** - all execution states in one place
-  - **Follows future_state pattern** - consistent approach across library
-- **Helper functions:**
-  - `is_scheduled()`, `is_running()`, `is_destroying()` - check individual bits
-  - `set_scheduled()`, `set_running()`, `set_destroying()` - set/clear bits atomically
-  - `make_state()` - construct state from three booleans
-- **State transitions:**
-  - `enqueue_impl()`: `idle → scheduled` (CAS ensures only one thread schedules)
-  - `resume_guard` constructor: `scheduled → running_scheduled` or `idle → running`
-  - `resume_guard` destructor: clears running bit, optionally clears scheduled bit
-  - Destructor/`begin_shutdown()`: sets destroying bit via CAS loop
-- **Testing:** All 59 tests pass with TSAN (100%) and ASAN (100%)
-- **Files affected:**
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:23-88` - added `actor_state` enum and helpers
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:119-208` - updated `enqueue_impl()` with atomic transitions
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:223-283` - refactored `resume_guard` to work with state_
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:308,388` - updated destroying checks in resume()
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:443-536` - updated destructor with atomic state transitions
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:541-553` - updated `begin_shutdown()`
-  - `header/actor-zeta/base/detail/cooperative_actor_classic.hpp:572` - replaced three atomics with single `state_`
-
----
-
-## Promise/Future System (Async Request-Response)
-
-### Overview
-
-Actor-zeta supports **async request-response** via nested `promise<T>` and `unique_future<T>` classes in `cooperative_actor`. This enables fire-and-forget OR request-response patterns.
-
-### Basic Usage
-
+**Fire-and-forget:**
 ```cpp
-// Fire-and-forget (no return value)
 send(target_actor, sender, &TargetActor::handle_command, arg1, arg2);
-
-// Request-response (returns future)
-auto future = send(target_actor, sender, &TargetActor::compute, arg1);
-int result = future.get();  // Blocks until ready
 ```
 
-### Promise/Future Patterns
-
-**Pattern 1: Simple Request-Response**
+**Request-response:**
 ```cpp
-// Sender
-auto future = send(worker, address(), &Worker::compute, 42);
-int result = future.get();  // Wait for result
-std::cout << "Result: " << result << "\n";
+auto future = send(target_actor, sender, &TargetActor::compute, arg1);
+int result = std::move(future).get();  // Blocks until ready
+```
 
-// Worker
+**Handler returns future:**
+```cpp
 class Worker : public basic_actor<Worker> {
-    void compute(int x) {
-        // Do expensive computation
+    unique_future<int> compute(int x) {
         int result = x * 2;
-
-        // Send response (future will receive it)
-        // Response happens automatically via promise in message
+        return make_ready_future<int>(resource(), result);
     }
 };
 ```
 
-**Pattern 2: Multiple Futures (Parallel Requests)**
+### Key Patterns
+
+**1. Multiple Futures (Parallel Requests)**
 ```cpp
-// Send multiple requests
-auto future1 = send(worker1, address(), &Worker::compute, 10);
-auto future2 = send(worker2, address(), &Worker::compute, 20);
-auto future3 = send(worker3, address(), &Worker::compute, 30);
+std::vector<unique_future<int>> futures;
+futures.reserve(workers.size());  // CRITICAL: Reserve to avoid reallocation!
+
+for (auto& worker : workers) {
+    futures.push_back(send(worker.get(), address(), &Worker::compute, data));
+}
 
 // Wait for all results
-int result1 = future1.get();
-int result2 = future2.get();
-int result3 = future3.get();
-```
-
-**Pattern 3: Fire-and-Forget (Orphaned Futures)**
-```cpp
-// Don't care about result - drop future immediately
-{
-    auto future = send(logger, address(), &Logger::log, "message");
-    // future destroyed here - becomes "orphaned"
-    // Message still processed, result ignored
+for (auto& future : futures) {
+    int result = std::move(future).get();
+    process(result);
 }
 ```
 
-**Pattern 4: Timeout (with is_ready())**
+**2. Fire-and-Forget (Orphaned Futures)**
 ```cpp
-auto future = send(worker, address(), &Worker::slow_task);
+{
+    auto future = send(logger, address(), &Logger::log, "message");
+}  // Future destroyed - message still processed, result ignored
+```
 
-// Poll with timeout
+**3. Timeout with Polling**
+```cpp
+auto future = send(worker, address(), &Worker::slow_task, data);
+
 auto start = std::chrono::steady_clock::now();
 while (!future.is_ready()) {
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    if (elapsed > std::chrono::seconds(5)) {
-        future.cancel();  // Request cancellation
+    if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
+        future.cancel();  // Best-effort cancellation
         throw timeout_error();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
-int result = future.get();
+
+int result = std::move(future).get();
 ```
 
 ### Best Practices
 
 ✅ **DO:**
-- Use `future.is_ready()` for non-blocking checks
-- Call `future.get()` only when ready (avoid busy-wait)
-- Ensure actor outlives all futures (or wait for all futures before destruction)
-- Use fire-and-forget for notifications/logging (no future storage)
+- Use `is_ready()` for non-blocking checks
+- Reserve vector capacity before adding futures
+- Ensure actor outlives all futures
+- Use fire-and-forget for notifications/logging
+- Move futures when calling `get()`
 
 ❌ **DON'T:**
-- Call `get()` multiple times in tight loop without `is_ready()` check
-- Destroy actor while futures are pending (assertion failure in debug)
-- Store futures indefinitely (memory leak of messages)
-- Use exceptions for error handling (exceptions disabled)
+- Call `get()` in tight loop without `is_ready()` check
+- Destroy actor while futures are pending
+- Store futures indefinitely
+- Use exceptions for error handling
 
-### Performance Notes
+### Performance
 
-**Current implementation uses exponential backoff:**
+Current implementation uses **exponential backoff** in `get()`:
 - Start: 1 microsecond sleep
 - Growth: Doubles each iteration (1μs → 2μs → 4μs → ... → 1ms cap)
 - CPU usage: ~0.1-1% while waiting
-- Latency: Variable (1μs to 1ms wake-up time)
 
-**Optimization options** (not yet implemented):
-- **C++20 atomic wait/notify:** Zero memory overhead, zero CPU usage
-- **Condition variable:** Zero CPU, +16 bytes per message with future
-- **Hybrid approach:** Fast spin (100μs) + blocking wait
+### Complete Example
 
-See `PROMISE_FUTURE_IMPLEMENTATION.md` for detailed architecture.
-
----
-
-### Promise/Future Code Quality Improvements (2025-01)
-
-Recent fixes to promise/future implementation:
-
-**Note:** Line numbers below are historical and may have changed after subsequent refactoring (e.g., Actor State Refactoring added 65+ lines at the beginning of the file).
-
-#### ✅ Bug Fix #1: Memory Leak in `release_message_ref()`
-- **Issue:** Future deleted message even if actor hadn't processed it yet
-- **Solution:** Check `error() != pending` before deleting
-- **Impact:** Eliminated memory leaks for all futures
-- **File:** `cooperative_actor_classic.hpp:278-299`
-
-#### ✅ Bug Fix #2: Wrong PMR Resource in `promise::set_value()`
-- **Issue:** Used `get_default_resource()` instead of message's resource
-- **Solution:** Added `rtt::memory_resource()` getter, use `slot_->body().memory_resource()`
-- **Impact:** Correct PMR resource tracking, prevents memory corruption
-- **Files:**
-  - `detail/rtt.hpp` - added `memory_resource()` method
-  - `cooperative_actor_classic.hpp:77-91` - fixed resource usage
-
-#### ✅ Improvement #3: Exponential Backoff in `get()`
-- **Before:** Busy-wait with `std::this_thread::yield()` (~100% CPU)
-- **After:** Exponential backoff (1μs → 1ms cap) (~0.1-1% CPU)
-- **Impact:** 99% reduction in CPU usage while waiting
-- **File:** `cooperative_actor_classic.hpp:226-251, 360-383`
-
-#### ✅ Improvement #4: Thread Safety in Destructor
-- **Issue:** `pending_futures_count_` used `memory_order_relaxed` in destructor
-- **Solution:** Use `memory_order_acquire` to synchronize with future destructors
-- **Impact:** Prevents race conditions during shutdown
-- **File:** `cooperative_actor_classic.hpp:571`
-
-#### ✅ Improvement #5: Orphaned Check in `promise::set_error()`
-- **Added:** Assertion to catch setting error on orphaned promises
-- **Consistency:** Both `set_value()` and `set_error()` now check orphaned state
-- **File:** `cooperative_actor_classic.hpp:94-98, 151-155`
-
-#### ✅ Code Quality: Added `[[nodiscard]]` Attributes
-- **Methods:** `is_cancelled()`, `is_valid()`, `is_ready()`, `error()`, `valid()`
-- **Impact:** Compiler warns if result is ignored
-- **File:** `cooperative_actor_classic.hpp` - all promise/future query methods
-
----
-
-### Cooperative Actor Improvements (2025-01)
-
-#### ✅ Bug Fix: `current_msg_guard` Destructor
-- **Issue:** Saved `prev` pointer but didn't restore it (set to `nullptr` instead)
-- **Solution:** Restore previous message: `self->current_message_ = prev;`
-- **Impact:** Nested message processing now works correctly
-- **File:** `cooperative_actor_classic.hpp:592`
-
-#### ✅ Code Modernization
-- **Deleted constructors:** Changed from implicit declaration to `= delete`
-- **Benefit:** Better compiler error messages, explicit intent
-- **File:** `cooperative_actor_classic.hpp:597-598`
-
-#### ✅ Edge Case: `max_throughput == 0` Validation
-- **Added:** `assert(max_throughput > 0)` in `resume()`
-- **Impact:** Catches invalid scheduler calls
-- **File:** `cooperative_actor_classic.hpp:481`
-
----
-
-### Known Limitations & Future Work
-
-#### Promise/Future Limitations
-
-1. **No timeout support:** `get()` blocks indefinitely
-   - Workaround: Use `is_ready()` polling with timer
-   - Future: Add `get(timeout)` overload
-
-2. **No exception support:** Errors via `slot_error_code` enum only
-   - Design constraint: `-fno-exceptions` build requirement
-   - Alternative: Use `std::optional<T>` or `std::variant<T, error_code>` in future
-
-3. **Single-threaded get():** No concurrent `get()` calls on same future
-   - Future is move-only, prevents accidental sharing
-   - Multiple calls from same thread work (non-destructive get)
-
-4. **Actor must outlive futures:** No automatic lifetime management
-   - Debug: Assertion in `~cooperative_actor()` catches this
-   - Release: Undefined behavior if violated
-   - Best practice: Wait for all futures before actor destruction
-
-#### Performance Optimization Options
-
-**Not yet implemented** (see analysis in review session):
-
-1. **Atomic wait/notify (C++20):**
-   ```cpp
-   // Zero overhead, zero CPU
-   slot_->error_.wait(slot_error_code::pending);
-   slot_->error_.notify_one();
-   ```
-   - Requires: C++20 standard
-   - Benefit: Zero memory overhead, zero CPU usage
-   - Trade-off: Requires compiler support
-
-2. **Condition variable:**
-   ```cpp
-   // Lazy init on set_has_future()
-   std::unique_ptr<std::condition_variable> cv_;
-   std::unique_ptr<std::mutex> cv_mutex_;
-   ```
-   - Benefit: Zero CPU usage while waiting
-   - Trade-off: +16 bytes per message with future, mutex overhead
-
-3. **Hybrid approach:**
-   - Fast spin (100μs) for quick operations
-   - Blocking wait for slow operations
-   - Best of both worlds
-
-**Recommendation:** Current exponential backoff is sufficient for most use cases. Consider alternatives only if:
-- Profiling shows CPU usage problem
-- Futures regularly wait >10ms
-- Large number of concurrent futures (>100)
-
----
-
-### Message Lifetime & Ownership Rules
-
-Understanding message ownership is critical for correct promise/future usage:
-
-**Ownership States:**
-
-1. **Mailbox owns (normal):**
-   ```cpp
-   send(actor, ...);  // Message in mailbox, unique_ptr owns it
-   // Actor processes → message deleted after handler returns
-   ```
-
-2. **Future owns (after actor processes):**
-   ```cpp
-   auto future = send(actor, ...);
-   // Actor processes → calls msg.release() → future owns message
-   // Future destructor deletes message
-   ```
-
-3. **Orphaned (future destroyed early):**
-   ```cpp
-   {
-       auto future = send(actor, ...);
-   }  // Future destroyed → message marked orphaned
-   // Actor still processes, mailbox deletes message
-   ```
-
-**Conditional Delete Logic:**
 ```cpp
-// In unique_future::release_message_ref()
-if (slot_->error() != slot_error_code::pending) {
-    // Actor processed → future owns → DELETE
-    mailbox::message_ptr auto_delete(slot_);
-} else {
-    // Actor hasn't processed → mailbox owns → DON'T delete
+#include <actor-zeta.hpp>
+
+class Worker : public actor_zeta::basic_actor<Worker> {
+public:
+    actor_zeta::unique_future<int> compute(int x) {
+        return actor_zeta::make_ready_future<int>(resource(), x * x);
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<&Worker::compute>;
+
+    explicit Worker(actor_zeta::pmr::memory_resource* ptr)
+        : actor_zeta::basic_actor<Worker>(ptr)
+        , compute_(actor_zeta::make_behavior(resource(), this, &Worker::compute)) {}
+
+    void behavior(actor_zeta::mailbox::message* msg) {
+        if (msg->command() == actor_zeta::msg_id<Worker, &Worker::compute>) {
+            compute_(msg);
+        }
+    }
+
+private:
+    actor_zeta::behavior_t compute_;
+};
+
+int main() {
+    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto worker = actor_zeta::spawn<Worker>(resource);
+
+    auto future = actor_zeta::send(
+        worker.get(),
+        actor_zeta::address_t::empty_address(),
+        &Worker::compute,
+        42
+    );
+
+    int result = std::move(future).get();
+    std::cout << "Result: " << result << "\n";  // Output: Result: 1764
+
+    return 0;
 }
 ```
 
-**Key Insight:** Only delete if `error != pending` because:
-- `pending` → actor hasn't called `set_error()` → mailbox still owns
-- `ok/error` → actor called `set_error()` AND `msg.release()` → future owns
+**See [`PROMISE_FUTURE_GUIDE.md`](PROMISE_FUTURE_GUIDE.md) for:**
+- Detailed patterns and examples
+- Message lifetime & ownership rules
+- Debugging common issues
+- Known limitations
+- Performance optimization options
 
 ---
 
-### Debugging Promise/Future Issues
+## Additional Resources
 
-**Common Issues & Solutions:**
-
-1. **Assertion: "Actor destroyed with pending futures"**
-   ```
-   Cause: Actor destructed while futures are still alive
-   Solution: Call future.get() or let futures go out of scope before actor destruction
-   ```
-
-2. **Assertion: "Setting value on orphaned promise"**
-   ```
-   Cause: Future was destroyed, then actor tried to set result
-   Solution: Check promise.is_valid() before set_value()
-   ```
-
-3. **Hang in `future.get()`:**
-   ```
-   Cause: Actor never calls set_value() or set_error()
-   Debug: Check actor's behavior() dispatches message correctly
-   ```
-
-4. **Memory leak:**
-   ```
-   Cause: Storing futures indefinitely without calling get()
-   Solution: Always call get() or let future destruct
-   ```
-
-**Debug Build Features:**
-- Assertions catch most ownership violations
-- Pending futures count checked in actor destructor
-- Orphaned/cancelled checks before set_value/set_error
-
-**Release Build:**
-- Assertions disabled → undefined behavior if contracts violated
-- Always test with assertions enabled first!
+- **[CHANGELOG.md](CHANGELOG.md)** - Detailed change history and migration guides
+- **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Complete promise/future documentation
+- **[MESSAGE_CREATION_REFACTORING.md](MESSAGE_CREATION_REFACTORING.md)** - Message creation refactoring notes
+- **Examples:** `examples/` directory for working code samples
+- **Tests:** `test/` directory for usage patterns and edge cases

@@ -74,8 +74,16 @@ public:
 
     unique_future<void> behavior(mailbox::message* msg) {
         switch (msg->command()) {
-            case msg_id<client_actor, &client_actor::process>:
-                return dispatch(this, &client_actor::process, msg);
+            case msg_id<client_actor, &client_actor::process>: {
+                // CRITICAL: Must store pending coroutine future!
+                // If we just return dispatch() result, it gets destroyed immediately,
+                // which destroys the coroutine and causes refcount underflow.
+                auto future = dispatch(this, &client_actor::process, msg);
+                if (!future.is_ready()) {
+                    pending_.push_back(std::move(future));
+                }
+                return make_ready_future_void(resource());
+            }
             case msg_id<client_actor, &client_actor::get_result>:
                 return dispatch(this, &client_actor::get_result, msg);
             default:
@@ -84,11 +92,31 @@ public:
         return make_ready_future_void(resource());
     }
 
+    /// @brief Poll pending coroutines and resume if ready
+    /// @return true if there are still pending coroutines
+    bool poll_pending() {
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (it->awaiting_ready()) {
+                it->resume();
+                if (it->is_ready()) {
+                    it = pending_.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+        return !pending_.empty();
+    }
+
+    /// @brief Check if there are pending coroutines
+    bool has_pending() const { return !pending_.empty(); }
+
     ~client_actor() = default;
 
 private:
     address_t worker_address_;
     std::atomic<int> final_result_;
+    std::vector<unique_future<int>> pending_;  // Store pending coroutine futures
 };
 
 
@@ -116,6 +144,8 @@ public:
     void run_once() {
         if (client_) client_->resume(1);
         if (worker_) worker_->resume(1);
+        // Poll pending coroutines after processing messages
+        if (client_) client_->poll_pending();
     }
 
 private:

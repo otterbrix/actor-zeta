@@ -112,12 +112,6 @@ private:
 /// Использует только address_t для связи с worker
 class client_actor final : public basic_actor<client_actor> {
 public:
-    /// Пользовательский формат для pending корутин
-    struct pending_info {
-        unique_future<int> future;
-        intrusive_ptr<detail::future_state_base> result_slot;
-    };
-
     explicit client_actor(pmr::memory_resource* resource, address_t worker_address, const std::string& name)
         : basic_actor<client_actor>(resource)
         , worker_address_(worker_address)
@@ -127,27 +121,22 @@ public:
 
     /// @brief Пользователь вызывает для poll pending корутин
     /// @return true если есть pending корутины
+    /// Благодаря chaining в dispatch(), результат автоматически
+    /// пробрасывается в caller's future когда корутина завершается.
+    /// Нам нужно только resume'ить корутину когда awaited future готов.
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            auto* state = it->future.get_state();
-            if (!state) {
-                it = pending_.erase(it);
-                continue;
-            }
-
-            auto* awaiting = state->get_awaiting_on();
-            if (awaiting && awaiting->is_ready()) {
+            // Проверяем готова ли awaited future
+            if (it->awaiting_ready()) {
                 g_log.log("[%::poll_pending] awaiting ready, resuming coroutine", name_);
-                // Resume корутину
-                awaiting->resume_coroutine();
 
-                // Проверяем завершилась ли
-                if (it->future.is_ready()) {
-                    g_log.log("[%::poll_pending] future ready, copying result to slot", name_);
-                    // Копируем результат в result_slot
-                    if (it->result_slot) {
-                        it->result_slot->set_result_rtt(state->take_result());
-                    }
+                // Resume корутину - она продолжит выполнение
+                it->resume();
+
+                // Когда корутина завершается, chaining автоматически
+                // форвардит результат в caller's future
+                if (it->is_ready()) {
+                    g_log.log("[%::poll_pending] coroutine completed, result auto-forwarded", name_);
                     it = pending_.erase(it);
                     continue;
                 }
@@ -212,12 +201,14 @@ public:
 
         switch (msg->command()) {
             case msg_id<client_actor, &client_actor::process>: {
-                // dispatch возвращает future
+                // dispatch() настраивает chaining автоматически:
+                // method_future -> msg->result_slot() (caller's future)
                 auto future = dispatch(this, &client_actor::process, msg);
                 if (!future.is_ready()) {
                     // Корутина suspended - сохраняем для polling
+                    // Никаких promise не нужно - chaining уже настроен!
                     g_log.log("[%::behavior] process() suspended, storing pending", name_);
-                    pending_.push_back({std::move(future), msg->result_slot()});
+                    pending_.push_back(std::move(future));
                 }
                 // Возвращаем ready void future (мы обработали сообщение)
                 return make_ready_future_void(resource());
@@ -243,7 +234,7 @@ private:
     std::string process_start_thread_;
     std::string process_after_await_thread_;
     std::string process_end_thread_;
-    std::vector<pending_info> pending_;  // Пользовательское хранилище pending корутин
+    std::vector<unique_future<int>> pending_;  // Просто храним futures для resume
 };
 
 

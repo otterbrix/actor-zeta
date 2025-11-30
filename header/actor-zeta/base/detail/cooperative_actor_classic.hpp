@@ -138,44 +138,22 @@ namespace actor_zeta { namespace base {
                 std::forward<Args>(args)...
             );
 
-            // Use PMR make_counted - cleaner, exception-safe allocation
-            auto state = pmr::make_counted<detail::future_state<R>>(resource());  // refcount = 1
-
-            // set_result_slot accepts intrusive_ptr by const ref, calls add_ref() internally
-            msg->set_result_slot(state);  // refcount = 2 (local + message)
-
             // ============================================================================
-            // REFCOUNT OWNERSHIP MODEL
+            // PROMISE-BASED STATE MANAGEMENT (Seastar-style)
             // ============================================================================
-            //
-            // 1. make_counted creates intrusive_ptr with refcount = 1 (local 'state')
-            // 2. set_result_slot(state) copies intrusive_ptr -> add_ref() -> refcount = 2
-            //    Owners: local 'state' (+1), message slot_ (+1)
-            // 3. adopt_ref + detach() transfers ownership without add_ref():
-            //    - state.detach() releases local ownership WITHOUT decrementing refcount
-            //    - adopt_ref tells unique_future to adopt the +1 reference (don't add_ref)
-            //    - refcount stays at 2: message (+1), future (+1 adopted)
-            // 4. When actor processes message:
-            //    - Message destroyed -> slot_->release() -> refcount: 2 -> 1
-            //    - Future still owns +1 reference
-            // 5. When caller consumes future:
-            //    - future.get() / ~unique_future() -> slot_->release() -> refcount: 1 -> 0
-            //    - future_state deleted
-            //
-            // CRITICAL: adopt_ref prevents race where actor destroys message before
-            // future constructor finishes. Without adopt_ref, we'd need add_ref() which
-            // could race with message destruction -> use-after-free!
+            // 1. promise creates state with refcount=1
+            // 2. set_result_slot: implicit intrusive_ptr -> add_ref, copy, release -> net +1
+            // 3. get_future() adds ref
+            // 4. promise destructor releases
+            // Final: message (+1), future (+1)
             // ============================================================================
+            promise<R> p(resource());
+            msg->set_result_slot(p.state());  // Implicit conversion to intrusive_ptr
 
             // NOTE: This is_destroying() check is racy by design (TOCTOU - Time-Of-Check-Time-Of-Use).
-            // If actor starts destroying AFTER this check but BEFORE push_back(), the message will
-            // be enqueued but not processed. This is acceptable:
-            // - resume() has a second is_destroying() check that prevents behavior() execution
-            // - Minimal waste (one message allocation + enqueue)
-            // - Early check here prevents unnecessary work in the common case
             if (is_destroying(state_.load(std::memory_order_acquire))) {
-                state->set_state(detail::future_state_enum::error);
-                return unique_future<R>(adopt_ref, state.detach(), false);
+                p.state()->set_state(detail::future_state_enum::error);
+                return p.get_future();
             }
 
             auto result = mailbox().push_back(std::move(msg));
@@ -250,7 +228,7 @@ namespace actor_zeta { namespace base {
                     break;
 
                 case detail::enqueue_result::queue_closed:
-                    state->set_state(detail::future_state_enum::error);
+                    p.state()->set_state(detail::future_state_enum::error);
                     needs_sched = false;
                     break;
 
@@ -260,10 +238,9 @@ namespace actor_zeta { namespace base {
                     break;
             }
 
-            // Use adopt_ref to transfer ownership without add_ref() race
-            // Actor may have already processed message and released its ref!
-            // Refcount stays at 2: message +1 (may be destroyed), future adopts local ref +1
-            return unique_future<R>(adopt_ref, state.detach(), needs_sched);
+            auto future = p.get_future();
+            future.set_needs_scheduling(needs_sched);
+            return future;
         }
 
         scheduler::resume_info resume(size_t max_throughput) noexcept {
@@ -504,24 +481,23 @@ namespace actor_zeta { namespace base {
 
                         ~message_guard() noexcept {
                             // ============================================================================
-                            // REFCOUNT OWNERSHIP - NO MANIPULATION NEEDED
+                            // REFCOUNT OWNERSHIP - Promise-based (Seastar-style)
                             // ============================================================================
                             //
-                            // message_guard does NOT touch refcount at all! Here's why it works:
+                            // message_guard does NOT touch refcount. Ownership model:
                             //
-                            // 1. enqueue_impl creates future_state with refcount = 2:
-                            //    - Message slot_ holds +1 reference (via set_result_slot)
-                            //    - Future adopted +1 reference (via adopt_ref + detach)
-                            // 2. When ~message() runs (here in ~message_guard):
+                            // 1. enqueue_impl creates promise<R> -> state with refcount=1
+                            // 2. set_result_slot: message holds +1 reference -> refcount=2
+                            // 3. get_future(): future holds +1 reference -> refcount=3
+                            // 4. promise destructor releases -> refcount=2
+                            // Final: message (+1), future (+1)
+                            //
+                            // When ~message() runs (here in ~message_guard):
                             //    - slot_->release() decrements refcount: 2 -> 1
                             //    - Future still owns +1 reference
-                            // 3. When caller consumes future:
+                            // When caller consumes future:
                             //    - future.get() / ~unique_future() -> release() -> refcount: 1 -> 0
                             //    - future_state deleted
-                            //
-                            // CRITICAL: adopt_ref in enqueue_impl prevents race!
-                            // Without adopt_ref, we'd need: msg->result_slot()->add_ref() HERE
-                            // But that would race with message destruction -> use-after-free!
                             // ============================================================================
                             actor_->current_message_ = prev_message_;
                         }

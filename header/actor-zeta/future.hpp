@@ -13,13 +13,14 @@
 
 namespace actor_zeta {
 
-    // Forward declarations
+    // Forward declaration for awaiter (used by promise::await_transform)
     template<typename T>
-    struct future_awaiter;
+    struct awaiter;
 
+
+    // Forward declaration
     template<typename T>
-    struct awaiter;  // Forward declaration (defined later, used by promise::await_transform)
-
+    class unique_future;
 
     template<typename T>
     class promise final {
@@ -28,60 +29,109 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
-        explicit promise(const intrusive_ptr<detail::future_state_base>& slot, pmr::memory_resource* res) noexcept
-            : slot_(slot)
-            , resource_(res) {
-            assert(slot_ && "promise constructed with null slot");
+        /// @brief Create promise that owns its state (Seastar-style)
+        /// @param res Memory resource for state allocation
+        explicit promise(pmr::memory_resource* res)
+            : state_(nullptr)
+            , resource_(res)
+            , owns_state_(true) {
+            assert(res && "promise constructed with null resource");
+            void* mem = resource_->allocate(sizeof(detail::future_state<T>),
+                                            alignof(detail::future_state<T>));
+            state_ = new (mem) detail::future_state<T>(resource_);
+            // state_ starts with refcount=1, promise owns it
         }
 
         promise(promise&& other) noexcept
-            : slot_(std::move(other.slot_))
-            , resource_(other.resource_) {
+            : state_(other.state_)
+            , resource_(other.resource_)
+            , owns_state_(other.owns_state_) {
+            other.state_ = nullptr;
+            other.owns_state_ = false;
         }
 
         promise& operator=(promise&& other) noexcept {
             if (this != &other) {
-                slot_ = std::move(other.slot_);
+                release();
+                state_ = other.state_;
                 resource_ = other.resource_;
+                owns_state_ = other.owns_state_;
+                other.state_ = nullptr;
+                other.owns_state_ = false;
             }
             return *this;
         }
 
-        ~promise() noexcept = default;
+        ~promise() noexcept {
+            release();
+        }
+
+        /// @brief Get future associated with this promise (Seastar-style)
+        /// @return unique_future that shares state with this promise
+        /// @note Can be called multiple times (each future adds reference)
+        [[nodiscard]] unique_future<T> get_future() noexcept;
 
         void set_value(T&& value) {
-            assert(slot_ && "set_value() on moved-from promise");
+            assert(state_ && "set_value() on moved-from promise");
 
-            if (slot_->is_cancelled()) {
+            if (state_->is_cancelled()) {
                 assert(false && "set_value() on orphaned/cancelled promise");
                 return;
             }
 
-            slot_->set_result_rtt(detail::rtt(resource_, std::forward<T>(value)));
+            state_->set_result_rtt(detail::rtt(resource_, std::forward<T>(value)));
         }
 
         void set_value(const T& value) {
-            assert(slot_ && "set_value() on moved-from promise");
+            assert(state_ && "set_value() on moved-from promise");
 
-            if (slot_->is_cancelled()) {
+            if (state_->is_cancelled()) {
                 assert(false && "set_value() on orphaned/cancelled promise");
                 return;
             }
 
-            slot_->set_result_rtt(detail::rtt(resource_, value));
+            state_->set_result_rtt(detail::rtt(resource_, value));
         }
 
         [[nodiscard]] bool is_valid() const noexcept {
-            return slot_ != nullptr;
+            return state_ != nullptr;
         }
 
-        [[nodiscard]] detail::future_state_base* slot() const noexcept {
-            return slot_.get();
+        [[nodiscard]] detail::future_state<T>* state() const noexcept {
+            return state_;
+        }
+
+        [[nodiscard]] pmr::memory_resource* resource() const noexcept {
+            return resource_;
+        }
+
+        /// @brief Wrap existing state (non-owning) - for result propagation
+        /// @param state Existing future state to wrap
+        /// @param res Memory resource (required)
+        /// @note State must outlive this promise. Caller responsible for lifetime.
+        static promise wrap(detail::future_state<T>* state, pmr::memory_resource* res) noexcept {
+            assert(res && "wrap() requires memory_resource");
+            assert(state && "wrap() requires valid state");
+            return promise(state, res, false);  // non-owning
         }
 
     private:
-        intrusive_ptr<detail::future_state_base> slot_;
+        // Private constructor for wrap() - non-owning
+        promise(detail::future_state<T>* state, pmr::memory_resource* res, bool owns) noexcept
+            : state_(state)
+            , resource_(res)
+            , owns_state_(owns) {}
+
+        void release() noexcept {
+            if (owns_state_ && state_) {
+                intrusive_ptr_release(state_);
+            }
+            state_ = nullptr;
+        }
+
+        detail::future_state<T>* state_;
         pmr::memory_resource* resource_;
+        bool owns_state_;
     };
 
     template<>
@@ -91,47 +141,98 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
-        explicit promise(const intrusive_ptr<detail::future_state_base>& slot, pmr::memory_resource* res) noexcept
-            : slot_(slot), resource_(res) {
-            assert(slot_ && "promise<void> constructed with null slot");
+        /// @brief Create promise that owns its state (Seastar-style)
+        /// @param res Memory resource for state allocation
+        explicit promise(pmr::memory_resource* res)
+            : state_(nullptr)
+            , resource_(res)
+            , owns_state_(true) {
+            assert(res && "promise<void> constructed with null resource");
+            void* mem = resource_->allocate(sizeof(detail::future_state<void>),
+                                            alignof(detail::future_state<void>));
+            state_ = new (mem) detail::future_state<void>(resource_);
+            // state_ starts with refcount=1, promise owns it
         }
 
         promise(promise&& other) noexcept
-            : slot_(std::move(other.slot_)), resource_(other.resource_) {
+            : state_(other.state_)
+            , resource_(other.resource_)
+            , owns_state_(other.owns_state_) {
+            other.state_ = nullptr;
+            other.owns_state_ = false;
         }
 
         promise& operator=(promise&& other) noexcept {
             if (this != &other) {
-                slot_ = std::move(other.slot_);
+                release();
+                state_ = other.state_;
                 resource_ = other.resource_;
+                owns_state_ = other.owns_state_;
+                other.state_ = nullptr;
+                other.owns_state_ = false;
             }
             return *this;
         }
 
-        ~promise() noexcept = default;
+        ~promise() noexcept {
+            release();
+        }
+
+        /// @brief Get future associated with this promise (Seastar-style)
+        /// @return unique_future that shares state with this promise
+        /// @note Can be called multiple times (each future adds reference)
+        [[nodiscard]] unique_future<void> get_future() noexcept;
 
         void set_value() {
-            assert(slot_ && "set_value() on moved-from promise<void>");
+            assert(state_ && "set_value() on moved-from promise<void>");
 
-            if (slot_->is_cancelled()) {
+            if (state_->is_cancelled()) {
                 assert(false && "set_value() on orphaned/cancelled promise");
                 return;
             }
 
-            slot_->set_result_rtt(detail::rtt(resource_));  // Empty rtt for void
+            state_->set_result_rtt(detail::rtt(resource_));  // Empty rtt for void
         }
 
         [[nodiscard]] bool is_valid() const noexcept {
-            return slot_ != nullptr;
+            return state_ != nullptr;
         }
 
-        [[nodiscard]] detail::future_state_base* slot() const noexcept {
-            return slot_.get();
+        [[nodiscard]] detail::future_state<void>* state() const noexcept {
+            return state_;
+        }
+
+        [[nodiscard]] pmr::memory_resource* resource() const noexcept {
+            return resource_;
+        }
+
+        /// @brief Wrap existing state (non-owning) - for result propagation
+        /// @param state Existing future state to wrap
+        /// @param res Memory resource (required)
+        /// @note State must outlive this promise. Caller responsible for lifetime.
+        static promise wrap(detail::future_state<void>* state, pmr::memory_resource* res) noexcept {
+            assert(res && "wrap() requires memory_resource");
+            assert(state && "wrap() requires valid state");
+            return promise(state, res, false);  // non-owning
         }
 
     private:
-        intrusive_ptr<detail::future_state_base> slot_;
+        // Private constructor for wrap() - non-owning
+        promise(detail::future_state<void>* state, pmr::memory_resource* res, bool owns) noexcept
+            : state_(state)
+            , resource_(res)
+            , owns_state_(owns) {}
+
+        void release() noexcept {
+            if (owns_state_ && state_) {
+                intrusive_ptr_release(state_);
+            }
+            state_ = nullptr;
+        }
+
+        detail::future_state<void>* state_;
         pmr::memory_resource* resource_;
+        bool owns_state_;
     };
 
     // Tag type for adopting an existing reference (no add_ref() in constructor)
@@ -275,6 +376,10 @@ namespace actor_zeta {
             return needs_scheduling_;
         }
 
+        void set_needs_scheduling(bool value) noexcept {
+            needs_scheduling_ = value;
+        }
+
         void cancel() noexcept {
             if (state_) {
                 state_->set_state(detail::future_state_enum::cancelled);
@@ -283,6 +388,38 @@ namespace actor_zeta {
 
         [[nodiscard]] bool is_cancelled() const noexcept {
             return state_ && state_->is_cancelled();
+        }
+
+        // === Coroutine control API (analogous to std::coroutine_handle) ===
+
+        /// @brief Check if this future has an associated coroutine
+        /// @return true if coroutine handle is stored (analogous to coroutine_handle::operator bool())
+        [[nodiscard]] bool has_coroutine() const noexcept {
+            return state_ && state_->has_coroutine();
+        }
+
+        /// @brief Check if associated coroutine is done (at final suspend)
+        /// @return true if coroutine exists and completed (analogous to coroutine_handle::done())
+        [[nodiscard]] bool coroutine_done() const noexcept {
+            return state_ && state_->coroutine_done();
+        }
+
+        /// @brief Resume associated coroutine
+        /// @note Analogous to coroutine_handle::resume()
+        /// @note Caller must ensure awaiting_ready() == true before calling
+        void resume() noexcept {
+            if (state_) {
+                state_->resume_coroutine();
+            }
+        }
+
+        /// @brief Check if awaited future is ready
+        /// @return true if coroutine is waiting on a future and that future is ready
+        /// @note User code should call resume() when this returns true
+        [[nodiscard]] bool awaiting_ready() const noexcept {
+            if (!state_) return false;
+            auto* awaiting = state_->get_awaiting_on();
+            return awaiting && awaiting->is_ready();
         }
 
         [[nodiscard]] detail::future_state<T>* get_state() const noexcept {
@@ -308,6 +445,38 @@ namespace actor_zeta {
         [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
             assert(state_ && "memory_resource() called on moved-from or invalid future");
             return state_->memory_resource();
+        }
+
+        // ============================================================================
+        // Result propagation API (Seastar-style forward_to)
+        // ============================================================================
+
+        /// @brief Forward result from this future to target promise when ready
+        /// @param target Promise to receive the result
+        /// @note If already ready, copies result immediately
+        /// @note If not ready, user must poll and call forward_to_if_ready() or copy manually
+        /// @note This is USER-CONTROLLED - no automatic callbacks (thread affinity)
+        void forward_to(promise<T>& target) {
+            if (!state_) return;
+
+            if (state_->is_ready()) {
+                // Ready - copy result immediately
+                target.set_value(std::move(*this).get());
+            }
+            // Not ready - user must poll and forward later
+            // We don't set up automatic forwarding (violates thread affinity)
+        }
+
+        /// @brief Check if ready and forward to target if so
+        /// @param target Promise to receive the result
+        /// @return true if forwarded (was ready), false if still pending
+        /// @note Call this in poll loop until it returns true
+        bool forward_to_if_ready(promise<T>& target) {
+            if (!state_ || !state_->is_ready()) {
+                return false;
+            }
+            target.set_value(std::move(*this).get());
+            return true;
         }
 
         struct promise_type {
@@ -476,28 +645,34 @@ namespace actor_zeta {
             other.is_ready_void_ = false;
         }
 
-        /// @brief Converting constructor from unique_future<T> (any T)
-        /// @details Creates a void view of the typed future state WITHOUT moving ownership.
-        ///          Both futures share the same state (via intrusive_ptr refcounting).
+        /// @brief Converting constructor from unique_future<T> (any T) - TRUE MOVE SEMANTICS
+        /// @details Moves ownership from typed future to void future. After this call,
+        ///          the original typed future is INVALID (state_ = nullptr).
         ///          The typed result is preserved in the state (via RTT), but this future
         ///          acts as void (cannot call .get() to retrieve typed value).
         ///          Continuation chain works correctly - typed result propagates through RTT.
         /// @note This enables returning unique_future<T> from dispatch() and converting
         ///       to unique_future<void> in behavior(), solving the return type conflict.
+        /// @warning After this call, `other` is in moved-from state and MUST NOT be used!
         template<typename T>
         unique_future(unique_future<T>&& other) noexcept
-            : state_(reinterpret_cast<detail::future_state<void>*>(other.get_state()))
+            : state_(reinterpret_cast<detail::future_state<void>*>(other.release_state()), false)
             , needs_scheduling_(other.needs_scheduling())
             , is_ready_void_(false) {
-            // Note: get_state() returns raw pointer, intrusive_ptr constructor calls add_ref()
-            // This creates a SHARED view - both futures point to same state with separate refcounts
+            // FIX Issue #2: True move semantics
+            // - release_state() returns raw pointer WITHOUT decrementing refcount
+            // - intrusive_ptr(ptr, false) adopts the reference (no add_ref)
+            // - other.state_ is now nullptr (truly moved)
+            //
             // This is safe because:
             // 1. Both future_state<T> and future_state<void> have identical memory layout
             // 2. Both inherit from future_state_base with same virtual methods
             // 3. We only call base class methods through this pointer (continuation, coroutine)
             // 4. Typed result stored in RTT (type-erased), continuation chain works correctly
             // 5. Never call typed methods on void future (no .get() that extracts typed value)
-            // 6. Both futures keep state alive - last one to destroy releases it
+            //
+            // IMPORTANT: other is now in moved-from state!
+            other.set_needs_scheduling(false);
         }
 
         unique_future& operator=(unique_future&& other) noexcept {
@@ -611,6 +786,10 @@ namespace actor_zeta {
             return needs_scheduling_;
         }
 
+        void set_needs_scheduling(bool value) noexcept {
+            needs_scheduling_ = value;
+        }
+
         void cancel() noexcept {
             if (state_) {
                 state_->set_state(detail::future_state_enum::cancelled);
@@ -619,6 +798,38 @@ namespace actor_zeta {
 
         [[nodiscard]] bool is_cancelled() const noexcept {
             return state_ && state_->is_cancelled();
+        }
+
+        // === Coroutine control API (analogous to std::coroutine_handle) ===
+
+        /// @brief Check if this future has an associated coroutine
+        /// @return true if coroutine handle is stored (analogous to coroutine_handle::operator bool())
+        [[nodiscard]] bool has_coroutine() const noexcept {
+            return state_ && state_->has_coroutine();
+        }
+
+        /// @brief Check if associated coroutine is done (at final suspend)
+        /// @return true if coroutine exists and completed (analogous to coroutine_handle::done())
+        [[nodiscard]] bool coroutine_done() const noexcept {
+            return state_ && state_->coroutine_done();
+        }
+
+        /// @brief Resume associated coroutine
+        /// @note Analogous to coroutine_handle::resume()
+        /// @note Caller must ensure awaiting_ready() == true before calling
+        void resume() noexcept {
+            if (state_) {
+                state_->resume_coroutine();
+            }
+        }
+
+        /// @brief Check if awaited future is ready
+        /// @return true if coroutine is waiting on a future and that future is ready
+        /// @note User code should call resume() when this returns true
+        [[nodiscard]] bool awaiting_ready() const noexcept {
+            if (!state_) return false;
+            auto* awaiting = state_->get_awaiting_on();
+            return awaiting && awaiting->is_ready();
         }
 
         [[nodiscard]] detail::future_state<void>* get_state() const noexcept {
@@ -773,125 +984,38 @@ namespace actor_zeta {
         return unique_future<T>(adopt_ref, state, false);
     }
 
+    // ============================================================================
+    // promise<T>::get_future() implementation (Seastar-style)
+    // ============================================================================
+
+    template<typename T>
+    unique_future<T> promise<T>::get_future() noexcept {
+        assert(state_ && "get_future() on moved-from promise");
+        // Future shares state with promise - add reference
+        // Promise keeps its reference, future adds its own
+        return unique_future<T>(state_, false);  // Calls add_ref() via intrusive_ptr
+    }
+
+    inline unique_future<void> promise<void>::get_future() noexcept {
+        assert(state_ && "get_future() on moved-from promise<void>");
+        // Future shares state with promise - add reference
+        return unique_future<void>(state_, false);  // Calls add_ref() via intrusive_ptr
+    }
+
 }
 
 #include <actor-zeta/detail/coroutine.hpp>
 
 namespace actor_zeta {
 
-    template<typename T>
-    struct future_awaiter {
-        unique_future<T> future_;
-
-        explicit future_awaiter(unique_future<T>&& f) noexcept
-            : future_(std::move(f)) {
-        }
-
-        future_awaiter(const future_awaiter&) = delete;
-        future_awaiter& operator=(const future_awaiter&) = delete;
-
-        future_awaiter(future_awaiter&&) noexcept = default;
-        future_awaiter& operator=(future_awaiter&&) noexcept = default;
-
-        ~future_awaiter() noexcept = default;
-
-        [[nodiscard]] bool await_ready() const noexcept {
-            return future_.is_ready();
-        }
-
-        bool await_suspend(std::coroutine_handle<> handle) noexcept {
-            if (future_.is_ready()) {
-                return false;
-            }
-
-            auto* state = future_.get_state();
-            if (!state) {
-                return false;
-            }
-
-            // CRITICAL: Save coroutine handle in future_state
-            // Resume will be called from actor's behavior() via resume_all()
-            // This ensures coroutine runs in CORRECT thread (actor's thread, not sender's)
-            state->set_coroutine(handle);
-
-            // FIX Problem #9: Re-check after set_coroutine() to close race window
-            // Race scenario:
-            //   1. We check is_ready() → false
-            //   2. Another thread calls set_result(), sees has_coroutine() == false, doesn't resume
-            //   3. We call set_coroutine(handle)
-            //   4. → Nobody will call resume() → HANG FOREVER
-            // Solution: Re-check is_ready() after setting handle
-            // If ready now, return false (don't suspend) - coroutine will run immediately
-            if (future_.is_ready()) {
-                return false;  // Don't suspend - another thread set result
-            }
-
-            return true;
-        }
-
-        T await_resume() {
-            assert(future_.valid() && "await_resume() on invalid future");
-            return std::move(future_).get();
-        }
-    };
-
-    template<>
-    struct future_awaiter<void> {
-        unique_future<void> future_;
-
-        explicit future_awaiter(unique_future<void>&& f) noexcept
-            : future_(std::move(f)) {
-        }
-
-        future_awaiter(const future_awaiter&) = delete;
-        future_awaiter& operator=(const future_awaiter&) = delete;
-
-        future_awaiter(future_awaiter&&) noexcept = default;
-        future_awaiter& operator=(future_awaiter&&) noexcept = default;
-
-        ~future_awaiter() noexcept = default;
-
-        [[nodiscard]] bool await_ready() const noexcept {
-            return future_.is_ready();
-        }
-
-        bool await_suspend(std::coroutine_handle<> handle) noexcept {
-            if (future_.is_ready()) {
-                return false;
-            }
-
-            auto* state = future_.get_state();
-            if (!state) {
-                return false;
-            }
-
-            // CRITICAL: Save coroutine handle in future_state
-            // Resume will be called from actor's behavior() via resume_all()
-            // This ensures coroutine runs in CORRECT thread (actor's thread, not sender's)
-            state->set_coroutine(handle);
-
-            // FIX Problem #9: Re-check after set_coroutine() to close race window
-            // Race scenario:
-            //   1. We check is_ready() → false
-            //   2. Another thread calls set_result(), sees has_coroutine() == false, doesn't resume
-            //   3. We call set_coroutine(handle)
-            //   4. → Nobody will call resume() → HANG FOREVER
-            // Solution: Re-check is_ready() after setting handle
-            // If ready now, return false (don't suspend) - coroutine will run immediately
-            if (future_.is_ready()) {
-                return false;  // Don't suspend - another thread set result
-            }
-
-            return true;
-        }
-
-        void await_resume() {
-            assert(future_.valid() && "await_resume() on invalid future");
-            std::move(future_).get();
-        }
-    };
-
+    // ============================================================================
     // Awaiter with continuation support (used by promise::await_transform)
+    // ============================================================================
+    //
+    // NOTE: This is the ONLY awaiter used in this library. The co_await operator
+    // is ONLY available inside actor coroutines via await_transform().
+    // External co_await is intentionally NOT supported to enforce thread affinity.
+    // ============================================================================
     template<typename T>
     struct awaiter {
         unique_future<T> future_;

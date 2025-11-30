@@ -11,56 +11,66 @@ namespace actor_zeta {
 
 namespace detail {
 
-    /// @brief Copy result from method future to result_slot (if ready)
-    /// @return true if result was copied (future was ready), false otherwise
+    /// @brief Set up result chaining from method_future to msg->result_slot()
+    /// When method_future becomes ready, result is automatically forwarded
     template<typename T>
-    bool try_copy_result_to_slot(
+    void setup_result_chaining(
         unique_future<T>& method_future,
-        intrusive_ptr<detail::future_state_base> result_slot
+        mailbox::message* msg
     ) noexcept {
-        if (!result_slot) {
-            return false;  // No slot to copy to
-        }
-
-        if (!method_future.is_ready()) {
-            return false;  // Not ready yet - user must poll
-        }
-
-        // Method future is ready - copy result to slot
         auto* method_state = method_future.get_state();
         if (!method_state) {
-            return false;
+            return;
         }
 
-        // Take result from method state and set to slot
-        result_slot->set_result_rtt(method_state->take_result());
-        return true;
+        auto result_slot = msg->result_slot();
+        if (!result_slot) {
+            return;
+        }
+
+        // Set up chaining: method_state -> result_slot
+        // When method_state becomes ready, it will automatically forward to result_slot
+        method_state->set_forward_target(result_slot.get());
+
+        // If method already completed (sync method like make_ready_future),
+        // result was set BEFORE chaining was established. Forward manually now.
+        if (method_state->is_ready()) {
+            // Move result to forward target (method_state becomes consumed)
+            result_slot->set_result_rtt(method_state->take_result());
+        }
     }
 
     /// @brief Specialization for void futures
-    inline bool try_copy_result_to_slot(
+    inline void setup_result_chaining(
         unique_future<void>& method_future,
-        intrusive_ptr<detail::future_state_base> result_slot
+        mailbox::message* msg
     ) noexcept {
+        auto* method_state = method_future.get_state();
+        if (!method_state) {
+            return;
+        }
+
+        auto result_slot = msg->result_slot();
         if (!result_slot) {
-            return false;
+            return;
         }
 
-        if (!method_future.is_ready()) {
-            return false;
-        }
+        // Set up chaining for void
+        method_state->set_forward_target(result_slot.get());
 
-        // Void future is ready - mark slot as ready
-        result_slot->set_state(detail::future_state_enum::ready);
-        return true;
+        // If already ready (sync void method), mark slot as ready
+        if (method_state->is_ready()) {
+            result_slot->set_state(future_state_enum::ready);
+        }
     }
 
 } // namespace detail
 
     /// @brief Dispatch message to actor method
     /// @return unique_future with method result
-    /// @note If method returns ready future, result is immediately copied to msg->result_slot()
-    ///       If method returns pending future (suspended coroutine), user must poll and copy result
+    /// @note Result is automatically forwarded to msg->result_slot() via chaining
+    ///       - If method returns ready future, forward happens immediately in set_result_rtt()
+    ///       - If method returns pending future (coroutine), forward happens when coroutine completes
     template<class Actor, typename Method>
     auto dispatch(Actor* self, Method method, mailbox::message* msg) {
         using call_trait = type_traits::get_callable_trait_t<Method>;
@@ -68,9 +78,9 @@ namespace detail {
         using args_type_list = typename call_trait::args_types;
         constexpr int args_size = call_trait::number_of_arguments;
 
-        // Helper: try to copy result to slot if future is ready
-        auto try_copy_to_slot = [msg](auto& future) {
-            detail::try_copy_result_to_slot(future, msg->result_slot());
+        // Helper: set up chaining for automatic result propagation
+        auto setup_chaining = [msg](auto& future) {
+            detail::setup_result_chaining(future, msg);
         };
 
         // Call method with unpacked arguments
@@ -78,11 +88,11 @@ namespace detail {
             if constexpr (std::is_void_v<result_type>) {
                 (self->*method)();
                 auto future = make_ready_future_void(self->resource());
-                try_copy_to_slot(future);
+                setup_chaining(future);
                 return future;
             } else {
                 auto future = (self->*method)();
-                try_copy_to_slot(future);
+                setup_chaining(future);
                 return future;
             }
         } else if constexpr (args_size == 1) {
@@ -94,11 +104,11 @@ namespace detail {
             if constexpr (std::is_void_v<result_type>) {
                 (self->*method)(std::forward<arg_type>(arg));
                 auto future = make_ready_future_void(self->resource());
-                try_copy_to_slot(future);
+                setup_chaining(future);
                 return future;
             } else {
                 auto future = (self->*method)(std::forward<arg_type>(arg));
-                try_copy_to_slot(future);
+                setup_chaining(future);
                 return future;
             }
         } else {
@@ -107,11 +117,11 @@ namespace detail {
                 if constexpr (std::is_void_v<result_type>) {
                     (self->*method)((detail::get<I, args_type_list>(args))...);
                     auto future = make_ready_future_void(self->resource());
-                    try_copy_to_slot(future);
+                    setup_chaining(future);
                     return future;
                 } else {
                     auto future = (self->*method)((detail::get<I, args_type_list>(args))...);
-                    try_copy_to_slot(future);
+                    setup_chaining(future);
                     return future;
                 }
             }(type_traits::make_index_sequence<args_size>{});

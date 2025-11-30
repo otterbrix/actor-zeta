@@ -226,6 +226,26 @@ namespace actor_zeta { namespace detail {
             awaiting_on_ = nullptr;
         }
 
+        /// @brief Set forward target for result chaining
+        /// @param target The future_state to forward results to when this becomes ready
+        /// @note Used by dispatch() to chain method result → caller's result_slot
+        void set_forward_target(future_state_base* target) noexcept {
+            if (target) {
+                forward_target_ = target;  // intrusive_ptr assignment adds ref
+            }
+        }
+
+        /// @brief Get forward target
+        /// @return Pointer to forward target, or nullptr if not set
+        [[nodiscard]] future_state_base* get_forward_target() const noexcept {
+            return forward_target_.get();
+        }
+
+        /// @brief Clear forward target
+        void clear_forward_target() noexcept {
+            forward_target_ = nullptr;
+        }
+
 #ifndef NDEBUG
         [[nodiscard]] uint64_t generation() const noexcept { return generation_; }
 #endif
@@ -237,7 +257,8 @@ namespace actor_zeta { namespace detail {
         pmr::memory_resource* resource_;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
-        intrusive_ptr<future_state_base> awaiting_on_;  // Future this coroutine is waiting on
+        intrusive_ptr<future_state_base> awaiting_on_;     // Future this coroutine is waiting on
+        intrusive_ptr<future_state_base> forward_target_;  // Where to forward result when ready (chaining)
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
@@ -299,8 +320,16 @@ namespace actor_zeta { namespace detail {
                 return;  // Already set, cancelled, or concurrent set → ignore
             }
 
-            // STEP 2: Store result (protected by state==setting)
-            result_.swap(value);
+            // STEP 2: Store or forward result
+            if (forward_target_) {
+                // Forward result DIRECTLY to caller's future (move, not copy!)
+                // Result ends up in ONE place only - the forward target
+                forward_target_->set_result_rtt(std::move(value));
+                // result_ stays empty - caller should use forward_target
+            } else {
+                // No forward target - store locally
+                result_.swap(value);
+            }
 
             // STEP 3: Publish ready state
             // Memory ordering: release ensures result_ write is visible before state change
@@ -309,6 +338,7 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();  // Wake waiting thread (if any)
 #endif
+
             // NOTE: Coroutine resumption is done by user code via polling
             // User checks awaiting_on()->is_ready() and calls resume_coroutine()
         }
@@ -412,7 +442,21 @@ namespace actor_zeta { namespace detail {
 #endif
             auto expected = future_state_enum::pending;
             // Try transition - if it fails, future was cancelled or already processed
-            transition(expected, future_state_enum::ready);
+            if (!transition(expected, future_state_enum::ready)) {
+                return;  // Already set, cancelled, or concurrent set
+            }
+
+            // FIX Issue #1: Propagate to forward_target_ (same pattern as typed version)
+            // This is critical for async void coroutines where dispatch() sets up
+            // chaining via setup_result_chaining() but set_ready() was ignoring it.
+            //
+            // IMPORTANT: Call set_result_rtt() instead of set_state() to enable
+            // recursive propagation through void chains (A → B → C).
+            // set_result_rtt() is virtual and handles forward_target_ internally.
+            if (forward_target_) {
+                // Empty rtt for void - set_result_rtt will call set_ready() which propagates
+                forward_target_->set_result_rtt(rtt(resource_));
+            }
 
 #if HAVE_ATOMIC_WAIT
             // C++20: Wake waiting thread (efficient futex/ulock_wait)

@@ -60,6 +60,14 @@ namespace actor_zeta { namespace mailbox {
         /// This ensures future_state stays alive during method calls, preventing race conditions
         intrusive_ptr<actor_zeta::detail::future_state_base> result_slot() const noexcept { return result_slot_; }
 
+        /// @brief Get typed promise for result slot - for result propagation
+        /// @tparam T Result type
+        /// @param res Memory resource for promise
+        /// @return Non-owning promise wrapping result_slot
+        /// @note Returns promise that writes directly to caller's future
+        template<typename T>
+        inline auto result_promise(actor_zeta::pmr::memory_resource* res) const noexcept;
+
         /// @brief Set future state (result slot) - accepts intrusive_ptr
         void set_result_slot(const intrusive_ptr<actor_zeta::detail::future_state_base>& slot) noexcept { result_slot_ = slot; }
 
@@ -193,3 +201,42 @@ namespace actor_zeta { namespace mailbox {
 inline void swap(actor_zeta::mailbox::message& lhs, actor_zeta::mailbox::message& rhs) noexcept {
     lhs.swap(rhs);
 }
+
+// Include future.hpp for promise<T> definition
+#include <actor-zeta/future.hpp>
+
+namespace actor_zeta { namespace mailbox {
+
+    /// @brief Get typed promise for result_slot - INTERNAL USE ONLY
+    /// @tparam T Result type - MUST match the type used when creating the result_slot!
+    /// @param res Memory resource for promise wrapper
+    /// @return Non-owning promise that writes directly to caller's future
+    ///
+    /// @warning TYPE SAFETY: This performs static_cast without runtime type verification.
+    ///          Calling with incorrect T causes UNDEFINED BEHAVIOR (writes wrong type to storage).
+    ///
+    /// @warning INTERNAL API: This is called by dispatch() which deduces T from method signature.
+    ///          DO NOT call directly unless implementing custom dispatch mechanism.
+    ///
+    /// @note Safe usage: Only through dispatch() which knows correct type from method pointer.
+    /// @note Unsafe usage: Direct call with guessed/wrong type T.
+    ///
+    /// @example Safe (via dispatch):
+    /// @code
+    /// // dispatch() deduces T from &Actor::compute return type
+    /// auto future = dispatch(actor, &Actor::compute, msg);
+    /// @endcode
+    ///
+    /// @example DANGEROUS (direct call):
+    /// @code
+    /// // BUG: If result_slot was created with promise<int>, this is UB!
+    /// auto p = msg->result_promise<std::string>(res);  // WRONG TYPE → UB
+    /// p.set_value("hello");  // Corrupts memory!
+    /// @endcode
+    template<typename T>
+    inline auto message::result_promise(actor_zeta::pmr::memory_resource* res) const noexcept {
+        auto* typed_state = static_cast<actor_zeta::detail::future_state<T>*>(result_slot_.get());
+        return actor_zeta::promise<T>::wrap(typed_state, res);
+    }
+
+}} // namespace actor_zeta::mailbox
