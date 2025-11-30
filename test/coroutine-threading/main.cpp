@@ -112,12 +112,52 @@ private:
 /// Использует только address_t для связи с worker
 class client_actor final : public basic_actor<client_actor> {
 public:
+    /// Пользовательский формат для pending корутин
+    struct pending_info {
+        unique_future<int> future;
+        intrusive_ptr<detail::future_state_base> result_slot;
+    };
+
     explicit client_actor(pmr::memory_resource* resource, address_t worker_address, const std::string& name)
         : basic_actor<client_actor>(resource)
         , worker_address_(worker_address)
         , name_(name)
         , final_result_(0) {
     }
+
+    /// @brief Пользователь вызывает для poll pending корутин
+    /// @return true если есть pending корутины
+    bool poll_pending() {
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            auto* state = it->future.get_state();
+            if (!state) {
+                it = pending_.erase(it);
+                continue;
+            }
+
+            auto* awaiting = state->get_awaiting_on();
+            if (awaiting && awaiting->is_ready()) {
+                g_log.log("[%::poll_pending] awaiting ready, resuming coroutine", name_);
+                // Resume корутину
+                awaiting->resume_coroutine();
+
+                // Проверяем завершилась ли
+                if (it->future.is_ready()) {
+                    g_log.log("[%::poll_pending] future ready, copying result to slot", name_);
+                    // Копируем результат в result_slot
+                    if (it->result_slot) {
+                        it->result_slot->set_result_rtt(state->take_result());
+                    }
+                    it = pending_.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+        return !pending_.empty();
+    }
+
+    bool has_pending() const { return !pending_.empty(); }
 
     /// @brief Корутина - отправляет запрос и ждёт результат
     /// Resume управляется снаружи (тестом или scheduler)
@@ -171,8 +211,17 @@ public:
         last_behavior_thread_ = tid;
 
         switch (msg->command()) {
-            case msg_id<client_actor, &client_actor::process>:
-                return dispatch(this, &client_actor::process, msg);
+            case msg_id<client_actor, &client_actor::process>: {
+                // dispatch возвращает future
+                auto future = dispatch(this, &client_actor::process, msg);
+                if (!future.is_ready()) {
+                    // Корутина suspended - сохраняем для polling
+                    g_log.log("[%::behavior] process() suspended, storing pending", name_);
+                    pending_.push_back({std::move(future), msg->result_slot()});
+                }
+                // Возвращаем ready void future (мы обработали сообщение)
+                return make_ready_future_void(resource());
+            }
             case msg_id<client_actor, &client_actor::get_result>:
                 return dispatch(this, &client_actor::get_result, msg);
             default:
@@ -194,6 +243,7 @@ private:
     std::string process_start_thread_;
     std::string process_after_await_thread_;
     std::string process_end_thread_;
+    std::vector<pending_info> pending_;  // Пользовательское хранилище pending корутин
 };
 
 
@@ -233,16 +283,23 @@ TEST_CASE("single-thread: client-worker") {
 
     auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
 
-    // Тест управляет resume снаружи:
-    // 1. Resume client - отправит сообщение worker'у, suspend на co_await
+    // Тест управляет resume снаружи (ПОЛЬЗОВАТЕЛЬСКИЙ КОД):
+    // 1. Resume client - process() отправит сообщение worker'у, suspend на co_await
+    //    behavior() сохраняет pending корутину
     client->resume(1);
+    g_log.log("[TEST] After client resume, has_pending=%", client->has_pending());
+    REQUIRE(client->has_pending());  // Корутина должна быть pending
 
-    // 2. Resume worker - обработает запрос
+    // 2. Resume worker - обработает compute(), inner_future станет ready
     worker->resume(1);
+    g_log.log("[TEST] After worker resume");
 
-    // 3. Resume client - получит результат и завершится
-    client->resume(1);
+    // 3. Poll pending - проверяет awaiting ready, resume'ит корутину, копирует результат
+    client->poll_pending();
+    g_log.log("[TEST] After poll_pending, has_pending=%, future.is_ready()=%",
+              client->has_pending(), future.is_ready());
 
+    REQUIRE(!client->has_pending());  // Корутина должна завершиться
     REQUIRE(future.is_ready());
     int result = std::move(future).get();
 
@@ -284,8 +341,17 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
         auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
+        // 1. Resume client - suspend на co_await
         client->resume(1);
-        g_log.log("[CLIENT_THREAD] After resume, future.is_ready()=%", future.is_ready());
+        g_log.log("[CLIENT_THREAD] After client resume, has_pending=%", client->has_pending());
+
+        // 2. Resume worker - обработает compute
+        worker->resume(1);
+        g_log.log("[CLIENT_THREAD] After worker resume");
+
+        // 3. Poll pending - resume корутину
+        client->poll_pending();
+        g_log.log("[CLIENT_THREAD] After poll_pending, future.is_ready()=%", future.is_ready());
 
         REQUIRE(future.is_ready());
         result = std::move(future).get();
@@ -308,7 +374,7 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
     REQUIRE(client->process_after_await_thread() == client_thread_id);
     REQUIRE(client->process_end_thread() == client_thread_id);
 
-    // Worker also runs in client_thread (inline execution)
+    // Worker also runs in client_thread
     REQUIRE(worker->last_compute_thread() == client_thread_id);
 
     g_log.log("========== TEST PASSED ==========");
@@ -337,6 +403,8 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
 
         auto future = send(client1.get(), address_t::empty_address(), &client_actor::process, 10);
         client1->resume(1);
+        worker1->resume(1);
+        client1->poll_pending();
 
         REQUIRE(future.is_ready());
         result1 = std::move(future).get();
@@ -349,6 +417,8 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
 
         auto future = send(client2.get(), address_t::empty_address(), &client_actor::process, 20);
         client2->resume(1);
+        worker2->resume(1);
+        client2->poll_pending();
 
         REQUIRE(future.is_ready());
         result2 = std::move(future).get();
@@ -425,8 +495,10 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
         auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
-        // Client resumes worker INLINE (in client's thread!)
+        // Client resumes worker in CLIENT thread
         client->resume(1);
+        worker->resume(1);
+        client->poll_pending();
 
         REQUIRE(future.is_ready());
         result = std::move(future).get();
@@ -479,6 +551,8 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
 
             auto future = send(local_client.get(), address_t::empty_address(), &client_actor::process, (i + 1) * 10);
             local_client->resume(1);
+            local_worker->resume(1);
+            local_client->poll_pending();
 
             if (future.is_ready()) {
                 int result = std::move(future).get();

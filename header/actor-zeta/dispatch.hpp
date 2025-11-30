@@ -11,30 +11,56 @@ namespace actor_zeta {
 
 namespace detail {
 
-    /// @brief Link future result to message result_slot via continuation (NON-BLOCKING)
+    /// @brief Copy result from method future to result_slot (if ready)
+    /// @return true if result was copied (future was ready), false otherwise
     template<typename T>
-    void link_future_to_slot(
-        unique_future<T>& source,
-        intrusive_ptr<detail::future_state_base> target_slot
+    bool try_copy_result_to_slot(
+        unique_future<T>& method_future,
+        intrusive_ptr<detail::future_state_base> result_slot
     ) noexcept {
-        // FAST PATH: Already ready - transfer result immediately
-        if (source.is_ready()) {
-            auto* source_state = source.get_state();
-            if (!source_state) {
-                return;
-            }
-            source_state->propagate_result_to(target_slot.get());
-            return;
+        if (!result_slot) {
+            return false;  // No slot to copy to
         }
 
-        // SLOW PATH: NOT ready - set continuation (NO BLOCKING!)
-        auto* source_state = source.get_state();
-        source_state->set_continuation(target_slot);
+        if (!method_future.is_ready()) {
+            return false;  // Not ready yet - user must poll
+        }
+
+        // Method future is ready - copy result to slot
+        auto* method_state = method_future.get_state();
+        if (!method_state) {
+            return false;
+        }
+
+        // Take result from method state and set to slot
+        result_slot->set_result_rtt(method_state->take_result());
+        return true;
+    }
+
+    /// @brief Specialization for void futures
+    inline bool try_copy_result_to_slot(
+        unique_future<void>& method_future,
+        intrusive_ptr<detail::future_state_base> result_slot
+    ) noexcept {
+        if (!result_slot) {
+            return false;
+        }
+
+        if (!method_future.is_ready()) {
+            return false;
+        }
+
+        // Void future is ready - mark slot as ready
+        result_slot->set_state(detail::future_state_enum::ready);
+        return true;
     }
 
 } // namespace detail
 
     /// @brief Dispatch message to actor method
+    /// @return unique_future with method result
+    /// @note If method returns ready future, result is immediately copied to msg->result_slot()
+    ///       If method returns pending future (suspended coroutine), user must poll and copy result
     template<class Actor, typename Method>
     auto dispatch(Actor* self, Method method, mailbox::message* msg) {
         using call_trait = type_traits::get_callable_trait_t<Method>;
@@ -42,21 +68,21 @@ namespace detail {
         using args_type_list = typename call_trait::args_types;
         constexpr int args_size = call_trait::number_of_arguments;
 
-        // Helper lambda to link future to result_slot
-        auto link_result = [msg](auto& future) {
-            if (auto slot = msg->result_slot()) {
-                detail::link_future_to_slot(future, slot);
-            }
+        // Helper: try to copy result to slot if future is ready
+        auto try_copy_to_slot = [msg](auto& future) {
+            detail::try_copy_result_to_slot(future, msg->result_slot());
         };
 
         // Call method with unpacked arguments
         if constexpr (args_size == 0) {
             if constexpr (std::is_void_v<result_type>) {
                 (self->*method)();
-                return make_ready_future_void(self->resource());
+                auto future = make_ready_future_void(self->resource());
+                try_copy_to_slot(future);
+                return future;
             } else {
                 auto future = (self->*method)();
-                link_result(future);
+                try_copy_to_slot(future);
                 return future;
             }
         } else if constexpr (args_size == 1) {
@@ -67,10 +93,12 @@ namespace detail {
 
             if constexpr (std::is_void_v<result_type>) {
                 (self->*method)(std::forward<arg_type>(arg));
-                return make_ready_future_void(self->resource());
+                auto future = make_ready_future_void(self->resource());
+                try_copy_to_slot(future);
+                return future;
             } else {
                 auto future = (self->*method)(std::forward<arg_type>(arg));
-                link_result(future);
+                try_copy_to_slot(future);
                 return future;
             }
         } else {
@@ -78,10 +106,12 @@ namespace detail {
             return [&]<std::size_t... I>(std::index_sequence<I...>) {
                 if constexpr (std::is_void_v<result_type>) {
                     (self->*method)((detail::get<I, args_type_list>(args))...);
-                    return make_ready_future_void(self->resource());
+                    auto future = make_ready_future_void(self->resource());
+                    try_copy_to_slot(future);
+                    return future;
                 } else {
                     auto future = (self->*method)((detail::get<I, args_type_list>(args))...);
-                    link_result(future);
+                    try_copy_to_slot(future);
                     return future;
                 }
             }(type_traits::make_index_sequence<args_size>{});

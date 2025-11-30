@@ -915,16 +915,15 @@ namespace actor_zeta {
                 return false;
             }
 
-            // PURE COROUTINE APPROACH: Only set coroutine handle, NO continuation!
-            // When awaited future becomes ready:
-            //   1. set_result_rtt() calls resume_coroutine() (if has_coroutine())
-            //   2. Coroutine resumes, await_resume() extracts result via .get()
-            //   3. Coroutine continues to co_return result
-            //   4. return_value() writes result to promise_state
-            //
-            // Result flow: worker → awaited.result_ → await_resume() → co_return → promise.result_
-            // NO continuation chain needed!
+            // Store coroutine handle in awaited future's state
+            // User code will call state->resume_coroutine() when future is ready
             state->set_coroutine(handle);
+
+            // Register awaited future in promise_state for user polling
+            // User code can access via: method_future.get_state()->get_awaiting_on()
+            if (promise_state_) {
+                promise_state_->set_awaiting_on(state);
+            }
 
             // Re-check after set_coroutine() to close race window
             if (future_.is_ready()) {

@@ -189,29 +189,14 @@ namespace actor_zeta { namespace detail {
             return resource_;
         }
 
-        /// @brief Set continuation target for result propagation
-        /// @param target Target future_state to receive result when this becomes ready
-        /// @note Thread-safe: can be called before or after set_result_rtt()
-        /// @note IMPORTANT: Increments THIS refcount to keep source alive during propagation
-        void set_continuation(intrusive_ptr<future_state_base> target) noexcept {
-            add_ref();  // Keep THIS (source_state) alive while continuation exists
-            continuation_ = std::move(target);
-        }
-
         /// @brief Set result from type-erased rtt (virtual, for handler compatibility)
         /// This is called from handler.ipp which doesn't know the concrete type T
         virtual void set_result_rtt(rtt&& value) noexcept = 0;
 
         /// @brief Resume stored coroutine (if any)
-        /// @note Called from behavior_t::resume_if_suspended()
+        /// @note Called by user code when awaited future is ready
         /// @note Virtual with `final` override for devirtualization
         virtual void resume_coroutine() noexcept = 0;
-
-        /// @brief Copy result to target state (for FAST PATH in link_future_to_slot)
-        /// @param target Target future_state to receive result
-        /// @note Type-erased: derived class knows its type and can access typed result
-        /// @note Used when source is already ready - avoids setting up continuation
-        virtual void propagate_result_to(future_state_base* target) noexcept = 0;
 
         /// @brief Check if coroutine is stored
         /// @return true if coroutine_handle is valid
@@ -220,6 +205,26 @@ namespace actor_zeta { namespace detail {
         /// @brief Check if stored coroutine is done
         /// @return true if coroutine exists and is done
         [[nodiscard]] virtual bool coroutine_done() const noexcept = 0;
+
+        /// @brief Set which future this coroutine is awaiting on
+        /// @param target The future_state that this coroutine is waiting for
+        /// @note Called from awaiter::await_suspend() to enable manual polling
+        void set_awaiting_on(future_state_base* target) noexcept {
+            awaiting_on_ = target;  // intrusive_ptr assignment calls add_ref()
+        }
+
+        /// @brief Get the future this coroutine is awaiting on
+        /// @return Pointer to awaited future_state, or nullptr if not awaiting
+        /// @note Used by supervisor/user code to poll and resume coroutines
+        [[nodiscard]] future_state_base* get_awaiting_on() const noexcept {
+            return awaiting_on_.get();
+        }
+
+        /// @brief Clear awaiting_on after coroutine resumes
+        /// @note Called after resume_coroutine() to prevent stale references
+        void clear_awaiting_on() noexcept {
+            awaiting_on_ = nullptr;
+        }
 
 #ifndef NDEBUG
         [[nodiscard]] uint64_t generation() const noexcept { return generation_; }
@@ -232,7 +237,7 @@ namespace actor_zeta { namespace detail {
         pmr::memory_resource* resource_;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
-        intrusive_ptr<future_state_base> continuation_;  // Target for result propagation
+        intrusive_ptr<future_state_base> awaiting_on_;  // Future this coroutine is waiting on
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
@@ -285,9 +290,7 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Virtual method for type-erased rtt (called from handler.ipp)
-        /// @note WITH continuation propagation support AND coroutine resumption
         void set_result_rtt(rtt&& value) noexcept override {
-
             // STEP 1: Atomic transition pending → setting (CAS protection!)
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
@@ -299,39 +302,15 @@ namespace actor_zeta { namespace detail {
             // STEP 2: Store result (protected by state==setting)
             result_.swap(value);
 
-            // STEP 3: Publish ready state BEFORE continuation/coroutine handling
+            // STEP 3: Publish ready state
             // Memory ordering: release ensures result_ write is visible before state change
             state_.store(future_state_enum::ready, std::memory_order_release);
-
-            // STEP 4a: DO NOT resume coroutine here - violates thread affinity!
-            // Coroutine must be resumed by actor owner in its thread via Manual Polling.
-            // Actor calls extract_coroutine_handle() and stores handle, then in behavior()
-            // checks is_ready() and calls resume().
-            if (coro_handle_ && !coro_handle_.done()) {
-            }
-
-            // STEP 4b: Propagate to continuation (if exists and no coroutine)
-            bool had_continuation = false;
-            if (continuation_) {
-                had_continuation = true;
-
-                // CRITICAL: MOVE result_ (not copy!) - transfer ownership through chain
-                continuation_->set_result_rtt(std::move(result_));  // Recursive call!
-                // NOTE: continuation_->set_result_rtt() already set state to ready (line 317)
-                // Do NOT call set_state() again - causes race condition!
-                continuation_ = nullptr;  // Release continuation ownership
-            } else {
-            }
 
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();  // Wake waiting thread (if any)
 #endif
-
-            // STEP 5: Release ref added in set_continuation()
-            // This may destroy THIS state if no other refs exist
-            if (had_continuation) {
-                release();
-            }
+            // NOTE: Coroutine resumption is done by user code via polling
+            // User checks awaiting_on()->is_ready() and calls resume_coroutine()
         }
 
         /// @brief Get result reference (caller must ensure is_ready())
@@ -397,13 +376,6 @@ namespace actor_zeta { namespace detail {
             coro_handle_ = handle;
         }
 
-        /// @brief Move result to target state (FAST PATH)
-        /// @note Source becomes invalid after this - OK because source future
-        ///       is destroyed immediately after link_future_to_slot returns
-        void propagate_result_to(future_state_base* target) noexcept override {
-            target->set_result_rtt(std::move(result_));
-        }
-
     protected:
         void destroy() noexcept override {
             this->~future_state();
@@ -414,7 +386,7 @@ namespace actor_zeta { namespace detail {
         // Embedded result (not pointer!) - eliminates ALL race conditions
         // Empty when constructed (capacity=0), filled via move assignment in set_result()
         rtt result_;
-        coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
+        coroutine_handle<void> coro_handle_;  // Stored coroutine
     };
 
     /// @brief Specialization for void (no result storage needed)
@@ -479,13 +451,6 @@ namespace actor_zeta { namespace detail {
             coro_handle_ = handle;
         }
 
-        /// @brief Copy result to target state (void has no result)
-        /// @note For void futures, we just mark target as ready
-        void propagate_result_to(future_state_base* target) noexcept override {
-            // Void future - just mark target as ready
-            target->set_state(future_state_enum::ready);
-        }
-
     protected:
         void destroy() noexcept override {
             this->~future_state();
@@ -493,7 +458,7 @@ namespace actor_zeta { namespace detail {
         }
 
     private:
-        coroutine_handle<void> coro_handle_;  // Stored coroutine (for STATE mode)
+        coroutine_handle<void> coro_handle_;  // Stored coroutine
     };
 
     // intrusive_ptr support for future_state_base
