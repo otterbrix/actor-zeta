@@ -4,18 +4,24 @@
 #include <actor-zeta/detail/rtt.hpp>
 #include <actor-zeta/detail/coroutine.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
-#include <actor-zeta/detail/monostate.hpp>
 #include <actor-zeta/config.hpp>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>  // for std::memmove (trivial move optimization)
 #include <thread>   // for std::this_thread::yield()
+#include <type_traits>
 
 namespace actor_zeta { namespace detail {
 
+    /// @brief Trait for trivially movable and destructible types (memmove optimization)
+    template<typename T>
+    inline constexpr bool is_trivially_move_constructible_and_destructible_v =
+        std::is_trivially_move_constructible_v<T> &&
+        std::is_trivially_destructible_v<T>;
+
     /// @brief Unified future state - replaces multiple atomic bools
-    /// Values are ordered to allow range checks (Seastar optimization):
+    /// Values are ordered to allow range checks:
     ///   - Transient states (setting, consuming) < ready
     ///   - Terminal states (ready, consumed, error, cancelled) >= ready
     ///   - Error states >= error
@@ -156,20 +162,20 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Check if in terminal state (ready, consumed, error, cancelled)
-        /// Seastar optimization: single comparison instead of multiple ==
+        /// Optimization: single comparison instead of multiple ==
         [[nodiscard]] bool is_available() const noexcept {
             return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
         }
 
         /// @brief Check if result is ready (ready or consumed - has value)
-        /// Seastar optimization: range check
+        /// Optimization: range check
         [[nodiscard]] bool is_ready() const noexcept {
             auto s = state_.load(std::memory_order_acquire);
             return s == future_state_enum::ready || s == future_state_enum::consumed;
         }
 
         /// @brief Check if failed (error or cancelled)
-        /// Seastar optimization: single comparison (>= error)
+        /// Optimization: single comparison (>= error)
         [[nodiscard]] bool is_failed() const noexcept {
             return state_.load(std::memory_order_acquire) >= future_state_enum::error;
         }
@@ -297,24 +303,12 @@ namespace actor_zeta { namespace detail {
 #endif
     };
 
-    /// @brief Typed future state with result storage
-    // ============================================================================
-    // In-place result storage - uses union for lazy initialization
-    // Zero allocation for trivial types (int, bool, pointers)
-    // Non-copyable, move-only (like rtt and unique_future)
-    // ============================================================================
-
     /// @brief In-place storage for future result value
+    /// Uses union for lazy initialization. Non-copyable, move-only.
     /// @tparam T Result type (non-void)
-    /// @note Non-copyable, move-only (like rtt and unique_future)
-    /// @note Uses union for lazy construction without default constructor requirement
     template<typename T>
     struct result_storage {
-        // ========================================
-        // Storage: union for lazy initialization
-        // ========================================
-        // Using named union to handle non-trivial T correctly
-        // Union destructor is empty - we handle destruction manually
+        // Union for lazy initialization (handles non-trivial T correctly)
         union storage_t {
             char dummy_;  // For default state (no value)
             T value_;
@@ -333,9 +327,6 @@ namespace actor_zeta { namespace detail {
         bool was_moved_from_ = false;
 #endif
 
-        // ========================================
-        // Constructors
-        // ========================================
         result_storage() noexcept = default;
 
         explicit result_storage(pmr::memory_resource*) noexcept
@@ -346,9 +337,6 @@ namespace actor_zeta { namespace detail {
 #endif
         {}
 
-        // ========================================
-        // Destructor: destroy T if present
-        // ========================================
         ~result_storage() noexcept {
             if (has_value_) {
                 storage_.value_.~T();
@@ -356,15 +344,11 @@ namespace actor_zeta { namespace detail {
             }
         }
 
-        // ========================================
-        // NON-COPYABLE
-        // ========================================
+        // Non-copyable
         result_storage(const result_storage&) = delete;
         result_storage& operator=(const result_storage&) = delete;
 
-        // ========================================
-        // MOVE-ONLY (with Trivial Move Optimization)
-        // ========================================
+        // Move-only (with trivial move optimization)
         result_storage(result_storage&& other) noexcept
             : has_value_(false)
 #ifndef NDEBUG
@@ -421,10 +405,6 @@ namespace actor_zeta { namespace detail {
             }
             return *this;
         }
-
-        // ========================================
-        // Operations
-        // ========================================
 
         /// @brief Construct value in-place
         /// @pre Storage must be empty (!has_value_)

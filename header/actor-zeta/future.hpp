@@ -4,7 +4,6 @@
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
-#include <actor-zeta/detail/monostate.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 
 #include <cassert>
@@ -15,12 +14,9 @@
 
 namespace actor_zeta {
 
-    // Forward declaration for awaiter (used by promise::await_transform)
     template<typename T>
     struct awaiter;
 
-
-    // Forward declaration
     template<typename T>
     class unique_future;
 
@@ -31,7 +27,7 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
-        /// @brief Create promise that owns its state (Seastar-style)
+        /// @brief Create promise that owns its state
         /// @param res Memory resource for state allocation
         explicit promise(pmr::memory_resource* res)
             : state_(nullptr)
@@ -68,7 +64,7 @@ namespace actor_zeta {
             release();
         }
 
-        /// @brief Get future associated with this promise (Seastar-style)
+        /// @brief Get future associated with this promise
         /// @return unique_future that shares state with this promise
         /// @note Can be called multiple times (each future adds reference)
         [[nodiscard]] unique_future<T> get_future() noexcept;
@@ -81,7 +77,6 @@ namespace actor_zeta {
                 return;
             }
 
-            // Use set_value() for ZERO ALLOCATION in-place storage
             state_->set_value(std::forward<T>(value));
         }
 
@@ -93,11 +88,10 @@ namespace actor_zeta {
                 return;
             }
 
-            // Use set_value() for ZERO ALLOCATION in-place storage
             state_->set_value(value);
         }
 
-        /// @brief Check if promise has valid state - Seastar API
+        /// @brief Check if promise has valid state
         [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
         }
@@ -146,7 +140,7 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
-        /// @brief Create promise that owns its state (Seastar-style)
+        /// @brief Create promise that owns its state
         /// @param res Memory resource for state allocation
         explicit promise(pmr::memory_resource* res)
             : state_(nullptr)
@@ -183,7 +177,7 @@ namespace actor_zeta {
             release();
         }
 
-        /// @brief Get future associated with this promise (Seastar-style)
+        /// @brief Get future associated with this promise
         /// @return unique_future that shares state with this promise
         /// @note Can be called multiple times (each future adds reference)
         [[nodiscard]] unique_future<void> get_future() noexcept;
@@ -200,7 +194,7 @@ namespace actor_zeta {
             state_->set_ready();
         }
 
-        /// @brief Check if promise has valid state - Seastar API
+        /// @brief Check if promise has valid state
         [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
         }
@@ -250,11 +244,8 @@ namespace actor_zeta {
     struct ready_future_marker_t {};
     inline constexpr ready_future_marker_t ready_future_marker{};
 
-    // ============================================================================
     // Inline storage threshold: only store values inline if sizeof(T) <= threshold
-    // Larger types use regular state allocation to avoid bloating unique_future size
-    // ============================================================================
-    inline constexpr std::size_t inline_storage_threshold = sizeof(void*) * 4;  // 32 bytes on 64-bit
+    inline constexpr std::size_t inline_storage_threshold = sizeof(void*) * 4;  // 32 bytes
 
     template<typename T>
     inline constexpr bool use_inline_storage_v =
@@ -262,26 +253,21 @@ namespace actor_zeta {
         sizeof(T) <= inline_storage_threshold &&
         std::is_nothrow_move_constructible_v<T>;
 
-    /// @brief Unified unique_future<T> - works for both void and non-void types (Seastar-style)
-    /// Uses monostate internally for void, but API remains unchanged.
+    /// @brief Unified unique_future<T> - works for both void and non-void types
     /// For T=void: get() returns void, is_ready_void_ enables zero-allocation fast path
     /// For T!=void: get() returns T, supports both async (state_) and inline (inline_value_) storage
     /// Fast Ready Future Factory: make_ready_future() uses inline storage (ZERO ALLOCATION!)
     template<typename T>
     class unique_future final {
     private:
-        // Type traits for unified void/non-void handling
         static constexpr bool is_void_type = std::is_void_v<T>;
-        using stored_type = detail::future_stored_type_t<T>;
         // For void: use future_state_base to allow storing any future_state<U>* without UB
         // For non-void: use future_state<T> for typed access
         using state_type = std::conditional_t<is_void_type, detail::future_state_base, detail::future_state<T>>;
         // For coroutine allocation: always use concrete type (can't allocate abstract base)
         using coroutine_state_type = std::conditional_t<is_void_type, detail::future_state<void>, detail::future_state<T>>;
 
-        // ========================================================================
         // Union storage for non-void: either async state OR inline value
-        // ========================================================================
         template<typename U, bool IsVoid>
         union storage_union {
             // Default: uninitialized (caller MUST placement-new the correct member)
@@ -355,9 +341,7 @@ namespace actor_zeta {
             construct_state(state, false);  // add_ref = false
         }
 
-        // ========================================================================
-        // ZERO ALLOCATION: Ready future with inline value (non-void only)
-        // ========================================================================
+        // Ready future with inline value (non-void only) - ZERO ALLOCATION
         template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
         unique_future(ready_future_marker_t, U&& value) noexcept
             : needs_scheduling_(false)
@@ -523,7 +507,7 @@ namespace actor_zeta {
         template<typename U = T>
         std::enable_if_t<std::is_void_v<U>, void> get() & = delete;
 
-        /// @brief Check if result is available (ready or consumed) - Seastar API
+        /// @brief Check if result is available (ready or consumed)
         [[nodiscard]] bool available() const noexcept {
             if constexpr (is_void_type) {
                 return is_ready_void_ || (storage_.state_ && storage_.state_->is_ready());
@@ -532,7 +516,7 @@ namespace actor_zeta {
             }
         }
 
-        /// @brief Check if future failed (error or cancelled) - Seastar API
+        /// @brief Check if future failed (error or cancelled)
         [[nodiscard]] bool failed() const noexcept {
             if constexpr (is_void_type) {
                 if (is_ready_void_) return false;
@@ -543,7 +527,7 @@ namespace actor_zeta {
             }
         }
 
-        /// @brief Check if future has valid state - Seastar API
+        /// @brief Check if future has valid state
         [[nodiscard]] bool valid() const noexcept {
             if constexpr (is_void_type) {
                 return is_ready_void_ || (storage_.state_ != nullptr);
@@ -552,7 +536,7 @@ namespace actor_zeta {
             }
         }
 
-        /// @brief Explicitly ignore a ready future - Seastar API
+        /// @brief Explicitly ignore a ready future
         /// Use this to acknowledge that a future result is intentionally discarded
         void ignore() noexcept {
             if constexpr (is_void_type) {
@@ -643,7 +627,7 @@ namespace actor_zeta {
             return storage_.state_->memory_resource();
         }
 
-        // forward_to - only for non-void (Seastar API)
+        // forward_to - only for non-void
         template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
         void forward_to(promise<T>& target) {
             if (has_inline_value_) {
@@ -661,10 +645,7 @@ namespace actor_zeta {
             }
         }
 
-        // ============================================================================
         // Coroutine promise_type - uses inheritance to separate return_value/return_void
-        // SFINAE doesn't work for coroutine promise types - compiler sees both methods
-        // ============================================================================
     private:
         // Base class with common promise functionality
         struct promise_type_base {
@@ -748,13 +729,11 @@ namespace actor_zeta {
 
             void return_value(U&& value) noexcept {
                 assert(this->state_ && "return_value() with null state");
-                // Use set_value() for ZERO ALLOCATION in-place storage
                 this->state_->set_value(std::forward<U>(value));
             }
 
             void return_value(const U& value) noexcept {
                 assert(this->state_ && "return_value() with null state");
-                // Use set_value() for ZERO ALLOCATION in-place storage
                 this->state_->set_value(value);
             }
 
@@ -762,7 +741,6 @@ namespace actor_zeta {
                 assert(this->state_ && "return_value() with null state");
                 assert(ready_future.valid() && "return_value() with invalid future");
                 U val = std::move(ready_future).get();
-                // Use set_value() for ZERO ALLOCATION in-place storage
                 this->state_->set_value(std::move(val));
             }
         };
@@ -853,25 +831,18 @@ namespace actor_zeta {
         bool has_inline_value_;     // Only used when T!=void for inline value storage
     };
 
-    /// @brief Create ready future with inline value storage (ZERO ALLOCATION!)
-    /// @param resource Memory resource (unused for inline storage, kept for API compatibility)
-    /// @param value Value to store inline in the future
-    /// @return Ready future with inline storage
-    /// @note This is the optimized path - no future_state allocation!
+    /// @brief Create ready future with inline value storage (ZERO ALLOCATION)
     template<typename T>
     unique_future<T> make_ready_future(pmr::memory_resource* /*resource*/, T&& value) {
-        // ZERO ALLOCATION: value stored inline in unique_future
         return unique_future<T>(ready_future_marker, std::forward<T>(value));
     }
 
     template<typename T>
     unique_future<T> make_ready_future(pmr::memory_resource* /*resource*/, const T& value) {
-        // ZERO ALLOCATION: value stored inline in unique_future
         return unique_future<T>(ready_future_marker, value);
     }
 
     inline unique_future<void> make_ready_future_void(pmr::memory_resource* /*resource*/) {
-        // Zero allocation - just return ready void future
         return unique_future<void>::make_ready();
     }
 
@@ -886,22 +857,15 @@ namespace actor_zeta {
         return unique_future<T>(adopt_ref, state, false);
     }
 
-    // ============================================================================
-    // promise<T>::get_future() implementation (Seastar-style)
-    // ============================================================================
-
     template<typename T>
     unique_future<T> promise<T>::get_future() noexcept {
         assert(state_ && "get_future() on moved-from promise");
-        // Future shares state with promise - add reference
-        // Promise keeps its reference, future adds its own
-        return unique_future<T>(state_, false);  // Calls add_ref() via intrusive_ptr
+        return unique_future<T>(state_, false);
     }
 
     inline unique_future<void> promise<void>::get_future() noexcept {
         assert(state_ && "get_future() on moved-from promise<void>");
-        // Future shares state with promise - add reference
-        return unique_future<void>(state_, false);  // Calls add_ref() via intrusive_ptr
+        return unique_future<void>(state_, false);
     }
 
 }
@@ -910,18 +874,11 @@ namespace actor_zeta {
 
 namespace actor_zeta {
 
-    // ============================================================================
-    // Awaiter with continuation support (used by promise::await_transform)
-    // ============================================================================
-    //
-    // NOTE: This is the ONLY awaiter used in this library. The co_await operator
-    // is ONLY available inside actor coroutines via await_transform().
-    // External co_await is intentionally NOT supported to enforce thread affinity.
-    // ============================================================================
+    /// @brief Awaiter for co_await support in actor coroutines
     template<typename T>
     struct awaiter {
         unique_future<T> future_;
-        detail::future_state_base* promise_state_;  // Promise state for continuation
+        detail::future_state_base* promise_state_;
 
         explicit awaiter(unique_future<T>&& f, detail::future_state_base* prom_state = nullptr) noexcept
             : future_(std::move(f))
@@ -941,21 +898,14 @@ namespace actor_zeta {
                 return false;
             }
 
-            // Store coroutine handle in awaited future's state
-            // User code will call state->resume_coroutine() when future is ready
             state->set_coroutine(handle);
-
-            // Register awaited future in promise_state for user polling
-            // User code can access via: method_future.get_state()->get_awaiting_on()
             if (promise_state_) {
                 promise_state_->set_awaiting_on(state);
             }
 
-            // Re-check after set_coroutine() to close race window
             if (future_.available()) {
-                return false;  // Don't suspend - another thread set result
+                return false;
             }
-
             return true;
         }
 
@@ -964,8 +914,7 @@ namespace actor_zeta {
         }
     };
 
-    /// @brief Specialization of awaiter for void (Seastar-style unified handling)
-    /// Uses monostate internally but returns void from await_resume()
+    /// @brief Specialization of awaiter for void
     template<>
     struct awaiter<void> {
         unique_future<void> future_;

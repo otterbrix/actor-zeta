@@ -138,15 +138,8 @@ namespace actor_zeta { namespace base {
                 std::forward<Args>(args)...
             );
 
-            // ============================================================================
-            // PROMISE-BASED STATE MANAGEMENT (Seastar-style)
-            // ============================================================================
-            // 1. promise creates state with refcount=1
-            // 2. set_result_slot: implicit intrusive_ptr -> add_ref, copy, release -> net +1
-            // 3. get_future() adds ref
-            // 4. promise destructor releases
-            // Final: message (+1), future (+1)
-            // ============================================================================
+            // Promise creates state with refcount=1, set_result_slot adds +1, get_future adds +1
+            // After promise destructor: message (+1), future (+1)
             promise<R> p(resource());
             msg->set_result_slot(p.state());  // Implicit conversion to intrusive_ptr
 
@@ -350,28 +343,8 @@ namespace actor_zeta { namespace base {
 
                         desired = set_running(current, false);
 
-                        // ============================================================================
-                        // KEEP_SCHEDULED MECHANISM (Race Window Handling)
-                        // ============================================================================
-                        //
-                        // If keep_scheduled_ = true, we leave the scheduled bit set when leaving resume().
-                        // This happens when:
-                        // 1. mailbox.empty() returns true
-                        // 2. mailbox.try_block() fails (message arrived during race window)
-                        // 3. check_race_window() confirms message exists
-                        //
-                        // WHY KEEP SCHEDULED BIT:
-                        // - Prevents actor from going to idle state when message is pending
-                        // - Scheduler will call resume() again immediately
-                        // - Avoids unnecessary state transition: running -> idle -> scheduled -> running
-                        // - Performance optimization: saves CAS operations and scheduler overhead
-                        //
-                        // STATE TRANSITIONS:
-                        // - Without keep_scheduled: running_scheduled -> idle (loses scheduled bit)
-                        // - With keep_scheduled:    running_scheduled -> scheduled (keeps bit)
-                        //
-                        // CORRECTNESS: Safe because check_race_window() already verified message exists
-                        // ============================================================================
+                        // KEEP_SCHEDULED: If message arrived during race window, keep scheduled bit
+                        // to avoid unnecessary state transition (running -> idle -> scheduled -> running)
                         if (!keep_scheduled_) {
                             desired = set_scheduled(desired, false);
                         }
@@ -481,7 +454,7 @@ namespace actor_zeta { namespace base {
 
                         ~message_guard() noexcept {
                             // ============================================================================
-                            // REFCOUNT OWNERSHIP - Promise-based (Seastar-style)
+                            // REFCOUNT OWNERSHIP - Promise-based
                             // ============================================================================
                             //
                             // message_guard does NOT touch refcount. Ownership model:
