@@ -79,7 +79,7 @@ public:
                 // If we just return dispatch() result, it gets destroyed immediately,
                 // which destroys the coroutine and causes refcount underflow.
                 auto future = dispatch(this, &client_actor::process, msg);
-                if (!future.is_ready()) {
+                if (!future.available()) {
                     pending_.push_back(std::move(future));
                 }
                 return make_ready_future_void(resource());
@@ -98,7 +98,7 @@ public:
         for (auto it = pending_.begin(); it != pending_.end();) {
             if (it->awaiting_ready()) {
                 it->resume();
-                if (it->is_ready()) {
+                if (it->available()) {
                     it = pending_.erase(it);
                     continue;
                 }
@@ -134,7 +134,7 @@ public:
     template<typename T>
     void run_until_ready(unique_future<T>& future, int max_iterations = 1000) {
         int iterations = 0;
-        while (!future.is_ready() && iterations < max_iterations) {
+        while (!future.available() && iterations < max_iterations) {
             run_once();
             ++iterations;
         }
@@ -167,7 +167,7 @@ TEST_CASE("worker only") {
     // Supervisor запускает акторов
     supervisor.run_until_ready(future);
 
-    REQUIRE(future.is_ready());
+    REQUIRE(future.available());
     REQUIRE(std::move(future).get() == 42);
 }
 
@@ -187,13 +187,13 @@ TEST_CASE("client-worker coroutine with supervisor") {
     // Supervisor управляет resume всех акторов
     supervisor.run_until_ready(future);
 
-    REQUIRE(future.is_ready());
+    REQUIRE(future.available());
     REQUIRE(std::move(future).get() == 52);  // 21 * 2 + 10 = 52
 
     // Проверяем через get_result()
     auto result_future = send(client.get(), address_t::empty_address(), &client_actor::get_result);
     supervisor.run_until_ready(result_future);
 
-    REQUIRE(result_future.is_ready());
+    REQUIRE(result_future.available());
     REQUIRE(std::move(result_future).get() == 52);
 }

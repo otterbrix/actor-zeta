@@ -103,7 +103,7 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
     // Try to get results from futures (may be cancelled or error state)
     int successful = 0;
     for (auto& future : futures) {
-        if (future.is_ready()) {
+        if (future.available()) {
             // Some messages may have been processed before actor destruction
             // Note: get() may return error state - we just count successful completions
             auto result = std::move(future).get();

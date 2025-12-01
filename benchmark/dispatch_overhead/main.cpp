@@ -74,31 +74,31 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
         switch (method_id) {
             case 0: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method1, 1);
-                while (!f.is_ready()) { actor->resume(1); }
+                while (!f.available()) { actor->resume(1); }
                 std::move(f).get();  // Wait for completion (returns void)
                 break;
             }
             case 1: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method2, 2);
-                while (!f.is_ready()) { actor->resume(1); }
+                while (!f.available()) { actor->resume(1); }
                 std::move(f).get();  // Wait for completion (returns void)
                 break;
             }
             case 2: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method3, 3);
-                while (!f.is_ready()) { actor->resume(1); }
+                while (!f.available()) { actor->resume(1); }
                 std::move(f).get();  // Wait for completion (returns void)
                 break;
             }
             case 3: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method4, 4);
-                while (!f.is_ready()) { actor->resume(1); }
+                while (!f.available()) { actor->resume(1); }
                 std::move(f).get();  // Wait for completion (returns void)
                 break;
             }
             case 4: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method5, 5);
-                while (!f.is_ready()) { actor->resume(1); }
+                while (!f.available()) { actor->resume(1); }
                 std::move(f).get();  // Wait for completion (returns void)
                 break;
             }

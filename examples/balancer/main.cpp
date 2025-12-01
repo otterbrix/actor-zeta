@@ -153,29 +153,23 @@ public:
         // Execute child immediately if needed (inline execution to avoid deadlock)
         if (child_future.needs_scheduling()) {
             auto& child = actors_[index];
-            while (!child_future.is_ready()) {
+            while (!child_future.available()) {
                 child->resume(1);  // Process one message
             }
         }
 
-        // Extract result from child future
-        if constexpr (std::is_same_v<R, void>) {
-            std::move(child_future).get();  // Wait for completion
-        } else {
-            // For non-void: get result but we'll return it via future_state below
-        }
-
-        // Create future_state<R> for balancer's return value (already ready)
+        // Create future_state<R> for balancer's return value
         void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
                                          alignof(actor_zeta::detail::future_state<R>));
         auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
 
-        // Set result immediately (balancer executed synchronously)
+        // Extract result from child and set immediately
         if constexpr (std::is_same_v<R, void>) {
-            state->set_result_rtt(actor_zeta::detail::rtt(resource_, int{0}));
+            std::move(child_future).get();  // Wait for completion
+            state->set_ready();  // Mark as ready for void
         } else {
             R result = std::move(child_future).get();  // Get result from child
-            state->set_result_rtt(actor_zeta::detail::rtt(resource_, std::move(result)));
+            state->set_value(std::move(result));  // Set value directly (ZERO ALLOCATION!)
         }
 
         // Return async future (already in ready state)

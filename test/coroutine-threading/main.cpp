@@ -135,7 +135,7 @@ public:
 
                 // Когда корутина завершается, chaining автоматически
                 // форвардит результат в caller's future
-                if (it->is_ready()) {
+                if (it->available()) {
                     g_log.log("[%::poll_pending] coroutine completed, result auto-forwarded", name_);
                     it = pending_.erase(it);
                     continue;
@@ -158,7 +158,7 @@ public:
         // Отправляем запрос worker'у через address_t
         g_log.log("[%::process] Sending to worker...", name_);
         auto future = send(worker_address_, address(), &worker_actor::compute, x);
-        g_log.log("[%::process] future.is_ready()=%", name_, future.is_ready());
+        g_log.log("[%::process] future.available()=%", name_, future.available());
 
         // co_await - suspend если не готово, продолжит когда готово
         auto tid_before_await = thread_id_str();
@@ -204,7 +204,7 @@ public:
                 // dispatch() настраивает chaining автоматически:
                 // method_future -> msg->result_slot() (caller's future)
                 auto future = dispatch(this, &client_actor::process, msg);
-                if (!future.is_ready()) {
+                if (!future.available()) {
                     // Корутина suspended - сохраняем для polling
                     // Никаких promise не нужно - chaining уже настроен!
                     g_log.log("[%::behavior] process() suspended, storing pending", name_);
@@ -253,7 +253,7 @@ TEST_CASE("single-thread: worker only") {
     auto future = send(worker.get(), address_t::empty_address(), &worker_actor::compute, 21);
     worker->resume(1);
 
-    REQUIRE(future.is_ready());
+    REQUIRE(future.available());
     int result = std::move(future).get();
 
     REQUIRE(result == 42);
@@ -287,11 +287,11 @@ TEST_CASE("single-thread: client-worker") {
 
     // 3. Poll pending - проверяет awaiting ready, resume'ит корутину, копирует результат
     client->poll_pending();
-    g_log.log("[TEST] After poll_pending, has_pending=%, future.is_ready()=%",
-              client->has_pending(), future.is_ready());
+    g_log.log("[TEST] After poll_pending, has_pending=%, future.available()=%",
+              client->has_pending(), future.available());
 
     REQUIRE(!client->has_pending());  // Корутина должна завершиться
-    REQUIRE(future.is_ready());
+    REQUIRE(future.available());
     int result = std::move(future).get();
 
     // 21 * 2 + 10 = 52
@@ -342,9 +342,9 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
 
         // 3. Poll pending - resume корутину
         client->poll_pending();
-        g_log.log("[CLIENT_THREAD] After poll_pending, future.is_ready()=%", future.is_ready());
+        g_log.log("[CLIENT_THREAD] After poll_pending, future.available()=%", future.available());
 
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
         result = std::move(future).get();
         g_log.log("[CLIENT_THREAD] result=%", result.load());
 
@@ -397,7 +397,7 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         worker1->resume(1);
         client1->poll_pending();
 
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
         result1 = std::move(future).get();
         g_log.log("[THREAD1] result1=%", result1.load());
     });
@@ -411,7 +411,7 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         worker2->resume(1);
         client2->poll_pending();
 
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
         result2 = std::move(future).get();
         g_log.log("[THREAD2] result2=%", result2.load());
     });
@@ -491,7 +491,7 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
         worker->resume(1);
         client->poll_pending();
 
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
         result = std::move(future).get();
         g_log.log("[CLIENT_THREAD] result=%", result.load());
     });
@@ -545,7 +545,7 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
             local_worker->resume(1);
             local_client->poll_pending();
 
-            if (future.is_ready()) {
+            if (future.available()) {
                 int result = std::move(future).get();
                 int expected = (i + 1) * 10 * 2 + 10;
                 g_log.log("[THREAD %] result=% expected=%", i, result, expected);

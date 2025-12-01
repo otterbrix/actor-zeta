@@ -26,18 +26,17 @@ TEST_CASE("future_state<int> - basic construction and destruction") {
         // If we reach here, no crash - test passed
     }
 
-    SECTION("set_result makes slot ready") {
+    SECTION("set_value makes slot ready") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
         REQUIRE(!slot->is_ready());
 
-        // Set result
-        rtt value(res, 42);
-        slot->set_result(std::move(value));
+        // Set result using new typed API
+        slot->set_value(42);
 
         REQUIRE(slot->is_ready());
-        REQUIRE(slot->result().get<int>(0) == 42);
+        REQUIRE(slot->get_value() == 42);
 
         // Cleanup
         slot->release();
@@ -82,24 +81,22 @@ TEST_CASE("future_state<int> - result storage and retrieval") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        rtt value(res, 123);
-        slot->set_result(std::move(value));
+        slot->set_value(123);
 
         REQUIRE(slot->is_ready());
-        REQUIRE(slot->result().get<int>(0) == 123);
+        REQUIRE(slot->get_value() == 123);
 
         slot->release();
     }
 
-    SECTION("store and retrieve string") {
+    SECTION("store and retrieve different int") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        rtt value(res, std::string("hello world"));
-        slot->set_result(std::move(value));
+        slot->set_value(999);
 
         REQUIRE(slot->is_ready());
-        REQUIRE(slot->result().get<std::string>(0) == "hello world");
+        REQUIRE(slot->get_value() == 999);
 
         slot->release();
     }
@@ -110,10 +107,25 @@ TEST_CASE("future_state<int> - result storage and retrieval") {
 
         REQUIRE(!slot->is_ready());
 
-        rtt value(res, 999);
-        slot->set_result(std::move(value));
+        slot->set_value(999);
 
         REQUIRE(slot->is_ready());
+
+        slot->release();
+    }
+}
+
+TEST_CASE("future_state<std::string> - string storage") {
+    auto* res = pmr::get_default_resource();
+
+    SECTION("store and retrieve string") {
+        void* mem = res->allocate(sizeof(future_state<std::string>), alignof(future_state<std::string>));
+        auto* slot = new (mem) future_state<std::string>(res);
+
+        slot->set_value(std::string("hello world"));
+
+        REQUIRE(slot->is_ready());
+        REQUIRE(slot->get_value() == "hello world");
 
         slot->release();
     }
@@ -183,6 +195,7 @@ TEST_CASE("future_state<int> - thread safety") {
 
         // Release remaining 1 initial reference
         slot->release();
+        (void)total_refs;  // Suppress unused warning
     }
 
     SECTION("concurrent add_ref and release") {
@@ -233,15 +246,14 @@ TEST_CASE("future_state<int> - thread safety") {
         }
     }
 
-    SECTION("concurrent set_result and is_ready") {
+    SECTION("concurrent set_value and is_ready") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
         // Thread 1: sets result
         std::thread writer([slot]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            rtt value(pmr::get_default_resource(), 777);
-            slot->set_result(std::move(value));
+            slot->set_value(777);
         });
 
         // Thread 2: polls is_ready and reads result
@@ -252,7 +264,7 @@ TEST_CASE("future_state<int> - thread safety") {
             }
 
             // If is_ready() returned true, result must be visible (release-acquire)
-            REQUIRE(slot->result().get<int>(0) == 777);
+            REQUIRE(slot->get_value() == 777);
         });
 
         writer.join();
@@ -273,8 +285,7 @@ TEST_CASE("future_state<int> - memory ordering guarantees") {
 
         std::thread writer([slot, &side_effect]() {
             side_effect.store(42, std::memory_order_relaxed);
-            rtt value(pmr::get_default_resource(), 100);
-            slot->set_result(std::move(value));  // Release
+            slot->set_value(100);  // Release
         });
 
         std::thread reader([slot, &side_effect]() {

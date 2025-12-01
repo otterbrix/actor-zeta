@@ -4,11 +4,13 @@
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
+#include <actor-zeta/detail/monostate.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 
 #include <cassert>
 #include <chrono>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace actor_zeta {
@@ -79,7 +81,8 @@ namespace actor_zeta {
                 return;
             }
 
-            state_->set_result_rtt(detail::rtt(resource_, std::forward<T>(value)));
+            // Use set_value() for ZERO ALLOCATION in-place storage
+            state_->set_value(std::forward<T>(value));
         }
 
         void set_value(const T& value) {
@@ -90,10 +93,12 @@ namespace actor_zeta {
                 return;
             }
 
-            state_->set_result_rtt(detail::rtt(resource_, value));
+            // Use set_value() for ZERO ALLOCATION in-place storage
+            state_->set_value(value);
         }
 
-        [[nodiscard]] bool is_valid() const noexcept {
+        /// @brief Check if promise has valid state - Seastar API
+        [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
         }
 
@@ -191,10 +196,12 @@ namespace actor_zeta {
                 return;
             }
 
-            state_->set_result_rtt(detail::rtt(resource_));  // Empty rtt for void
+            // Use set_ready() for void - no RTT needed
+            state_->set_ready();
         }
 
-        [[nodiscard]] bool is_valid() const noexcept {
+        /// @brief Check if promise has valid state - Seastar API
+        [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
         }
 
@@ -239,397 +246,138 @@ namespace actor_zeta {
     struct adopt_ref_t {};
     inline constexpr adopt_ref_t adopt_ref{};
 
+    // Tag type for creating ready future with inline value (zero allocation)
+    struct ready_future_marker_t {};
+    inline constexpr ready_future_marker_t ready_future_marker{};
+
+    // ============================================================================
+    // Inline storage threshold: only store values inline if sizeof(T) <= threshold
+    // Larger types use regular state allocation to avoid bloating unique_future size
+    // ============================================================================
+    inline constexpr std::size_t inline_storage_threshold = sizeof(void*) * 4;  // 32 bytes on 64-bit
+
+    template<typename T>
+    inline constexpr bool use_inline_storage_v =
+        !std::is_void_v<T> &&
+        sizeof(T) <= inline_storage_threshold &&
+        std::is_nothrow_move_constructible_v<T>;
+
+    /// @brief Unified unique_future<T> - works for both void and non-void types (Seastar-style)
+    /// Uses monostate internally for void, but API remains unchanged.
+    /// For T=void: get() returns void, is_ready_void_ enables zero-allocation fast path
+    /// For T!=void: get() returns T, supports both async (state_) and inline (inline_value_) storage
+    /// Fast Ready Future Factory: make_ready_future() uses inline storage (ZERO ALLOCATION!)
     template<typename T>
     class unique_future final {
-    public:
-        explicit unique_future(pmr::memory_resource* /*res*/) noexcept
-            : state_(nullptr)
-            , needs_scheduling_(false) {
-        }
+    private:
+        // Type traits for unified void/non-void handling
+        static constexpr bool is_void_type = std::is_void_v<T>;
+        using stored_type = detail::future_stored_type_t<T>;
+        // For void: use future_state_base to allow storing any future_state<U>* without UB
+        // For non-void: use future_state<T> for typed access
+        using state_type = std::conditional_t<is_void_type, detail::future_state_base, detail::future_state<T>>;
+        // For coroutine allocation: always use concrete type (can't allocate abstract base)
+        using coroutine_state_type = std::conditional_t<is_void_type, detail::future_state<void>, detail::future_state<T>>;
 
-        explicit unique_future(detail::future_state<T>* state, bool needs_sched = false) noexcept
-            : state_(state)  // intrusive_ptr assignment calls add_ref() automatically
-            , needs_scheduling_(needs_sched) {
-        }
+        // ========================================================================
+        // Union storage for non-void: either async state OR inline value
+        // ========================================================================
+        template<typename U, bool IsVoid>
+        union storage_union {
+            // Default: uninitialized (caller MUST placement-new the correct member)
+            storage_union() noexcept {}
+            // Destructor: manual (caller MUST call correct destructor based on has_inline_value_)
+            ~storage_union() {}
 
-        // Constructor for adopting an existing reference (no add_ref())
-        // Use this when the state already has a reference count for this future
-        unique_future(adopt_ref_t, detail::future_state<T>* state, bool needs_sched = false) noexcept
-            : state_(state, false)  // intrusive_ptr(ptr, false) adopts reference (no add_ref)
-            , needs_scheduling_(needs_sched) {
-        }
-
-        unique_future(const unique_future&) = delete;
-        unique_future& operator=(const unique_future&) = delete;
-
-        unique_future(unique_future&& other) noexcept
-            : state_(std::move(other.state_))  // intrusive_ptr move - no add_ref/release
-            , needs_scheduling_(other.needs_scheduling_) {
-            other.needs_scheduling_ = false;
-        }
-
-        unique_future& operator=(unique_future&& other) noexcept {
-            if (this != &other) {
-                if (state_ && !state_->is_ready()) {
-                    state_->set_state(detail::future_state_enum::cancelled);
-                }
-
-                // intrusive_ptr move assignment handles release() + assignment atomically
-                state_ = std::move(other.state_);
-                needs_scheduling_ = other.needs_scheduling_;
-
-                other.needs_scheduling_ = false;
-            }
-            return *this;
-        }
-
-        ~unique_future() noexcept {
-            // intrusive_ptr destructor automatically calls release()
-        }
-
-        T get() && {
-            assert(state_ && "get() on invalid future");
-
-            int spin_count = 0;
-            constexpr int fast_spin_limit = 10;
-            constexpr int yield_limit = 100;
-
-            while (!state_->is_ready() && spin_count < fast_spin_limit) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    std::terminate();
-                }
-                ++spin_count;
-            }
-
-            while (!state_->is_ready() && spin_count < yield_limit) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    std::terminate();
-                }
-                std::this_thread::yield();
-                ++spin_count;
-            }
-
-#if HAVE_ATOMIC_WAIT
-            // C++20: Efficient blocking wait (zero CPU usage)
-            // Uses futex (Linux), __ulock_wait (macOS), or WaitOnAddress (Windows)
-            auto current = state_->state();
-            while (current == detail::future_state_enum::pending) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    std::terminate();
-                }
-
-                // Block until state changes (0% CPU)
-                state_->wait(current);
-                current = state_->state();
-            }
-#else
-            // C++17 fallback: Exponential backoff polling
-            auto backoff = std::chrono::microseconds(1);
-            constexpr auto max_backoff = std::chrono::microseconds(100);
-
-            while (!state_->is_ready()) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    std::terminate();
-                }
-
-                std::this_thread::sleep_for(backoff);
-                if (backoff < max_backoff) {
-                    backoff *= 2;
-                }
-            }
-#endif
-
-            // FIX: Use take_result() for atomic transition ready→consumed
-            // Move result OUT of future_state before releasing
-            detail::rtt result_rtt = state_->take_result();
-
-            // CRITICAL: Release state IMMEDIATELY after taking result
-            // This prevents race where message_guard::~message_guard() might also call release()
-            // We no longer need state_ - all data is in local result_rtt
-            // intrusive_ptr = nullptr automatically calls release()
-            state_ = nullptr;
-
-            // Safe: Extract value from LOCAL rtt, not from state
-            T result = result_rtt.template get<T>(0);
-            return result;
-        }
-
-        T get() & = delete;
-
-        [[nodiscard]] bool is_ready() const noexcept {
-            return state_ && state_->is_ready();
-        }
-
-        [[nodiscard]] bool valid() const noexcept {
-            return state_ != nullptr;
-        }
-
-        [[nodiscard]] bool needs_scheduling() const noexcept {
-            return needs_scheduling_;
-        }
-
-        void set_needs_scheduling(bool value) noexcept {
-            needs_scheduling_ = value;
-        }
-
-        void cancel() noexcept {
-            if (state_) {
-                state_->set_state(detail::future_state_enum::cancelled);
-            }
-        }
-
-        [[nodiscard]] bool is_cancelled() const noexcept {
-            return state_ && state_->is_cancelled();
-        }
-
-        // === Coroutine control API (analogous to std::coroutine_handle) ===
-
-        /// @brief Check if this future has an associated coroutine
-        /// @return true if coroutine handle is stored (analogous to coroutine_handle::operator bool())
-        [[nodiscard]] bool has_coroutine() const noexcept {
-            return state_ && state_->has_coroutine();
-        }
-
-        /// @brief Check if associated coroutine is done (at final suspend)
-        /// @return true if coroutine exists and completed (analogous to coroutine_handle::done())
-        [[nodiscard]] bool coroutine_done() const noexcept {
-            return state_ && state_->coroutine_done();
-        }
-
-        /// @brief Resume associated coroutine
-        /// @note Analogous to coroutine_handle::resume()
-        /// @note Caller must ensure awaiting_ready() == true before calling
-        void resume() noexcept {
-            if (state_) {
-                state_->resume_coroutine();
-            }
-        }
-
-        /// @brief Check if awaited future is ready
-        /// @return true if coroutine is waiting on a future and that future is ready
-        /// @note User code should call resume() when this returns true
-        [[nodiscard]] bool awaiting_ready() const noexcept {
-            if (!state_) return false;
-            auto* awaiting = state_->get_awaiting_on();
-            return awaiting && awaiting->is_ready();
-        }
-
-        [[nodiscard]] detail::future_state<T>* get_state() const noexcept {
-            return state_.get();  // Return raw pointer from intrusive_ptr
-        }
-
-        /// @brief Release ownership of state (transfer to continuation chain)
-        /// @return Raw pointer to state (caller takes ownership via refcount)
-        /// @note After this call, future is INVALID (state_ = nullptr)
-        /// @note Uses intrusive_ptr::detach() which does NOT decrement refcount
-        /// @note Thread-safe: atomic operation without race condition
-        ///
-        /// Example usage:
-        /// @code
-        /// auto* raw_state = future.release_state();  // Ownership transferred
-        /// raw_state->set_continuation(target);       // Link states
-        /// // raw_state now owned by continuation chain (refcount unchanged)
-        /// @endcode
-        [[nodiscard]] detail::future_state<T>* release_state() noexcept {
-            return state_.detach();  // intrusive_ptr::detach() returns ptr without decrement
-        }
-
-        [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
-            assert(state_ && "memory_resource() called on moved-from or invalid future");
-            return state_->memory_resource();
-        }
-
-        // ============================================================================
-        // Result propagation API (Seastar-style forward_to)
-        // ============================================================================
-
-        /// @brief Forward result from this future to target promise when ready
-        /// @param target Promise to receive the result
-        /// @note If already ready, copies result immediately
-        /// @note If not ready, user must poll and call forward_to_if_ready() or copy manually
-        /// @note This is USER-CONTROLLED - no automatic callbacks (thread affinity)
-        void forward_to(promise<T>& target) {
-            if (!state_) return;
-
-            if (state_->is_ready()) {
-                // Ready - copy result immediately
-                target.set_value(std::move(*this).get());
-            }
-            // Not ready - user must poll and forward later
-            // We don't set up automatic forwarding (violates thread affinity)
-        }
-
-        /// @brief Check if ready and forward to target if so
-        /// @param target Promise to receive the result
-        /// @return true if forwarded (was ready), false if still pending
-        /// @note Call this in poll loop until it returns true
-        bool forward_to_if_ready(promise<T>& target) {
-            if (!state_ || !state_->is_ready()) {
-                return false;
-            }
-            target.set_value(std::move(*this).get());
-            return true;
-        }
-
-        struct promise_type {
-            using value_type = T;
-
-            unique_future<T> get_return_object() {
-                assert(resource_ != nullptr &&
-                       "Coroutine must be actor member function with resource() method");
-
-                void* mem = resource_->allocate(sizeof(detail::future_state<T>),
-                                                alignof(detail::future_state<T>));
-                state_ = new (mem) detail::future_state<T>(resource_);
-
-
-                // Save coroutine handle in promise state for Manual Polling
-                // Actor can extract it via extract_coroutine_handle() and resume later
-                // NOTE: This is safe because automatic resume in set_result_rtt() is disabled
-                auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
-                state_->set_coroutine(handle);  // Implicit conversion to coroutine_handle<void>
-
-
-                // Use adopt_ref - refcount starts at 1, future adopts that reference
-                return unique_future<T>(adopt_ref, state_, false);
-            }
-
-            detail::suspend_never initial_suspend() noexcept {
-                // Start immediately - coroutine runs until first co_await or co_return
-                return {};
-            }
-
-            detail::suspend_always final_suspend() noexcept {
-                return {};
-            }
-
-            // CRITICAL: await_transform enables continuation chain for nested co_await
-            // When coroutine does `co_await send(other_actor, ...)`, we need to link:
-            // awaited_future (from send) → promise_state (this coroutine's return value)
-            // This ensures result propagates correctly through the chain.
-            template<typename U>
-            auto await_transform(unique_future<U>&& future) noexcept {
-                return awaiter<U>{std::move(future), state_};
-            }
-
-            void return_value(T&& value) noexcept {
-                assert(state_ && "return_value() with null state");
-                detail::rtt result(resource_, std::forward<T>(value));
-                state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
-            }
-
-            void return_value(const T& value) noexcept {
-                assert(state_ && "return_value() with null state");
-                detail::rtt result(resource_, value);
-                state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
-            }
-
-            void return_value(unique_future<T>&& ready_future) noexcept {
-                assert(state_ && "return_value() with null state");
-                assert(ready_future.valid() && "return_value() with invalid future");
-                T value = std::move(ready_future).get();
-                detail::rtt result(resource_, std::move(value));
-                state_->set_result_rtt(std::move(result));  // FIX: Use set_result_rtt() for continuation propagation!
-            }
-
-            void unhandled_exception() noexcept {
-                assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
-            }
-
-            // Default constructor - standalone coroutines will get nullptr resource
-            promise_type() noexcept
-                : resource_(nullptr)
-                , state_(nullptr) {
-            }
-
-            // Constructor for actor member functions - extracts resource from actor*
-            // When coroutine is member function, compiler passes 'this' as first argument
-            template<typename First, typename... Args>
-            promise_type(First&& first, Args&&...) noexcept
-                : resource_(extract_resource_impl(first))
-                , state_(nullptr) {
-            }
-
-            ~promise_type() noexcept = default;
-
-        private:
-            // SFINAE: Extract resource from actor pointer (if has resource() method)
-            template<typename U>
-            static auto try_get_resource(U* ptr, int) noexcept
-                -> decltype(ptr->resource()) {
-                return ptr->resource();
-            }
-
-            // Fallback: Return nullptr (will assert in get_return_object)
-            template<typename U>
-            static pmr::memory_resource* try_get_resource(U*, ...) noexcept {
-                return nullptr;
-            }
-
-            // Helper: dispatch based on whether type is a pointer
-            template<typename U>
-            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::true_type /* is_pointer */) noexcept {
-                // U is a pointer type - remove reference wrapper and pass as pointer
-                // E.g., T*&& or T*& becomes T*
-                using ptr_type = std::remove_reference_t<U>;
-                return try_get_resource(static_cast<ptr_type>(arg), 0);
-            }
-
-            template<typename U>
-            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::false_type /* not_pointer */) noexcept {
-                // U is not a pointer - try to take address (for references)
-                return try_get_resource(&arg, 0);
-            }
-
-            // Main entry point: handles all cases (pointer, reference, rvalue)
-            template<typename U>
-            static pmr::memory_resource* extract_resource_impl(U&& arg) noexcept {
-                using decayed = std::decay_t<U>;
-                return extract_impl_dispatch(std::forward<U>(arg), std::is_pointer<decayed>{});
-            }
-
-            pmr::memory_resource* resource_;
-            detail::future_state<T>* state_;
+            intrusive_ptr<detail::future_state<U>> state_;
+            detail::result_storage<U> inline_value_;
         };
 
-    private:
-        intrusive_ptr<detail::future_state<T>> state_;  // Changed from raw pointer to intrusive_ptr
-        bool needs_scheduling_;
-    };
+        // Void specialization: no inline storage needed (is_ready_void_ handles this)
+        template<typename U>
+        union storage_union<U, true> {
+            storage_union() noexcept {}
+            ~storage_union() {}
 
-    template<>
-    class unique_future<void> final {
-    public:
-        explicit unique_future(pmr::memory_resource* /*res*/) noexcept
-            : state_(nullptr)
-            , needs_scheduling_(false)
-            , is_ready_void_(false) {
+            intrusive_ptr<detail::future_state_base> state_;
+        };
+
+        // Helper to construct state_ member
+        void construct_state(state_type* ptr, bool add_ref = true) noexcept {
+            if constexpr (is_void_type) {
+                new (&storage_.state_) intrusive_ptr<state_type>(ptr, add_ref);
+            } else {
+                new (&storage_.state_) intrusive_ptr<state_type>(ptr, add_ref);
+            }
         }
 
-        explicit unique_future(detail::future_state<void>* state, bool needs_sched = false) noexcept
-            : state_(state)  // intrusive_ptr assignment calls add_ref() automatically
-            , needs_scheduling_(needs_sched)
-            , is_ready_void_(false) {
+        // Helper to construct inline_value_ member (non-void only)
+        template<typename... Args>
+        void construct_inline_value(Args&&... args) noexcept {
+            static_assert(!is_void_type, "Cannot construct inline_value for void type");
+            new (&storage_.inline_value_) detail::result_storage<T>();
+            storage_.inline_value_.emplace(std::forward<Args>(args)...);
+        }
+
+        // Helper to destroy active union member
+        void destroy_storage() noexcept {
+            if constexpr (is_void_type) {
+                storage_.state_.~intrusive_ptr();
+            } else {
+                if (has_inline_value_) {
+                    storage_.inline_value_.~result_storage();
+                } else {
+                    storage_.state_.~intrusive_ptr();
+                }
+            }
+        }
+
+    public:
+        explicit unique_future(pmr::memory_resource* /*res*/) noexcept
+            : needs_scheduling_(false)
+            , is_ready_void_(false)
+            , has_inline_value_(false) {
+            construct_state(nullptr, false);
+        }
+
+        explicit unique_future(state_type* state, bool needs_sched = false) noexcept
+            : needs_scheduling_(needs_sched)
+            , is_ready_void_(false)
+            , has_inline_value_(false) {
+            construct_state(state, true);  // add_ref = true
         }
 
         // Constructor for adopting an existing reference (no add_ref())
-        unique_future(adopt_ref_t, detail::future_state<void>* state, bool needs_sched = false) noexcept
-            : state_(state, false)  // intrusive_ptr(ptr, false) adopts reference (no add_ref)
-            , needs_scheduling_(needs_sched)
-            , is_ready_void_(false) {
+        unique_future(adopt_ref_t, state_type* state, bool needs_sched = false) noexcept
+            : needs_scheduling_(needs_sched)
+            , is_ready_void_(false)
+            , has_inline_value_(false) {
+            construct_state(state, false);  // add_ref = false
         }
 
-        // Static factory for ready void future (zero allocation)
-        static unique_future<void> make_ready() noexcept {
-            unique_future<void> f(nullptr, false);
+        // ========================================================================
+        // ZERO ALLOCATION: Ready future with inline value (non-void only)
+        // ========================================================================
+        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        unique_future(ready_future_marker_t, U&& value) noexcept
+            : needs_scheduling_(false)
+            , is_ready_void_(false)
+            , has_inline_value_(true) {
+            construct_inline_value(std::forward<U>(value));
+        }
+
+        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        unique_future(ready_future_marker_t, const U& value) noexcept
+            : needs_scheduling_(false)
+            , is_ready_void_(false)
+            , has_inline_value_(true) {
+            construct_inline_value(value);
+        }
+
+        // Static factory for ready void future (zero allocation) - only enabled for void
+        template<typename U = T, std::enable_if_t<std::is_void_v<U>, int> = 0>
+        static unique_future make_ready() noexcept {
+            unique_future f(nullptr, false);
             f.is_ready_void_ = true;
             return f;
         }
@@ -638,302 +386,351 @@ namespace actor_zeta {
         unique_future& operator=(const unique_future&) = delete;
 
         unique_future(unique_future&& other) noexcept
-            : state_(std::move(other.state_))  // intrusive_ptr move - no add_ref/release
-            , needs_scheduling_(other.needs_scheduling_)
-            , is_ready_void_(other.is_ready_void_) {
+            : needs_scheduling_(other.needs_scheduling_)
+            , is_ready_void_(other.is_ready_void_)
+            , has_inline_value_(other.has_inline_value_) {
+            if constexpr (is_void_type) {
+                // Void: only state_ path
+                new (&storage_.state_) intrusive_ptr<state_type>(std::move(other.storage_.state_));
+            } else {
+                // Non-void: check which union member is active
+                if (has_inline_value_) {
+                    new (&storage_.inline_value_) detail::result_storage<T>(
+                        std::move(other.storage_.inline_value_));
+                    // CRITICAL: Switch source to state_ mode for safe destruction
+                    // After move, source's inline_value_ is moved-from. Destroy it and
+                    // construct empty state_ so destructor doesn't access invalid union member.
+                    other.storage_.inline_value_.~result_storage();
+                    new (&other.storage_.state_) intrusive_ptr<state_type>(nullptr);
+                } else {
+                    new (&storage_.state_) intrusive_ptr<state_type>(std::move(other.storage_.state_));
+                }
+            }
             other.needs_scheduling_ = false;
             other.is_ready_void_ = false;
+            other.has_inline_value_ = false;
         }
 
-        /// @brief Converting constructor from unique_future<T> (any T) - TRUE MOVE SEMANTICS
-        /// @details Moves ownership from typed future to void future. After this call,
-        ///          the original typed future is INVALID (state_ = nullptr).
-        ///          The typed result is preserved in the state (via RTT), but this future
-        ///          acts as void (cannot call .get() to retrieve typed value).
-        ///          Continuation chain works correctly - typed result propagates through RTT.
-        /// @note This enables returning unique_future<T> from dispatch() and converting
-        ///       to unique_future<void> in behavior(), solving the return type conflict.
-        /// @warning After this call, `other` is in moved-from state and MUST NOT be used!
-        template<typename T>
-        unique_future(unique_future<T>&& other) noexcept
-            : state_(static_cast<detail::future_state<void>*>(
-                  static_cast<detail::future_state_base*>(other.release_state())), false)
-            , needs_scheduling_(other.needs_scheduling())
-            , is_ready_void_(false) {
-            // FIX: Use static_cast through future_state_base instead of reinterpret_cast
-            // - release_state() returns raw pointer WITHOUT decrementing refcount
-            // - Cast through base class (future_state_base*) is well-defined
-            // - intrusive_ptr(ptr, false) adopts the reference (no add_ref)
-            // - other.state_ is now nullptr (truly moved)
-            //
-            // This is safe because:
-            // 1. Both future_state<T> and future_state<void> inherit from future_state_base
-            // 2. We only call base class methods through this pointer (continuation, coroutine)
-            // 3. Typed result stored in RTT (type-erased), continuation chain works correctly
-            // 4. Never call typed methods on void future (no .get() that extracts typed value)
-            //
-            // IMPORTANT: other is now in moved-from state!
+        /// @brief Converting constructor from unique_future<U> to unique_future<void>
+        /// @note SAFE: Stores as future_state_base* (common base class) - NO UB!
+        /// @note Result delivery happens via result_slot mechanism, not through behavior() return
+        /// @warning The typed result is DISCARDED - this is intentional for behavior() pattern
+        template<typename U, std::enable_if_t<is_void_type && !std::is_void_v<U>, int> = 0>
+        unique_future(unique_future<U>&& other) noexcept
+            : needs_scheduling_(other.needs_scheduling())
+            , is_ready_void_(other.has_inline_value())  // Inline ready → is_ready_void_
+            , has_inline_value_(false) {
+            if (other.has_inline_value()) {
+                // Source has inline value → convert to is_ready_void_ = true
+                // Discard the actual value (behavior() pattern doesn't use it)
+                construct_state(nullptr, false);
+            } else {
+                // Get the typed state and store as base pointer
+                auto* typed_state = other.release_state();
+                if (typed_state) {
+                    // static_cast: future_state<U>* → future_state_base* (derived to base)
+                    construct_state(static_cast<state_type*>(typed_state), false);
+                } else {
+                    construct_state(nullptr, false);
+                }
+            }
             other.set_needs_scheduling(false);
         }
 
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
-                // Don't release if this is ready void (no allocation)
-                if (!is_ready_void_) {
-                    if (state_ && !state_->is_ready()) {
-                        state_->set_state(detail::future_state_enum::cancelled);
+                // Cancel current if pending
+                if constexpr (is_void_type) {
+                    if (!is_ready_void_ && storage_.state_ && !storage_.state_->is_ready()) {
+                        storage_.state_->set_state(detail::future_state_enum::cancelled);
                     }
-
-                    // intrusive_ptr move assignment handles release() + assignment atomically
-                    state_ = std::move(other.state_);
                 } else {
-                    state_ = std::move(other.state_);
+                    if (!has_inline_value_ && storage_.state_ && !storage_.state_->is_ready()) {
+                        storage_.state_->set_state(detail::future_state_enum::cancelled);
+                    }
                 }
 
+                // Destroy current storage
+                destroy_storage();
+
+                // Move from other
                 needs_scheduling_ = other.needs_scheduling_;
                 is_ready_void_ = other.is_ready_void_;
+                has_inline_value_ = other.has_inline_value_;
+
+                if constexpr (is_void_type) {
+                    new (&storage_.state_) intrusive_ptr<state_type>(std::move(other.storage_.state_));
+                } else {
+                    if (has_inline_value_) {
+                        new (&storage_.inline_value_) detail::result_storage<T>(
+                            std::move(other.storage_.inline_value_));
+                        // CRITICAL: Switch source to state_ mode for safe destruction
+                        other.storage_.inline_value_.~result_storage();
+                        new (&other.storage_.state_) intrusive_ptr<state_type>(nullptr);
+                    } else {
+                        new (&storage_.state_) intrusive_ptr<state_type>(std::move(other.storage_.state_));
+                    }
+                }
 
                 other.needs_scheduling_ = false;
                 other.is_ready_void_ = false;
+                other.has_inline_value_ = false;
             }
             return *this;
         }
 
         ~unique_future() noexcept {
-            // intrusive_ptr destructor automatically calls release() (unless ready void with null state)
+            destroy_storage();
         }
 
-        void get() && {
-            // Fast path for ready void (no allocation, no waiting)
+        // get() for non-void types - returns T
+        template<typename U = T>
+        [[nodiscard]] std::enable_if_t<!std::is_void_v<U>, U> get() && {
+            // Fast path: inline value (ZERO ALLOCATION path)
+            if (has_inline_value_) {
+                U result = storage_.inline_value_.take();
+                // Switch to state_ mode for safe destruction
+                storage_.inline_value_.~result_storage();
+                new (&storage_.state_) intrusive_ptr<state_type>(nullptr);
+                has_inline_value_ = false;
+                return result;
+            }
+
+            // Async path: state-based
+            assert(storage_.state_ && "get() on invalid future");
+            wait_for_ready();
+
+            // take_value() now returns T directly (in-place storage)
+            U result = storage_.state_->take_value();
+            storage_.state_ = nullptr;
+            return result;
+        }
+
+        // get() for void type - returns void
+        template<typename U = T>
+        std::enable_if_t<std::is_void_v<U>, void> get() && {
             if (is_ready_void_) {
                 return;
             }
-
-            assert(state_ && "get() on invalid future");
-
-            int spin_count = 0;
-            constexpr int fast_spin_limit = 10;
-            constexpr int yield_limit = 100;
-
-            while (!state_->is_ready() && spin_count < fast_spin_limit) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    return;
-                }
-                ++spin_count;
-            }
-
-            while (!state_->is_ready() && spin_count < yield_limit) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    return;
-                }
-                std::this_thread::yield();
-                ++spin_count;
-            }
-
-#if HAVE_ATOMIC_WAIT
-            // C++20: Efficient blocking wait (zero CPU usage)
-            auto current = state_->state();
-            while (current == detail::future_state_enum::pending) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    return;
-                }
-
-                // Block until state changes (0% CPU)
-                state_->wait(current);
-                current = state_->state();
-            }
-#else
-            // C++17 fallback: Exponential backoff polling
-            auto backoff = std::chrono::microseconds(1);
-            constexpr auto max_backoff = std::chrono::microseconds(100);
-
-            while (!state_->is_ready()) {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;  // intrusive_ptr = nullptr calls release()
-                    assert(false && "get() on cancelled future!");
-                    return;
-                }
-
-                std::this_thread::sleep_for(backoff);
-                if (backoff < max_backoff) {
-                    backoff *= 2;
-                }
-            }
-#endif
-
-            // intrusive_ptr = nullptr automatically calls release()
-            state_ = nullptr;
+            assert(storage_.state_ && "get() on invalid future");
+            wait_for_ready();
+            storage_.state_ = nullptr;
         }
 
-        void get() & = delete;
+        // Deleted lvalue get()
+        template<typename U = T>
+        std::enable_if_t<!std::is_void_v<U>, U> get() & = delete;
+        template<typename U = T>
+        std::enable_if_t<std::is_void_v<U>, void> get() & = delete;
 
-        [[nodiscard]] bool is_ready() const noexcept {
-            // Fast path for ready void
-            return is_ready_void_ || (state_ && state_->is_ready());
+        /// @brief Check if result is available (ready or consumed) - Seastar API
+        [[nodiscard]] bool available() const noexcept {
+            if constexpr (is_void_type) {
+                return is_ready_void_ || (storage_.state_ && storage_.state_->is_ready());
+            } else {
+                return has_inline_value_ || (storage_.state_ && storage_.state_->is_ready());
+            }
         }
 
+        /// @brief Check if future failed (error or cancelled) - Seastar API
+        [[nodiscard]] bool failed() const noexcept {
+            if constexpr (is_void_type) {
+                if (is_ready_void_) return false;
+                return storage_.state_ && storage_.state_->is_failed();
+            } else {
+                if (has_inline_value_) return false;
+                return storage_.state_ && storage_.state_->is_failed();
+            }
+        }
+
+        /// @brief Check if future has valid state - Seastar API
         [[nodiscard]] bool valid() const noexcept {
-            // Ready void is valid even without state
-            return is_ready_void_ || (state_ != nullptr);
+            if constexpr (is_void_type) {
+                return is_ready_void_ || (storage_.state_ != nullptr);
+            } else {
+                return has_inline_value_ || (storage_.state_ != nullptr);
+            }
         }
 
-        [[nodiscard]] bool needs_scheduling() const noexcept {
-            return needs_scheduling_;
+        /// @brief Explicitly ignore a ready future - Seastar API
+        /// Use this to acknowledge that a future result is intentionally discarded
+        void ignore() noexcept {
+            if constexpr (is_void_type) {
+                is_ready_void_ = false;
+                storage_.state_ = nullptr;
+            } else {
+                if (has_inline_value_) {
+                    storage_.inline_value_.~result_storage();
+                    has_inline_value_ = false;
+                    // Re-init state_ to valid empty state
+                    new (&storage_.state_) intrusive_ptr<state_type>(nullptr);
+                } else {
+                    storage_.state_ = nullptr;
+                }
+            }
         }
 
-        void set_needs_scheduling(bool value) noexcept {
-            needs_scheduling_ = value;
-        }
+        [[nodiscard]] bool needs_scheduling() const noexcept { return needs_scheduling_; }
+        void set_needs_scheduling(bool value) noexcept { needs_scheduling_ = value; }
+
+        [[nodiscard]] bool has_inline_value() const noexcept { return has_inline_value_; }
 
         void cancel() noexcept {
-            if (state_) {
-                state_->set_state(detail::future_state_enum::cancelled);
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return;  // Inline value can't be cancelled
+            }
+            if (storage_.state_) {
+                storage_.state_->set_state(detail::future_state_enum::cancelled);
             }
         }
 
         [[nodiscard]] bool is_cancelled() const noexcept {
-            return state_ && state_->is_cancelled();
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return false;
+            }
+            return storage_.state_ && storage_.state_->is_cancelled();
         }
 
-        // === Coroutine control API (analogous to std::coroutine_handle) ===
-
-        /// @brief Check if this future has an associated coroutine
-        /// @return true if coroutine handle is stored (analogous to coroutine_handle::operator bool())
         [[nodiscard]] bool has_coroutine() const noexcept {
-            return state_ && state_->has_coroutine();
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return false;
+            }
+            return storage_.state_ && storage_.state_->has_coroutine();
         }
 
-        /// @brief Check if associated coroutine is done (at final suspend)
-        /// @return true if coroutine exists and completed (analogous to coroutine_handle::done())
         [[nodiscard]] bool coroutine_done() const noexcept {
-            return state_ && state_->coroutine_done();
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return false;
+            }
+            return storage_.state_ && storage_.state_->coroutine_done();
         }
 
-        /// @brief Resume associated coroutine
-        /// @note Analogous to coroutine_handle::resume()
-        /// @note Caller must ensure awaiting_ready() == true before calling
         void resume() noexcept {
-            if (state_) {
-                state_->resume_coroutine();
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return;
+            }
+            if (storage_.state_) {
+                storage_.state_->resume_coroutine();
             }
         }
 
-        /// @brief Check if awaited future is ready
-        /// @return true if coroutine is waiting on a future and that future is ready
-        /// @note User code should call resume() when this returns true
         [[nodiscard]] bool awaiting_ready() const noexcept {
-            if (!state_) return false;
-            auto* awaiting = state_->get_awaiting_on();
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return false;
+            }
+            if (!storage_.state_) return false;
+            auto* awaiting = storage_.state_->get_awaiting_on();
             return awaiting && awaiting->is_ready();
         }
 
-        [[nodiscard]] detail::future_state<void>* get_state() const noexcept {
-            return state_.get();  // Return raw pointer from intrusive_ptr
+        [[nodiscard]] state_type* get_state() const noexcept {
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return nullptr;
+            }
+            return storage_.state_.get();
         }
 
-        /// @brief Release ownership of state (transfer to continuation chain)
-        /// @return Raw pointer to state (caller takes ownership via refcount)
-        /// @note After this call, future is INVALID (state_ = nullptr)
-        /// @note Uses intrusive_ptr::detach() which does NOT decrement refcount
-        [[nodiscard]] detail::future_state<void>* release_state() noexcept {
-            return state_.detach();  // intrusive_ptr::detach() returns ptr without decrement
+        [[nodiscard]] state_type* release_state() noexcept {
+            if constexpr (!is_void_type) {
+                if (has_inline_value_) return nullptr;
+            }
+            return storage_.state_.detach();
         }
 
-        struct promise_type {
-            using value_type = void;
+        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
+            assert(!has_inline_value_ && storage_.state_ && "memory_resource() called on inline future");
+            return storage_.state_->memory_resource();
+        }
 
-            unique_future<void> get_return_object() {
+        // forward_to - only for non-void (Seastar API)
+        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        void forward_to(promise<T>& target) {
+            if (has_inline_value_) {
+                T result = storage_.inline_value_.take();
+                // Switch to state_ mode for safe destruction
+                storage_.inline_value_.~result_storage();
+                new (&storage_.state_) intrusive_ptr<state_type>(nullptr);
+                has_inline_value_ = false;
+                target.set_value(std::move(result));
+                return;
+            }
+            if (!storage_.state_) return;
+            if (storage_.state_->is_ready()) {
+                target.set_value(std::move(*this).get());
+            }
+        }
+
+        // ============================================================================
+        // Coroutine promise_type - uses inheritance to separate return_value/return_void
+        // SFINAE doesn't work for coroutine promise types - compiler sees both methods
+        // ============================================================================
+    private:
+        // Base class with common promise functionality
+        struct promise_type_base {
+            using value_type = T;
+
+            unique_future<T> get_return_object() {
                 assert(resource_ != nullptr &&
                        "Coroutine must be actor member function with resource() method");
 
-                void* mem = resource_->allocate(sizeof(detail::future_state<void>),
-                                                alignof(detail::future_state<void>));
-                state_ = new (mem) detail::future_state<void>(resource_);
+                // Use coroutine_state_type for allocation (concrete type, not abstract base)
+                void* mem = resource_->allocate(sizeof(coroutine_state_type), alignof(coroutine_state_type));
+                state_ = new (mem) coroutine_state_type(resource_);
 
-                // Save coroutine handle in promise state for Manual Polling
-                // Actor can extract it via extract_coroutine_handle() and resume later
-                // NOTE: This is safe because automatic resume in set_result_rtt() is disabled
-                auto handle = std::coroutine_handle<promise_type>::from_promise(*this);
-                state_->set_coroutine(handle);  // Implicit conversion to coroutine_handle<void>
+                auto handle = std::coroutine_handle<struct promise_type>::from_promise(
+                    static_cast<struct promise_type&>(*this));
+                state_->set_coroutine(handle);
 
-                // Use adopt_ref - refcount starts at 1, future adopts that reference
-                return unique_future<void>(adopt_ref, state_, false);
+                // For void: coroutine_state_type* (future_state<void>*) → state_type* (future_state_base*)
+                // This is legal: derived* → base*
+                return unique_future<T>(adopt_ref, static_cast<state_type*>(state_), false);
             }
 
-            detail::suspend_never initial_suspend() noexcept {
-                // Start immediately - coroutine runs until first co_await or co_return
-                return {};
-            }
-
+            detail::suspend_never initial_suspend() noexcept { return {}; }
             detail::suspend_always final_suspend() noexcept { return {}; }
 
-            // Enable co_await inside void coroutines (same as typed version)
-            // This allows: unique_future<void> method() { co_await send(...); co_return; }
             template<typename U>
             auto await_transform(unique_future<U>&& future) noexcept {
-                return awaiter<U>{std::move(future), state_};
-            }
-
-            void return_void() noexcept {
-                assert(state_ && "return_void() with null state");
-                state_->set_ready();
+                // state_ is coroutine_state_type* which derives from future_state_base
+                return awaiter<U>{std::move(future), static_cast<detail::future_state_base*>(state_)};
             }
 
             void unhandled_exception() noexcept {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
-            // Default constructor - standalone coroutines will get nullptr resource
-            promise_type() noexcept
-                : resource_(nullptr)
-                , state_(nullptr) {
-            }
+            promise_type_base() noexcept : resource_(nullptr), state_(nullptr) {}
 
-            // Constructor for actor member functions - extracts resource from actor*
             template<typename First, typename... Args>
-            promise_type(First&& first, Args&&...) noexcept
+            promise_type_base(First&& first, Args&&...) noexcept
                 : resource_(extract_resource_impl(first))
-                , state_(nullptr) {
-            }
+                , state_(nullptr) {}
 
-            ~promise_type() noexcept = default;
+            ~promise_type_base() noexcept = default;
 
-        private:
-            // SFINAE: Extract resource from actor pointer (if has resource() method)
+        protected:
             template<typename U>
-            static auto try_get_resource(U* ptr, int) noexcept
-                -> decltype(ptr->resource()) {
+            static auto try_get_resource(U* ptr, int) noexcept -> decltype(ptr->resource()) {
                 return ptr->resource();
             }
 
-            // Fallback: Return nullptr (will assert in get_return_object)
             template<typename U>
             static pmr::memory_resource* try_get_resource(U*, ...) noexcept {
                 return nullptr;
             }
 
-            // Helper: dispatch based on whether type is a pointer
             template<typename U>
-            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::true_type /* is_pointer */) noexcept {
-                // U is a pointer type - remove reference wrapper and pass as pointer
-                // E.g., T*&& or T*& becomes T*
+            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::true_type) noexcept {
                 using ptr_type = std::remove_reference_t<U>;
                 return try_get_resource(static_cast<ptr_type>(arg), 0);
             }
 
             template<typename U>
-            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::false_type /* not_pointer */) noexcept {
-                // U is not a pointer - try to take address (for references)
+            static pmr::memory_resource* extract_impl_dispatch(U&& arg, std::false_type) noexcept {
                 return try_get_resource(&arg, 0);
             }
 
-            // Main entry point: handles all cases (pointer, reference, rvalue)
             template<typename U>
             static pmr::memory_resource* extract_resource_impl(U&& arg) noexcept {
                 using decayed = std::decay_t<U>;
@@ -941,39 +738,136 @@ namespace actor_zeta {
             }
 
             pmr::memory_resource* resource_;
-            detail::future_state<void>* state_;
+            coroutine_state_type* state_;  // Use concrete type for coroutine operations
+        };
+
+        // Non-void: has return_value
+        template<typename U, bool IsVoid>
+        struct promise_type_return : promise_type_base {
+            using promise_type_base::promise_type_base;
+
+            void return_value(U&& value) noexcept {
+                assert(this->state_ && "return_value() with null state");
+                // Use set_value() for ZERO ALLOCATION in-place storage
+                this->state_->set_value(std::forward<U>(value));
+            }
+
+            void return_value(const U& value) noexcept {
+                assert(this->state_ && "return_value() with null state");
+                // Use set_value() for ZERO ALLOCATION in-place storage
+                this->state_->set_value(value);
+            }
+
+            void return_value(unique_future<U>&& ready_future) noexcept {
+                assert(this->state_ && "return_value() with null state");
+                assert(ready_future.valid() && "return_value() with invalid future");
+                U val = std::move(ready_future).get();
+                // Use set_value() for ZERO ALLOCATION in-place storage
+                this->state_->set_value(std::move(val));
+            }
+        };
+
+        // Void specialization: has return_void
+        template<typename U>
+        struct promise_type_return<U, true> : promise_type_base {
+            using promise_type_base::promise_type_base;
+
+            void return_void() noexcept {
+                assert(this->state_ && "return_void() with null state");
+                this->state_->set_ready();
+            }
+        };
+
+    public:
+        // Final promise_type selects correct base
+        struct promise_type : promise_type_return<T, is_void_type> {
+            using promise_type_return<T, is_void_type>::promise_type_return;
         };
 
     private:
-        intrusive_ptr<detail::future_state<void>> state_;  // Changed from raw pointer to intrusive_ptr
+        void wait_for_ready() {
+            int spin_count = 0;
+            constexpr int fast_spin_limit = 10;
+            constexpr int yield_limit = 100;
+
+            while (!storage_.state_->is_ready() && spin_count < fast_spin_limit) {
+                if (storage_.state_->is_cancelled()) {
+                    storage_.state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    if constexpr (!is_void_type) std::terminate();
+                    return;
+                }
+                ++spin_count;
+            }
+
+            while (!storage_.state_->is_ready() && spin_count < yield_limit) {
+                if (storage_.state_->is_cancelled()) {
+                    storage_.state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    if constexpr (!is_void_type) std::terminate();
+                    return;
+                }
+                std::this_thread::yield();
+                ++spin_count;
+            }
+
+#if HAVE_ATOMIC_WAIT
+            // Wait until truly ready (not just state changed)
+            // Must handle transient states: pending → setting → ready
+            while (!storage_.state_->is_ready()) {
+                if (storage_.state_->is_cancelled()) {
+                    storage_.state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    if constexpr (!is_void_type) std::terminate();
+                    return;
+                }
+                auto current = storage_.state_->state();
+                // Wait on pending OR setting states (both are transient)
+                if (current == detail::future_state_enum::pending ||
+                    current == detail::future_state_enum::setting) {
+                    storage_.state_->wait(current);  // Returns when state changes
+                }
+                // Re-check is_ready() in while condition
+            }
+#else
+            auto backoff = std::chrono::microseconds(1);
+            constexpr auto max_backoff = std::chrono::microseconds(100);
+
+            while (!storage_.state_->is_ready()) {
+                if (storage_.state_->is_cancelled()) {
+                    storage_.state_ = nullptr;
+                    assert(false && "get() on cancelled future!");
+                    if constexpr (!is_void_type) std::terminate();
+                    return;
+                }
+                std::this_thread::sleep_for(backoff);
+                if (backoff < max_backoff) backoff *= 2;
+            }
+#endif
+        }
+
+        // Member variables - storage union MUST be first for proper initialization
+        storage_union<T, is_void_type> storage_;
         bool needs_scheduling_;
-        bool is_ready_void_;  // True for ready void future (zero allocation)
+        bool is_ready_void_;        // Only used when T=void for zero-allocation fast path
+        bool has_inline_value_;     // Only used when T!=void for inline value storage
     };
 
+    /// @brief Create ready future with inline value storage (ZERO ALLOCATION!)
+    /// @param resource Memory resource (unused for inline storage, kept for API compatibility)
+    /// @param value Value to store inline in the future
+    /// @return Ready future with inline storage
+    /// @note This is the optimized path - no future_state allocation!
     template<typename T>
-    unique_future<T> make_ready_future(pmr::memory_resource* resource, T&& value) {
-        void* mem = resource->allocate(sizeof(detail::future_state<T>),
-                                       alignof(detail::future_state<T>));
-        auto* state = new (mem) detail::future_state<T>(resource);  // refcount = 1
-
-        detail::rtt result(resource, std::forward<T>(value));
-        state->set_result(std::move(result));
-
-        // Use adopt_ref - no message to release, future adopts initial refcount
-        return unique_future<T>(adopt_ref, state, false);
+    unique_future<T> make_ready_future(pmr::memory_resource* /*resource*/, T&& value) {
+        // ZERO ALLOCATION: value stored inline in unique_future
+        return unique_future<T>(ready_future_marker, std::forward<T>(value));
     }
 
     template<typename T>
-    unique_future<T> make_ready_future(pmr::memory_resource* resource, const T& value) {
-        void* mem = resource->allocate(sizeof(detail::future_state<T>),
-                                       alignof(detail::future_state<T>));
-        auto* state = new (mem) detail::future_state<T>(resource);  // refcount = 1
-
-        detail::rtt result(resource, value);
-        state->set_result(std::move(result));
-
-        // Use adopt_ref - no message to release, future adopts initial refcount
-        return unique_future<T>(adopt_ref, state, false);
+    unique_future<T> make_ready_future(pmr::memory_resource* /*resource*/, const T& value) {
+        // ZERO ALLOCATION: value stored inline in unique_future
+        return unique_future<T>(ready_future_marker, value);
     }
 
     inline unique_future<void> make_ready_future_void(pmr::memory_resource* /*resource*/) {
@@ -1034,11 +928,11 @@ namespace actor_zeta {
             , promise_state_(prom_state) {}
 
         [[nodiscard]] bool await_ready() const noexcept {
-            return future_.is_ready();
+            return future_.available();
         }
 
         bool await_suspend(std::coroutine_handle<> handle) noexcept {
-            if (future_.is_ready()) {
+            if (future_.available()) {
                 return false;
             }
 
@@ -1058,7 +952,7 @@ namespace actor_zeta {
             }
 
             // Re-check after set_coroutine() to close race window
-            if (future_.is_ready()) {
+            if (future_.available()) {
                 return false;  // Don't suspend - another thread set result
             }
 
@@ -1067,6 +961,49 @@ namespace actor_zeta {
 
         T await_resume() {
             return std::move(future_).get();
+        }
+    };
+
+    /// @brief Specialization of awaiter for void (Seastar-style unified handling)
+    /// Uses monostate internally but returns void from await_resume()
+    template<>
+    struct awaiter<void> {
+        unique_future<void> future_;
+        detail::future_state_base* promise_state_;
+
+        explicit awaiter(unique_future<void>&& f, detail::future_state_base* prom_state = nullptr) noexcept
+            : future_(std::move(f))
+            , promise_state_(prom_state) {}
+
+        [[nodiscard]] bool await_ready() const noexcept {
+            return future_.available();
+        }
+
+        bool await_suspend(std::coroutine_handle<> handle) noexcept {
+            if (future_.available()) {
+                return false;
+            }
+
+            auto* state = future_.get_state();
+            if (!state) {
+                return false;
+            }
+
+            state->set_coroutine(handle);
+
+            if (promise_state_) {
+                promise_state_->set_awaiting_on(state);
+            }
+
+            if (future_.available()) {
+                return false;
+            }
+
+            return true;
+        }
+
+        void await_resume() {
+            std::move(future_).get();  // void return
         }
     };
 

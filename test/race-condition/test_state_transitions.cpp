@@ -144,7 +144,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
             bool last_state = false;  // Local to poller thread - no data race
 
             while (!stop_polling.load(std::memory_order_acquire)) {
-                bool current_state = future.is_ready();
+                bool current_state = future.available();
 
                 // Detect INVALID transition from true → false (should NEVER happen!)
                 if (last_state && !current_state) {
@@ -174,7 +174,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
         }
 
         // Consume future to clean up
-        if (future.is_ready()) {
+        if (future.available()) {
             auto result = std::move(future).get();
             (void)result;
         }
@@ -230,7 +230,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
             observers.emplace_back([&future, &stop_observing, &observers_saw_ready]() {
                 bool saw_ready = false;
                 while (!stop_observing.load(std::memory_order_acquire)) {
-                    if (future.is_ready()) {
+                    if (future.available()) {
                         saw_ready = true;
                         break;
                     }
@@ -258,7 +258,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
         REQUIRE(observers_saw_ready.load() >= 0);
 
         // Consume future
-        if (future.is_ready()) {
+        if (future.available()) {
             auto result = std::move(future).get();
             REQUIRE(result == i + 1);
         }

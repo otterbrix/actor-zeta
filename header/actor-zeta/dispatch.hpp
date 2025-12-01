@@ -13,55 +13,85 @@ namespace detail {
 
     /// @brief Set up result chaining from method_future to msg->result_slot()
     /// When method_future becomes ready, result is automatically forwarded
+    /// Uses TYPED forwarding - no RTT needed!
+    /// @note Handles both state-based futures AND inline storage futures (Fast Ready Future Factory)
     template<typename T>
     void setup_result_chaining(
         unique_future<T>& method_future,
         mailbox::message* msg
     ) noexcept {
+        auto result_slot_base = msg->result_slot();
+        if (!result_slot_base) {
+            return;
+        }
+
+        // Safe cast: result_slot was created by send<T>() which creates future_state<T>
+        auto* result_slot = static_cast<detail::future_state<T>*>(result_slot_base.get());
+
+        // Check if method_future is already available (handles both cases):
+        // 1. Inline storage (make_ready_future with Fast Ready Future Factory) - has_inline_value_ is true
+        // 2. State-based ready future - state_->is_ready() is true
+        if (method_future.available()) {
+            // Method already completed - forward result immediately
+            // This handles BOTH inline storage AND state-based ready futures
+            // TYPED forwarding - ZERO ALLOCATION!
+            result_slot->set_value(std::move(method_future).get());
+            return;
+        }
+
+        // Method not ready - must have valid state for async chaining
         auto* method_state = method_future.get_state();
         if (!method_state) {
+            // CRITICAL: Future claims not-available but has no state!
+            // This indicates a bug in make_ready_future() or unique_future.
+            // Without state, we cannot set up chaining → caller's future will hang forever.
+            assert(false && "Non-available typed future has no state - bug in future implementation!");
+            // In release: mark result_slot as error to prevent infinite hang
+            result_slot->set_state(detail::future_state_enum::error);
             return;
         }
 
-        auto result_slot = msg->result_slot();
-        if (!result_slot) {
-            return;
-        }
-
-        // Set up chaining: method_state -> result_slot
-        // When method_state becomes ready, it will automatically forward to result_slot
-        method_state->set_forward_target(result_slot.get());
-
-        // If method already completed (sync method like make_ready_future),
-        // result was set BEFORE chaining was established. Forward manually now.
-        if (method_state->is_ready()) {
-            // Move result to forward target (method_state becomes consumed)
-            result_slot->set_result_rtt(method_state->take_result());
-        }
+        // Set up chaining for async: method_state -> result_slot (TYPED!)
+        method_state->set_forward_target(result_slot);
     }
 
     /// @brief Specialization for void futures
+    /// @note Handles both stateful futures AND zero-allocation ready void futures (is_ready_void_)
     inline void setup_result_chaining(
         unique_future<void>& method_future,
         mailbox::message* msg
     ) noexcept {
+        auto result_slot_base = msg->result_slot();
+        if (!result_slot_base) {
+            return;
+        }
+
+        // Safe cast: result_slot was created by send<void>() which creates future_state<void>
+        auto* result_slot = static_cast<detail::future_state<void>*>(result_slot_base.get());
+
+        // Check if method_future is already available (handles both cases):
+        // 1. Zero-allocation ready void (make_ready_future_void) - state_ is nullptr, is_ready_void_ is true
+        // 2. Stateful ready future - state_ is valid, state_->is_ready() is true
+        if (method_future.available()) {
+            // Method already completed - set result_slot ready immediately
+            result_slot->set_ready();
+            return;
+        }
+
+        // Method not ready - must have valid state for chaining
         auto* method_state = method_future.get_state();
         if (!method_state) {
+            // CRITICAL: Future claims not-available but has no state!
+            // This indicates a bug in make_ready_future_void() or unique_future.
+            // Without state, we cannot set up chaining → caller's future will hang forever.
+            assert(false && "Non-available void future has no state - bug in future implementation!");
+            // In release: mark result_slot as error to prevent infinite hang
+            result_slot->set_state(detail::future_state_enum::error);
             return;
         }
 
-        auto result_slot = msg->result_slot();
-        if (!result_slot) {
-            return;
-        }
-
-        // Set up chaining for void
-        method_state->set_forward_target(result_slot.get());
-
-        // If already ready (sync void method), mark slot as ready
-        if (method_state->is_ready()) {
-            result_slot->set_state(future_state_enum::ready);
-        }
+        // Set up chaining for async void (via virtual method)
+        method_state->set_forward_target_void(result_slot);
     }
 
 } // namespace detail

@@ -95,7 +95,7 @@ TEST_CASE("simple coroutines with co_return") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
         int result = std::move(future).get();
         REQUIRE(result == 42);
     }
@@ -112,7 +112,7 @@ TEST_CASE("simple coroutines with co_return") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
         std::string result = std::move(future).get();
         REQUIRE(result == "hello");
     }
@@ -129,7 +129,7 @@ TEST_CASE("simple coroutines with co_return") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
         std::move(future).get();  // Should not throw
     }
 }
@@ -269,7 +269,7 @@ TEST_CASE("Coroutine futures") {
         auto future = actor->coro_int();  // co_return 42
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
 
         int result = std::move(future).get();
         REQUIRE(result == 42);
@@ -281,7 +281,7 @@ TEST_CASE("Coroutine futures") {
 
         auto future2 = std::move(future1);
         REQUIRE(future2.valid());
-        REQUIRE(future2.is_ready());
+        REQUIRE(future2.available());
 
         std::string result = std::move(future2).get();
         REQUIRE(result == "hello");
@@ -325,7 +325,7 @@ TEST_CASE("sync methods with unique_future return type") {
         auto future = sync_add(10, 20);
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
 
         int result = std::move(future).get();
         REQUIRE(result == 30);
@@ -335,7 +335,7 @@ TEST_CASE("sync methods with unique_future return type") {
         auto future = sync_concat("hello", " world");
 
         REQUIRE(future.valid());
-        REQUIRE(future.is_ready());
+        REQUIRE(future.available());
 
         std::string result = std::move(future).get();
         REQUIRE(result == "hello world");
@@ -410,7 +410,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         // Process the message
         actor->resume(100);
 
-        REQUIRE(result.is_ready());
+        REQUIRE(result.available());
         int value = std::move(result).get();
         REQUIRE(value == 30);
     }
@@ -427,7 +427,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         // Process the message
         actor->resume(100);
 
-        REQUIRE(result.is_ready());
+        REQUIRE(result.available());
         int value = std::move(result).get();
         REQUIRE(value == 35);
     }
@@ -515,7 +515,7 @@ TEST_CASE("coroutine cleanup does not crash") {
         {
             auto future = actor->coro_int();  // co_return 42
             REQUIRE(future.valid());
-            REQUIRE(future.is_ready());
+            REQUIRE(future.available());
             int result = std::move(future).get();
             REQUIRE(result == 42);
         }
