@@ -8,8 +8,8 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
-#include <cstring>  // for std::memmove (trivial move optimization)
-#include <thread>   // for std::this_thread::yield()
+#include <cstring>
+#include <thread>
 #include <type_traits>
 
 namespace actor_zeta { namespace detail {
@@ -71,15 +71,11 @@ namespace actor_zeta { namespace detail {
 #endif
         }
 
-        /// @brief Increment reference count
         void add_ref() noexcept {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: add_ref() on deleted state!");
-            // Use fetch_add result to check ACTUAL old value in concurrent scenario
-            // This prevents race where multiple threads read stale value before increment
             int old_value = refcount_.fetch_add(1, std::memory_order_relaxed);
             assert(old_value > 0 && "Refcount underflow!");
-            // Increased limit to 1000000 - 10000 was too low for stress tests with many concurrent threads
             assert(old_value < 1000000 && "Refcount overflow!");
 #else
             refcount_.fetch_add(1, std::memory_order_relaxed);
@@ -87,70 +83,25 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Try to increment reference count (like weak_ptr::lock())
-        /// @return true if successful (object alive), false if object being destroyed
-        ///
-        /// This is the thread-safe equivalent of std::weak_ptr::lock().
-        /// Atomically checks if refcount > 0 and increments if so.
-        ///
-        /// Use this instead of add_ref() when you have a raw pointer and don't know
-        /// if the object is still alive (e.g., from message->result_slot()).
+        /// @return true if successful, false if object being destroyed
         [[nodiscard]] bool try_add_ref() noexcept {
             int old_count = refcount_.load(std::memory_order_relaxed);
-
-            // Loop until we either successfully increment or detect object is dead
             do {
-                if (old_count == 0) {
-                    // Object is being destroyed, cannot increment
-                    return false;
-                }
-
-                // Try to increment: old_count → old_count + 1
-                // If another thread changed refcount, old_count is updated and we retry
+                if (old_count == 0) return false;
             } while (!refcount_.compare_exchange_weak(
                 old_count, old_count + 1,
-                std::memory_order_acquire,   // Success: synchronize with release operations
-                std::memory_order_relaxed)); // Failure: just reload and retry
-
-            // Successfully incremented refcount
+                std::memory_order_acquire,
+                std::memory_order_relaxed));
             return true;
         }
 
-        /// @brief Decrement reference count and deallocate if zero
         void release() noexcept {
-            // CRITICAL: Do NOT check magic_ before fetch_sub!
-            //
-            // Race scenario if we check first:
-            //   Thread A: release() → reads magic_ (OK)
-            //   Thread B: release() → refcount 1→0 → destroy() → magic_ = kMagicDead
-            //   Thread A: fetch_sub → refcount 0→-1 (underflow!)
-            //
-            // Solution: fetch_sub FIRST (atomic), then check if we destroyed
-            //   - If old_value > 1: object still alive, can safely check magic_
-            //   - If old_value == 1: we're destroying, no need to check
-            //   - If old_value <= 0: underflow (bug), will be caught by assert
-
-            // OPTIMIZATION: Use release-only ordering on hot path
-            //
-            // Rationale:
-            //   - Release ordering publishes the decrement to other threads
-            //   - Acquire needed only when destroying (cold path, 1 in N releases)
-            //   - Saves ~20 cycles per release on x86 (no mfence), ~25 cycles on ARM (no dmb)
-            //
-            // Safety:
-            //   - Release ensures: decrement visible to other threads
-            //   - Acquire fence before destroy ensures: all previous writes visible
-            //   - Same pattern as libstdc++ shared_ptr
-            //
-            // Assembly impact (x86_64):
-            //   Before: lock xadd + mfence (30 cycles)
-            //   After: lock xadd only (10 cycles)
+            // CRITICAL: fetch_sub FIRST, then destroy. Same pattern as libstdc++ shared_ptr.
             int old_value = refcount_.fetch_sub(1, std::memory_order_release);
 #ifndef NDEBUG
             assert(old_value > 0 && "Refcount underflow!");
 #endif
             if (old_value == 1) {
-                // Cold path: acquire fence before destroying
-                // Synchronizes with all previous release operations
                 std::atomic_thread_fence(std::memory_order_acquire);
                 destroy();
             }
@@ -161,21 +112,15 @@ namespace actor_zeta { namespace detail {
             return state_.load(std::memory_order_acquire);
         }
 
-        /// @brief Check if in terminal state (ready, consumed, error, cancelled)
-        /// Optimization: single comparison instead of multiple ==
         [[nodiscard]] bool is_available() const noexcept {
             return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
         }
 
-        /// @brief Check if result is ready (ready or consumed - has value)
-        /// Optimization: range check
         [[nodiscard]] bool is_ready() const noexcept {
             auto s = state_.load(std::memory_order_acquire);
             return s == future_state_enum::ready || s == future_state_enum::consumed;
         }
 
-        /// @brief Check if failed (error or cancelled)
-        /// Optimization: single comparison (>= error)
         [[nodiscard]] bool is_failed() const noexcept {
             return state_.load(std::memory_order_acquire) >= future_state_enum::error;
         }
@@ -284,11 +229,7 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
         static constexpr uint32_t kMagicDead = 0xDEADC0DE;
-
-        // Use atomic for magic_ to prevent TSan data race warnings
-        // Race occurs when one thread reads magic_ (in add_ref/set_result) while another
-        // writes magic_ = kMagicDead (in destructor)
-        mutable std::atomic<uint32_t> magic_;
+        mutable std::atomic<uint32_t> magic_;  // Atomic to prevent TSan warnings
         uint64_t generation_;
 
         static uint64_t next_generation() {
@@ -296,7 +237,6 @@ namespace actor_zeta { namespace detail {
             return counter.fetch_add(1, std::memory_order_relaxed);
         }
 
-        // Helper to check magic_ atomically
         [[nodiscard]] bool is_alive() const noexcept {
             return magic_.load(std::memory_order_acquire) == kMagicAlive;
         }
@@ -529,9 +469,7 @@ namespace actor_zeta { namespace detail {
             }
         }
 
-        // ===== Typed forward target (NO RTT!) =====
-
-        /// @brief Set typed forward target for result chaining
+        /// @brief Set typed forward target for result chaining (NO RTT!)
         /// @param target The future_state<T> to forward results to when this becomes ready
         /// @note TYPED - no RTT needed for forwarding!
         /// @note Thread-safe: uses CAS to prevent race with set_value()
@@ -580,8 +518,6 @@ namespace actor_zeta { namespace detail {
         [[nodiscard]] future_state<T>* get_forward_target() const noexcept {
             return forward_target_.load(std::memory_order_acquire);
         }
-
-        // ===== Non-void specific methods =====
 
         /// @brief Set value directly in-place (ZERO ALLOCATION)
         /// If forward_target_ is set, forwards directly (also ZERO ALLOCATION!)
@@ -650,8 +586,6 @@ namespace actor_zeta { namespace detail {
             return result;
         }
 
-        // ===== Void specific methods =====
-
         /// @brief Mark as ready (only for void)
         /// @note Forwards to target BEFORE setting ready (same pattern as set_value)
         template<typename U = T, std::enable_if_t<std::is_void_v<U>, int> = 0>
@@ -683,8 +617,6 @@ namespace actor_zeta { namespace detail {
 #endif
         }
 
-        // ===== Coroutine methods =====
-
         /// @brief Resume stored coroutine (final - enables devirtualization)
         void resume_coroutine() noexcept final {
             if (coro_handle_ && !coro_handle_.done()) {
@@ -707,28 +639,13 @@ namespace actor_zeta { namespace detail {
             coro_handle_ = handle;
         }
 
-        /// @brief Set void forward target (type-erased for void chaining)
-        /// @note For void T: calls set_ready() on target when this becomes ready
-        /// @note For non-void T: this is a type mismatch, but we handle it gracefully
-        ///       by calling target's set_ready() (void-to-void semantics)
         bool set_forward_target_void(future_state_base* target) noexcept override {
             if constexpr (std::is_void_v<T>) {
-                // For void, use typed set_forward_target
                 return set_forward_target(static_cast<future_state<void>*>(target));
             } else {
-                // For non-void, we can only do void-like forwarding
-                // This happens when typed result goes through converting constructor
-                // The typed result is ALREADY forwarded via setup_result_chaining<T>
-                // This void forwarding is for behavior() return value tracking only
-                //
-                // We simulate void forwarding by setting up a callback pattern:
-                // when this becomes ready, mark target as ready (void semantics)
+                // For non-void: typed forwarding already happened via setup_result_chaining<T>
                 assert(target != nullptr);
                 assert(target != this);
-
-                // We don't actually need to forward - if we're called from void context,
-                // the typed value was already forwarded via typed mechanism
-                // Just return true to indicate "success" - actual forwarding already happened
                 return true;
             }
         }

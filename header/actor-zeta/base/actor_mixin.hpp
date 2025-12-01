@@ -14,7 +14,6 @@ namespace actor_zeta { namespace base {
     template<typename Derived>
     class actor_mixin {
     public:
-        // ===== Actor ID type =====
         class id_t final {
         public:
             id_t() = delete;
@@ -68,8 +67,6 @@ namespace actor_zeta { namespace base {
             actor_mixin* impl_{nullptr};
         };
 
-        // ===== Placement new/delete operators =====
-        // CRITICAL: These control actor allocation - only placement new with tag is allowed
         struct placement_tag {};
         constexpr static placement_tag placement = {};
 
@@ -79,20 +76,13 @@ namespace actor_zeta { namespace base {
 
         static void operator delete(void*, void*, placement_tag) noexcept {}
 
-        static void operator delete(void* ptr) noexcept {
-            // Empty - actor managed by unique_ptr with custom deleter
-            // Actual deallocation done by pmr::deleter_t
-            (void)ptr;
-        }
+        static void operator delete(void* ptr) noexcept { (void)ptr; }
 
-        // Explicitly deleted operators to prevent incorrect usage
         static void* operator new(size_t, void* ptr) = delete;
         static void* operator new(size_t) = delete;
         static void* operator new[](size_t) = delete;
         static void operator delete[](void*) = delete;
 
-        // ===== Deleted copy and move operations =====
-        // CRITICAL: Actors must not be copied or moved - only unique_ptr ownership
         actor_mixin(const actor_mixin&) = delete;
         actor_mixin& operator=(const actor_mixin&) = delete;
         actor_mixin(actor_mixin&&) = delete;
@@ -109,17 +99,12 @@ namespace actor_zeta { namespace base {
         }
 
         /// @brief Get polymorphic allocator for type T
-        /// @note Uses CRTP to call derived class's resource() method
         template<class T>
         pmr::polymorphic_allocator<T> allocator() const noexcept {
             return {static_cast<const Derived*>(this)->resource()};
         }
 
-        /// @brief Helper for supervisors - simplifies enqueue_impl<R, Args...>() implementation
-        /// @note Supervisor calls behavior() synchronously, but returns async future (already ready)
-        /// @note NEW API: Creates message in receiver's resource, calls behavior, returns ready future
-        /// @note Usage: return enqueue_sync_impl<R>(sender, cmd, [this](auto* msg) { behavior(msg); }, std::forward<Args>(args)...);
-        /// @note Uses CRTP to call derived class's resource() method
+        /// @brief Sync enqueue for supervisors - calls behavior synchronously, returns ready future
         template<typename R, typename BehaviorFunc, typename... Args>
         unique_future<R> enqueue_sync_impl(
             base::address_t sender,

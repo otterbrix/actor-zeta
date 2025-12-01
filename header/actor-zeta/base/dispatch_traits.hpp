@@ -77,7 +77,6 @@ namespace actor_zeta {
     template<typename Actor, typename Method, typename MethodList>
     struct runtime_dispatch_helper;
 
-    // Forward declaration для detail::dispatch_method_impl
     namespace detail {
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
         auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
@@ -85,7 +84,6 @@ namespace actor_zeta {
                 unwrap_future_t<typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>>;
     }
 
-    // Базовый случай - метод не найден
     template<typename Actor, typename Method>
     struct runtime_dispatch_helper<Actor, Method, type_traits::type_list<>> {
         template<typename ActorPtr, typename Sender, typename... Args>
@@ -162,7 +160,6 @@ namespace actor_zeta {
                 std::forward<Args>(args)...);
         }
 
-        // Перегрузка для address_t
         template<typename Sender, typename... Args>
         static auto dispatch(Method method, base::address_t target, Sender sender, Args&&... args)
             -> typename Actor::template unique_future<
