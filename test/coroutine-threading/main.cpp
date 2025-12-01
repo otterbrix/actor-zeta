@@ -322,6 +322,7 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
 
     std::atomic<bool> done{false};
     std::atomic<int> result{0};
+    std::atomic<bool> future_available{false};
     std::string client_thread_id;
 
     // Run client in separate thread
@@ -344,8 +345,10 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
         client->poll_pending();
         g_log.log("[CLIENT_THREAD] After poll_pending, future.available()=%", future.available());
 
-        REQUIRE(future.available());
-        result = std::move(future).get();
+        future_available = future.available();
+        if (future_available) {
+            result = std::move(future).get();
+        }
         g_log.log("[CLIENT_THREAD] result=%", result.load());
 
         done = true;
@@ -354,6 +357,7 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
     client_thread.join();
 
     REQUIRE(done);
+    REQUIRE(future_available);
     REQUIRE(result == 52);
 
     // Client's coroutine runs in client_thread
@@ -386,6 +390,8 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
 
     std::atomic<int> result1{0};
     std::atomic<int> result2{0};
+    std::atomic<bool> future1_available{false};
+    std::atomic<bool> future2_available{false};
     std::string thread1_id, thread2_id;
 
     std::thread t1([&]() {
@@ -397,8 +403,10 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         worker1->resume(1);
         client1->poll_pending();
 
-        REQUIRE(future.available());
-        result1 = std::move(future).get();
+        future1_available = future.available();
+        if (future1_available) {
+            result1 = std::move(future).get();
+        }
         g_log.log("[THREAD1] result1=%", result1.load());
     });
 
@@ -411,14 +419,18 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         worker2->resume(1);
         client2->poll_pending();
 
-        REQUIRE(future.available());
-        result2 = std::move(future).get();
+        future2_available = future.available();
+        if (future2_available) {
+            result2 = std::move(future).get();
+        }
         g_log.log("[THREAD2] result2=%", result2.load());
     });
 
     t1.join();
     t2.join();
 
+    REQUIRE(future1_available);
+    REQUIRE(future2_available);
     REQUIRE(result1 == 30);  // 10 * 2 + 10
     REQUIRE(result2 == 50);  // 20 * 2 + 10
 
@@ -477,6 +489,7 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
 
     std::string client_thread_id;
     std::atomic<int> result{0};
+    std::atomic<bool> future_available{false};
 
     // Client in its own thread
     std::thread client_thread([&]() {
@@ -491,8 +504,10 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
         worker->resume(1);
         client->poll_pending();
 
-        REQUIRE(future.available());
-        result = std::move(future).get();
+        future_available = future.available();
+        if (future_available) {
+            result = std::move(future).get();
+        }
         g_log.log("[CLIENT_THREAD] result=%", result.load());
     });
 
@@ -500,6 +515,7 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
     stop_worker = true;
     worker_thread.join();
 
+    REQUIRE(future_available);
     REQUIRE(result == 52);
 
     g_log.log("[TEST] main_thread=%", main_thread);
