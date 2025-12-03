@@ -48,8 +48,8 @@ public:
     /// @param name Full collection name (database.collection)
     /// @return unique_future<std::size_t> with collection size
     unique_future<std::size_t> size(
-            const session_id_t& session,
-            const collection_full_name_t& name) {
+            session_id_t session,
+            collection_full_name_t name) {
 
         auto tid = thread_id_str();
         g_log.log("[%::size] thread=% session=% db=% coll=%",
@@ -72,7 +72,7 @@ public:
     /// @param plan Query plan to execute
     /// @return unique_future<cursor_t_ptr> with query results
     unique_future<cursor_t_ptr> execute_plan(
-            const session_id_t& session,
+            session_id_t session,
             logical_plan_t plan) {
 
         auto tid = thread_id_str();

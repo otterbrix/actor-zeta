@@ -148,7 +148,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> search(const std::string& key) {
+    actor_zeta::unique_future<void> search(std::string key) {
         search_counter++;
         std::cerr << __func__ << " :: "
                   << "key: " << key
@@ -156,7 +156,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> add(const std::string& key, const std::string& value) {
+    actor_zeta::unique_future<void> add(std::string key, std::string value) {
         add_counter++;
         std::cerr << __func__ << " :: "
                   << "key: " << key << " | "
@@ -165,7 +165,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> delete_table(const std::string& name, const std::string& path, int type) {
+    actor_zeta::unique_future<void> delete_table(std::string name, std::string path, int type) {
         delete_table_counter++;
         std::cerr << __func__ << " :: "
                   << "table name: " << name << " | "
@@ -175,7 +175,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> create_table(const std::string& name, const std::string& path, int type, int time_sync) {
+    actor_zeta::unique_future<void> create_table(std::string name, std::string path, int type, int time_sync) {
         create_table_counter++;
         std::cerr << __func__ << " :: "
                   << "table name: " << name << " | "
@@ -267,7 +267,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> ptr_4(int data_1, int data_2, const std::string& data_3) {
+    actor_zeta::unique_future<void> ptr_4(int data_1, int data_2, std::string data_3) {
         TRACE("+++");
         std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
         ptr_4_counter++;

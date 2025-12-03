@@ -17,9 +17,9 @@ TEST_CASE("forward_target propagation - basic typed", "[forward_target][propagat
     auto* source_state = new future_state<int>(resource);
     auto* target_state = new future_state<int>(resource);
 
-    // Wrap in intrusive_ptr for RAII
-    actor_zeta::intrusive_ptr<future_state_base> source(source_state);
-    actor_zeta::intrusive_ptr<future_state_base> target(target_state);
+    // Wrap in intrusive_ptr for RAII (adopt_ref = false to adopt initial ref)
+    actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
+    actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
 
     SECTION("forward_target set before result") {
         // Set forward_target BEFORE result is ready
@@ -65,8 +65,8 @@ TEST_CASE("forward_target propagation - void specialization", "[forward_target][
     auto* source_state = new future_state<void>(resource);
     auto* target_state = new future_state<void>(resource);
 
-    actor_zeta::intrusive_ptr<future_state_base> source(source_state);
-    actor_zeta::intrusive_ptr<future_state_base> target(target_state);
+    actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
+    actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
 
     SECTION("void forward_target propagation via set_ready()") {
         // Set forward_target BEFORE ready
@@ -92,10 +92,10 @@ TEST_CASE("forward_target propagation - chain of 3 typed", "[forward_target][pro
     auto* state_b = new future_state<int>(resource);
     auto* state_c = new future_state<int>(resource);
 
-    // Keep all states alive during test with intrusive_ptr
-    actor_zeta::intrusive_ptr<future_state_base> a(state_a);
-    actor_zeta::intrusive_ptr<future_state_base> b(state_b);
-    actor_zeta::intrusive_ptr<future_state_base> c(state_c);
+    // Keep all states alive during test with intrusive_ptr (adopt_ref = false)
+    actor_zeta::intrusive_ptr<future_state_base> a(state_a, false);
+    actor_zeta::intrusive_ptr<future_state_base> b(state_b, false);
+    actor_zeta::intrusive_ptr<future_state_base> c(state_c, false);
 
     // Set forward_targets: A → B → C
     state_a->set_forward_target(state_b);
@@ -125,9 +125,9 @@ TEST_CASE("forward_target propagation - chain of 3 void", "[forward_target][prop
     auto* state_b = new future_state<void>(resource);
     auto* state_c = new future_state<void>(resource);
 
-    actor_zeta::intrusive_ptr<future_state_base> a(state_a);
-    actor_zeta::intrusive_ptr<future_state_base> b(state_b);
-    actor_zeta::intrusive_ptr<future_state_base> c(state_c);
+    actor_zeta::intrusive_ptr<future_state_base> a(state_a, false);
+    actor_zeta::intrusive_ptr<future_state_base> b(state_b, false);
+    actor_zeta::intrusive_ptr<future_state_base> c(state_c, false);
 
     // Set forward_targets: A → B → C
     state_a->set_forward_target(state_b);
@@ -152,8 +152,8 @@ TEST_CASE("forward_target propagation - no double propagation", "[forward_target
     auto* source_state = new future_state<int>(resource);
     auto* target_state = new future_state<int>(resource);
 
-    actor_zeta::intrusive_ptr<future_state_base> source(source_state);
-    actor_zeta::intrusive_ptr<future_state_base> target(target_state);
+    actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
+    actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
 
     // Set forward_target
     source_state->set_forward_target(target_state);
@@ -176,8 +176,8 @@ TEST_CASE("forward_target propagation - void no double propagation", "[forward_t
     auto* source_state = new future_state<void>(resource);
     auto* target_state = new future_state<void>(resource);
 
-    actor_zeta::intrusive_ptr<future_state_base> source(source_state);
-    actor_zeta::intrusive_ptr<future_state_base> target(target_state);
+    actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
+    actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
 
     // Set forward_target
     source_state->set_forward_target(target_state);
@@ -197,8 +197,8 @@ TEST_CASE("forward_target propagation - cancelled source", "[forward_target][edg
     auto* source_state = new future_state<int>(resource);
     auto* target_state = new future_state<int>(resource);
 
-    actor_zeta::intrusive_ptr<future_state_base> source(source_state);
-    actor_zeta::intrusive_ptr<future_state_base> target(target_state);
+    actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
+    actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
 
     // Set forward_target
     source_state->set_forward_target(target_state);

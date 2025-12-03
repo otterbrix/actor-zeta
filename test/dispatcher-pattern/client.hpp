@@ -66,7 +66,7 @@ public:
     /// - co_await response
     /// - Store result for test verification
     unique_future<size_result_t> request_collection_size(
-            const session_id_t& session,
+            session_id_t session,
             std::string database,
             std::string collection) {
 

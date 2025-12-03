@@ -95,7 +95,7 @@ public:
     /// - co_await response
     /// - Return result
     unique_future<size_result_t> size(
-            const session_id_t& session,
+            session_id_t session,
             std::string database_name,
             std::string collection) {
 
@@ -129,8 +129,9 @@ public:
     // =========================================================================
 
     /// @brief Execute query plan and return cursor
+    /// @param session Session ID (BY VALUE - message destroyed after co_await)
     unique_future<cursor_t_ptr> execute_plan(
-            const session_id_t& session,
+            session_id_t session,
             logical_plan_t plan) {
 
         auto tid = thread_id_str();
@@ -179,8 +180,9 @@ public:
     ///
     /// IMPORTANT: Local variables may be corrupted after co_await!
     /// Save values you need BEFORE the next co_await.
+    /// @param session Session ID (BY VALUE - message destroyed after co_await)
     unique_future<transaction_result_t> execute_transaction(
-            const session_id_t& session,
+            session_id_t session,
             std::string collection1,
             std::string collection2) {
 
@@ -377,7 +379,7 @@ public:
 
     /// @brief Pattern 5b: Lambda capturing `this` to access actor state
     /// Lambda can modify actor member variables
-    unique_future<std::string> compute_with_lambda_and_state(const std::string& prefix) {
+    unique_future<std::string> compute_with_lambda_and_state(std::string prefix) {
         auto tid = thread_id_str();
         g_log.log("[%::compute_with_lambda_and_state] prefix=%", name_, prefix);
 

@@ -469,7 +469,9 @@ namespace actor_zeta { namespace detail {
 
             // Only destroy coroutine if we OWN it (coroutine state from promise)
             // Awaited states (from await_suspend) don't own the coroutine
-            if (owns_coroutine_ && coro_handle_ && !coro_handle_.done()) {
+            // CRITICAL: Must call destroy() regardless of done() status!
+            // A done coroutine (at final_suspend) still needs destroy() to free frame
+            if (owns_coroutine_ && coro_handle_) {
                 coro_handle_.destroy();
             }
         }
