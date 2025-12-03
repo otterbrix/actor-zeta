@@ -661,7 +661,7 @@ namespace actor_zeta {
 
                 auto handle = std::coroutine_handle<struct promise_type>::from_promise(
                     static_cast<struct promise_type&>(*this));
-                state_->set_coroutine(handle);
+                state_->set_coroutine(handle, true);  // owns = true (coroutine state)
 
                 // For void: coroutine_state_type* (future_state<void>*) → state_type* (future_state_base*)
                 // This is legal: derived* → base*
@@ -716,6 +716,11 @@ namespace actor_zeta {
             static pmr::memory_resource* extract_resource_impl(U&& arg) noexcept {
                 using decayed = std::decay_t<U>;
                 return extract_impl_dispatch(std::forward<U>(arg), std::is_pointer<decayed>{});
+            }
+
+            // Direct overload for pmr::memory_resource* - enables lambda-coroutines
+            static pmr::memory_resource* extract_resource_impl(pmr::memory_resource* res) noexcept {
+                return res;
             }
 
             pmr::memory_resource* resource_;

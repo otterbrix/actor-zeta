@@ -1,6 +1,7 @@
 #pragma once
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/future.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
@@ -8,9 +9,6 @@
 
 template<typename Actor>
 class coro_supervisor final : public actor_zeta::base::actor_mixin<coro_supervisor<Actor>> {
-    actor_zeta::behavior_t prepare_behavior_;
-    actor_zeta::behavior_t send_behavior_;
-
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_1_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
@@ -22,8 +20,6 @@ public:
 
     explicit coro_supervisor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : actor_zeta::base::actor_mixin<coro_supervisor<Actor>>()
-        , prepare_behavior_(actor_zeta::make_behavior(ptr, this, &coro_supervisor::prepare))
-        , send_behavior_(actor_zeta::make_behavior(ptr, this, &coro_supervisor::send))
         , actor_0_(nullptr, actor_zeta::pmr::deleter_t(ptr))
         , actor_1_(nullptr, actor_zeta::pmr::deleter_t(ptr))
         , scheduler_(sched)
@@ -63,13 +59,14 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<coro_supervisor, &coro_supervisor::prepare>) {
-            prepare_behavior_(msg);
+            actor_zeta::dispatch(this, &coro_supervisor::prepare, msg);
         } else if (cmd == actor_zeta::msg_id<coro_supervisor, &coro_supervisor::send>) {
-            send_behavior_(msg);
+            actor_zeta::dispatch(this, &coro_supervisor::send, msg);
         }
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

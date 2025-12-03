@@ -1,6 +1,7 @@
 #pragma once
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/future.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <actor-zeta/config.hpp>
@@ -11,18 +12,12 @@ class coro_ping_pong_actor final : public actor_zeta::basic_actor<coro_ping_pong
 
     coro_ping_pong_actor* partner_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
-    actor_zeta::behavior_t start_behavior_;
-    actor_zeta::behavior_t ping_behavior_;
-    actor_zeta::behavior_t pong_behavior_;
 
 public:
     explicit coro_ping_pong_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : base_type(resource)
         , partner_(nullptr)
-        , scheduler_(sched)
-        , start_behavior_(actor_zeta::make_behavior(resource, this, &coro_ping_pong_actor::start))
-        , ping_behavior_(actor_zeta::make_behavior(resource, this, &coro_ping_pong_actor::ping))
-        , pong_behavior_(actor_zeta::make_behavior(resource, this, &coro_ping_pong_actor::pong)) {
+        , scheduler_(sched) {
     }
 
     ~coro_ping_pong_actor() = default;
@@ -59,15 +54,16 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<coro_ping_pong_actor, &coro_ping_pong_actor::start>) {
-            start_behavior_(msg);
+            actor_zeta::dispatch(this, &coro_ping_pong_actor::start, msg);
         } else if (cmd == actor_zeta::msg_id<coro_ping_pong_actor, &coro_ping_pong_actor::ping>) {
-            ping_behavior_(msg);
+            actor_zeta::dispatch(this, &coro_ping_pong_actor::ping, msg);
         } else if (cmd == actor_zeta::msg_id<coro_ping_pong_actor, &coro_ping_pong_actor::pong>) {
-            pong_behavior_(msg);
+            actor_zeta::dispatch(this, &coro_ping_pong_actor::pong, msg);
         }
+        return actor_zeta::make_ready_future_void(this->resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

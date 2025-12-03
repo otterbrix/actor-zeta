@@ -348,10 +348,26 @@ namespace actor_zeta { namespace detail {
         left.swap(right);
     }
 
+    /// @brief Extract argument from rtt at index I according to type list List
+    ///
+    /// Handles different parameter types:
+    /// - const T&: return const reference to stored value (no copy, no move)
+    /// - T: use std::move to support move-only types (e.g., unique_ptr)
+    ///
+    /// Note: Non-const lvalue references (T&) are forbidden by dispatch() static_assert
     template<std::size_t I, class List>
-    typename type_traits::type_list_at_t<List, I> get(rtt& r) {
-        return static_cast<typename type_traits::type_list_at_t<List, I>>(
-            r.get<typename type_traits::decay_t<type_traits::type_list_at_t<List, I>>>(I));
+    auto get(rtt& r) -> typename type_traits::type_list_at_t<List, I> {
+        using requested_type = typename type_traits::type_list_at_t<List, I>;
+        using decay_type = typename type_traits::decay_t<requested_type>;
+
+        if constexpr (std::is_lvalue_reference_v<requested_type>) {
+            // For const T& (non-const T& is forbidden by dispatch static_assert)
+            // Return reference to stored value
+            return r.get<decay_type>(I);
+        } else {
+            // For value types: use std::move to support move-only types
+            return std::move(r.get<decay_type>(I));
+        }
     }
 
 }} // namespace actor_zeta::detail

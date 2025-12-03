@@ -1,5 +1,6 @@
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <cstdint>
 
 using namespace actor_zeta;
@@ -11,11 +12,26 @@ using namespace actor_zeta;
 class old_style_actor : public base::basic_actor<old_style_actor> {
 public:
     // Declare methods first (needed by dispatch_traits)
-    void method1(int x) { counter_ += x; }
-    void method2(int x) { counter_ += x * 2; }
-    void method3(int x) { counter_ += x * 3; }
-    void method4(int x) { counter_ += x * 4; }
-    void method5(int x) { counter_ += x * 5; }
+    unique_future<void> method1(int x) {
+        counter_ += x;
+        return make_ready_future_void(resource());
+    }
+    unique_future<void> method2(int x) {
+        counter_ += x * 2;
+        return make_ready_future_void(resource());
+    }
+    unique_future<void> method3(int x) {
+        counter_ += x * 3;
+        return make_ready_future_void(resource());
+    }
+    unique_future<void> method4(int x) {
+        counter_ += x * 4;
+        return make_ready_future_void(resource());
+    }
+    unique_future<void> method5(int x) {
+        counter_ += x * 5;
+        return make_ready_future_void(resource());
+    }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &old_style_actor::method1,
@@ -27,36 +43,27 @@ public:
 
     explicit old_style_actor(pmr::memory_resource* resource)
         : base::basic_actor<old_style_actor>(resource)
-        , behavior1_(make_behavior(resource, this, &old_style_actor::method1))
-        , behavior2_(make_behavior(resource, this, &old_style_actor::method2))
-        , behavior3_(make_behavior(resource, this, &old_style_actor::method3))
-        , behavior4_(make_behavior(resource, this, &old_style_actor::method4))
-        , behavior5_(make_behavior(resource, this, &old_style_actor::method5))
         , counter_(0) {}
 
-    void behavior(mailbox::message* msg) {
+    unique_future<void> behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<old_style_actor, &old_style_actor::method1>) {
-            behavior1_(msg);
+            dispatch(this, &old_style_actor::method1, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method2>) {
-            behavior2_(msg);
+            dispatch(this, &old_style_actor::method2, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method3>) {
-            behavior3_(msg);
+            dispatch(this, &old_style_actor::method3, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method4>) {
-            behavior4_(msg);
+            dispatch(this, &old_style_actor::method4, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method5>) {
-            behavior5_(msg);
+            dispatch(this, &old_style_actor::method5, msg);
         }
+        return make_ready_future_void(resource());
     }
 
     int counter() const { return counter_; }
 
 private:
-    base::behavior_t behavior1_;
-    base::behavior_t behavior2_;
-    base::behavior_t behavior3_;
-    base::behavior_t behavior4_;
-    base::behavior_t behavior5_;
     int counter_;
 };
 

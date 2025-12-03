@@ -148,7 +148,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> search(std::string& key) {
+    actor_zeta::unique_future<void> search(const std::string& key) {
         search_counter++;
         std::cerr << __func__ << " :: "
                   << "key: " << key
@@ -253,20 +253,21 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> ptr_2(int&) {
+    actor_zeta::unique_future<void> ptr_2(int data) {
         TRACE("+++");
+        (void)data;
         ptr_2_counter++;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> ptr_3(int data_1, int& data_2) {
+    actor_zeta::unique_future<void> ptr_3(int data_1, int data_2) {
         TRACE("+++");
         std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
         ptr_3_counter++;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> ptr_4(int data_1, int& data_2, const std::string& data_3) {
+    actor_zeta::unique_future<void> ptr_4(int data_1, int data_2, const std::string& data_3) {
         TRACE("+++");
         std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
         ptr_4_counter++;

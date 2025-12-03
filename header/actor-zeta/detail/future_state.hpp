@@ -184,8 +184,11 @@ namespace actor_zeta { namespace detail {
 
         /// @brief Store coroutine handle for resumption
         /// @param h The coroutine handle to store
+        /// @param owns If true, this state owns the coroutine and will destroy it in destructor
+        ///             Set to true only from coroutine promise (get_return_object)
+        ///             Set to false (default) from awaiter::await_suspend
         /// @note Virtual to allow storage in derived class
-        virtual void set_coroutine(std::coroutine_handle<> h) noexcept = 0;
+        virtual void set_coroutine(std::coroutine_handle<> h, bool owns = false) noexcept = 0;
 
         /// @brief Set void forward target (type-erased for void chaining)
         /// @param target The future_state_base to forward void readiness to
@@ -464,7 +467,9 @@ namespace actor_zeta { namespace detail {
                 }
             }
 
-            if (coro_handle_ && !coro_handle_.done()) {
+            // Only destroy coroutine if we OWN it (coroutine state from promise)
+            // Awaited states (from await_suspend) don't own the coroutine
+            if (owns_coroutine_ && coro_handle_ && !coro_handle_.done()) {
                 coro_handle_.destroy();
             }
         }
@@ -634,9 +639,13 @@ namespace actor_zeta { namespace detail {
             return coro_handle_ && coro_handle_.done();
         }
 
-        /// @brief Store coroutine handle (called from await_suspend)
-        void set_coroutine(std::coroutine_handle<> handle) noexcept override {
+        /// @brief Store coroutine handle (called from await_suspend or coroutine promise)
+        /// @param handle The coroutine handle to store
+        /// @param owns If true, this state owns the coroutine (from promise)
+        ///             If false (default), this is just for resumption (from awaiter)
+        void set_coroutine(std::coroutine_handle<> handle, bool owns = false) noexcept override {
             coro_handle_ = handle;
+            owns_coroutine_ = owns;
         }
 
         bool set_forward_target_void(future_state_base* target) noexcept override {
@@ -659,6 +668,7 @@ namespace actor_zeta { namespace detail {
     private:
         [[no_unique_address]] result_storage<T> storage_;
         coroutine_handle<void> coro_handle_;
+        bool owns_coroutine_ = false;  // true: coroutine state (from promise), false: awaited state
         std::atomic<future_state<T>*> forward_target_;  // TYPED forward target
     };
 

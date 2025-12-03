@@ -1,15 +1,13 @@
 #pragma once
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <map>
 
 template<typename Actor>
 class simple_supervisor final : public actor_zeta::base::actor_mixin<simple_supervisor<Actor>> {
-    actor_zeta::behavior_t prepare_behavior_;
-    actor_zeta::behavior_t send_behavior_;
-
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_1_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
@@ -21,8 +19,6 @@ public:
 
     explicit simple_supervisor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : actor_zeta::base::actor_mixin<simple_supervisor<Actor>>()
-        , prepare_behavior_(actor_zeta::make_behavior(ptr, this, &simple_supervisor::prepare))
-        , send_behavior_(actor_zeta::make_behavior(ptr, this, &simple_supervisor::send))
         , actor_0_(nullptr, actor_zeta::pmr::deleter_t(ptr))
         , actor_1_(nullptr, actor_zeta::pmr::deleter_t(ptr))
         , scheduler_(sched)
@@ -37,7 +33,7 @@ public:
         scheduler_ = sched;
     }
 
-    void prepare() {
+    actor_zeta::unique_future<void> prepare() {
         // Spawn two actors
         actor_0_ = actor_zeta::spawn<Actor>(resource_);
         actor_1_ = actor_zeta::spawn<Actor>(resource_);
@@ -45,9 +41,10 @@ public:
         // Set partners
         actor_0_->set_partner(actor_1_.get());
         actor_1_->set_partner(actor_0_.get());
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void send() {
+    actor_zeta::unique_future<void> send() {
         // Start ping-pong - send start message to actor0
         if (actor_0_ && scheduler_) {
             actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
@@ -59,15 +56,17 @@ public:
             actor_1_->resume(1);
             actor_0_->resume(1);
         }
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<simple_supervisor, &simple_supervisor::prepare>) {
-            prepare_behavior_(msg);
+            actor_zeta::dispatch(this, &simple_supervisor::prepare, msg);
         } else if (cmd == actor_zeta::msg_id<simple_supervisor, &simple_supervisor::send>) {
-            send_behavior_(msg);
+            actor_zeta::dispatch(this, &simple_supervisor::send, msg);
         }
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

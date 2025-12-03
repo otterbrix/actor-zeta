@@ -1,5 +1,6 @@
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/policy/work_sharing.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
@@ -14,21 +15,17 @@ std::atomic<bool> ping_pong_done{false};
 // Simple ping-pong actor with new dispatch mechanism
 // Logic: actor0.PING -> actor1.PONG (one message exchange)
 //
-// TODO: Remove sleep from DoPingPong() by impleсmenting automatic actor scheduling
+// TODO: Remove sleep from DoPingPong() by implementing automatic actor scheduling
 //       Current issue: After send(), need to manually call scheduler->enqueue(actor)
 //       Solution: Implement auto-scheduling in actor::enqueue() or send() function
 template<typename... Args>
 class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Args...>> {
     ping_pong_actor* partner_;
-    actor_zeta::behavior_t ping_behavior_;
-    actor_zeta::behavior_t pong_behavior_;
 
 public:
     explicit ping_pong_actor(actor_zeta::pmr::memory_resource* res)
         : actor_zeta::basic_actor<ping_pong_actor<Args...>>(res)
-        , partner_(nullptr)
-        , ping_behavior_(actor_zeta::make_behavior(res, this, &ping_pong_actor::ping))
-        , pong_behavior_(actor_zeta::make_behavior(res, this, &ping_pong_actor::pong)) {
+        , partner_(nullptr) {
     }
 
     void set_partner(ping_pong_actor* p) { partner_ = p; }
@@ -54,15 +51,16 @@ public:
         &ping_pong_actor::pong
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>:
-                ping_behavior_(msg);
+                actor_zeta::dispatch(this, &ping_pong_actor::ping, msg);
                 break;
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::pong>:
-                pong_behavior_(msg);
+                actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
                 break;
         }
+        return actor_zeta::make_ready_future_void(this->resource());
     }
 };
 
