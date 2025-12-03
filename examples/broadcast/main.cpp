@@ -14,8 +14,9 @@ using actor_zeta::pmr::memory_resource;
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
     // Request-response methods (return results automatically via promise)
-    actor_zeta::unique_future<std::size_t> download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
-    actor_zeta::unique_future<std::size_t> work_data_with_result(const std::string& data, const std::string& /*operatorName*/);
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<std::size_t> download_with_result(std::string url, std::string /*user*/, std::string /*password*/);
+    actor_zeta::unique_future<std::size_t> work_data_with_result(std::string data, std::string /*operatorName*/);
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &worker_t::download_with_result,
@@ -49,16 +50,16 @@ private:
 };
 
 // Request-response implementations - automatically return results via promise
-inline actor_zeta::unique_future<std::size_t> worker_t::download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
+inline actor_zeta::unique_future<std::size_t> worker_t::download_with_result(std::string url, std::string /*user*/, std::string /*password*/) {
     std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
-    tmp_ = url;
+    tmp_ = std::move(url);
     std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
     std::size_t result = tmp_.size(); // Return downloaded size
     return actor_zeta::make_ready_future<std::size_t>(resource(), result);
 }
 
-inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(const std::string& data, const std::string& /*operatorName*/) {
-    tmp_ = data;
+inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(std::string data, std::string /*operatorName*/) {
+    tmp_ = std::move(data);
     std::size_t result = tmp_.size(); // Return processed size
     return actor_zeta::make_ready_future<std::size_t>(resource(), result);
 }

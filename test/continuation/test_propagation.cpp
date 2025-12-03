@@ -10,12 +10,19 @@
 
 using namespace actor_zeta::detail;
 
+// Helper: allocate future_state using PMR (matches destroy() deallocation)
+template<typename T>
+future_state<T>* allocate_future_state(actor_zeta::pmr::memory_resource* resource) {
+    void* mem = resource->allocate(sizeof(future_state<T>), alignof(future_state<T>));
+    return new (mem) future_state<T>(resource);
+}
+
 TEST_CASE("forward_target propagation - basic typed", "[forward_target][propagation]") {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
-    // Create source and target states
-    auto* source_state = new future_state<int>(resource);
-    auto* target_state = new future_state<int>(resource);
+    // Create source and target states using PMR allocate (matches destroy() deallocation)
+    auto* source_state = allocate_future_state<int>(resource);
+    auto* target_state = allocate_future_state<int>(resource);
 
     // Wrap in intrusive_ptr for RAII (adopt_ref = false to adopt initial ref)
     actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
@@ -62,8 +69,8 @@ TEST_CASE("forward_target propagation - basic typed", "[forward_target][propagat
 TEST_CASE("forward_target propagation - void specialization", "[forward_target][propagation][void][critical]") {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
-    auto* source_state = new future_state<void>(resource);
-    auto* target_state = new future_state<void>(resource);
+    auto* source_state = allocate_future_state<void>(resource);
+    auto* target_state = allocate_future_state<void>(resource);
 
     actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
     actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
@@ -88,9 +95,9 @@ TEST_CASE("forward_target propagation - chain of 3 typed", "[forward_target][pro
     auto* resource = actor_zeta::pmr::get_default_resource();
 
     // Create chain: A → B → C
-    auto* state_a = new future_state<int>(resource);
-    auto* state_b = new future_state<int>(resource);
-    auto* state_c = new future_state<int>(resource);
+    auto* state_a = allocate_future_state<int>(resource);
+    auto* state_b = allocate_future_state<int>(resource);
+    auto* state_c = allocate_future_state<int>(resource);
 
     // Keep all states alive during test with intrusive_ptr (adopt_ref = false)
     actor_zeta::intrusive_ptr<future_state_base> a(state_a, false);
@@ -121,9 +128,9 @@ TEST_CASE("forward_target propagation - chain of 3 void", "[forward_target][prop
     auto* resource = actor_zeta::pmr::get_default_resource();
 
     // Create void chain: A → B → C
-    auto* state_a = new future_state<void>(resource);
-    auto* state_b = new future_state<void>(resource);
-    auto* state_c = new future_state<void>(resource);
+    auto* state_a = allocate_future_state<void>(resource);
+    auto* state_b = allocate_future_state<void>(resource);
+    auto* state_c = allocate_future_state<void>(resource);
 
     actor_zeta::intrusive_ptr<future_state_base> a(state_a, false);
     actor_zeta::intrusive_ptr<future_state_base> b(state_b, false);
@@ -149,8 +156,8 @@ TEST_CASE("forward_target propagation - chain of 3 void", "[forward_target][prop
 TEST_CASE("forward_target propagation - no double propagation", "[forward_target][edge-case]") {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
-    auto* source_state = new future_state<int>(resource);
-    auto* target_state = new future_state<int>(resource);
+    auto* source_state = allocate_future_state<int>(resource);
+    auto* target_state = allocate_future_state<int>(resource);
 
     actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
     actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
@@ -173,8 +180,8 @@ TEST_CASE("forward_target propagation - no double propagation", "[forward_target
 TEST_CASE("forward_target propagation - void no double propagation", "[forward_target][edge-case][void]") {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
-    auto* source_state = new future_state<void>(resource);
-    auto* target_state = new future_state<void>(resource);
+    auto* source_state = allocate_future_state<void>(resource);
+    auto* target_state = allocate_future_state<void>(resource);
 
     actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
     actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
@@ -194,8 +201,8 @@ TEST_CASE("forward_target propagation - void no double propagation", "[forward_t
 TEST_CASE("forward_target propagation - cancelled source", "[forward_target][edge-case]") {
     auto* resource = actor_zeta::pmr::get_default_resource();
 
-    auto* source_state = new future_state<int>(resource);
-    auto* target_state = new future_state<int>(resource);
+    auto* source_state = allocate_future_state<int>(resource);
+    auto* target_state = allocate_future_state<int>(resource);
 
     actor_zeta::intrusive_ptr<future_state_base> source(source_state, false);
     actor_zeta::intrusive_ptr<future_state_base> target(target_state, false);
