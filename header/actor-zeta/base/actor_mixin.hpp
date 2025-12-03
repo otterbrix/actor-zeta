@@ -133,7 +133,10 @@ namespace actor_zeta { namespace base {
 
             // Slot is now ready (behavior already executed)
             // Return async future (already in ready state, no waiting needed)
-            return unique_future<R>{slot, false};  // needs_scheduling=false (sync execution, no mailbox)
+            // Use adopt_ref to take ownership of initial ref (ref_count=1 from constructor)
+            // Message's intrusive_ptr adds ref_count=2, ~message decrements to 1
+            // adopt_ref means unique_future takes initial ref without incrementing
+            return unique_future<R>{adopt_ref, slot, false};  // needs_scheduling=false (sync execution, no mailbox)
         }
 
     protected:
