@@ -13,7 +13,8 @@
 // Simple worker actor that processes tasks
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
-    actor_zeta::unique_future<void> process_task(const std::string& task);
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<void> process_task(std::string task);
     actor_zeta::unique_future<void> get_status();
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -44,7 +45,7 @@ private:
     size_t tasks_processed_ = 0;
 };
 
-actor_zeta::unique_future<void> worker_actor::process_task(const std::string& task) {
+actor_zeta::unique_future<void> worker_actor::process_task(std::string task) {
     std::cerr << "[" << name_ << "] Processing task: " << task << std::endl;
     ++tasks_processed_;
     return actor_zeta::make_ready_future_void(resource());
@@ -68,14 +69,15 @@ public:
 
     actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
 
-    actor_zeta::unique_future<void> create_worker(const std::string& name) {
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<void> create_worker(std::string name) {
         auto worker = actor_zeta::spawn<worker_actor>(resource_, name);
         std::cerr << "[Supervisor] Created worker: " << name << std::endl;
         workers_.emplace_back(std::move(worker));
         return actor_zeta::make_ready_future_void(resource_);
     }
 
-    actor_zeta::unique_future<void> assign_task(const std::string& task) {
+    actor_zeta::unique_future<void> assign_task(std::string task) {
         if (workers_.empty()) {
             std::cerr << "[Supervisor] No workers available!" << std::endl;
             return actor_zeta::make_ready_future_void(resource_);

@@ -290,11 +290,13 @@ TEST_CASE("Coroutine futures") {
     SECTION("cancel works on futures") {
         auto* resource = actor_zeta::pmr::get_default_resource();
 
-        // Create future with state
+        // Create future with state using PMR allocate + placement new
+        // State starts with refcount=1, adopt_ref takes ownership without incrementing
         void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
                                         alignof(actor_zeta::detail::future_state<int>));
         auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
-        actor_zeta::unique_future<int> future_state(state, false);
+        // adopt_ref: take ownership of initial refcount (no add_ref)
+        actor_zeta::unique_future<int> future_state(actor_zeta::adopt_ref, state, false);
 
         REQUIRE(future_state.valid());
         REQUIRE_FALSE(future_state.is_cancelled());
