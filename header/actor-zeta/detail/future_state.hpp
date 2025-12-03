@@ -433,7 +433,8 @@ namespace actor_zeta { namespace detail {
         explicit future_state(pmr::memory_resource* res) noexcept
             : future_state_base(res)
             , storage_(res)
-            , coro_handle_()
+            , owning_coro_handle_()
+            , resume_coro_handle_()
             , forward_target_(nullptr)
         {}
 
@@ -471,8 +472,8 @@ namespace actor_zeta { namespace detail {
             // Awaited states (from await_suspend) don't own the coroutine
             // CRITICAL: Must call destroy() regardless of done() status!
             // A done coroutine (at final_suspend) still needs destroy() to free frame
-            if (owns_coroutine_ && coro_handle_) {
-                coro_handle_.destroy();
+            if (owns_coroutine_ && owning_coro_handle_) {
+                owning_coro_handle_.destroy();
             }
         }
 
@@ -625,29 +626,43 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Resume stored coroutine (final - enables devirtualization)
+        /// @note Uses resume_coro_handle_ - the coroutine waiting for this state to become ready
         void resume_coroutine() noexcept final {
-            if (coro_handle_ && !coro_handle_.done()) {
-                coro_handle_.resume();
+            if (resume_coro_handle_ && !resume_coro_handle_.done()) {
+                resume_coro_handle_.resume();
             }
         }
 
-        /// @brief Check if coroutine is stored (final - enables devirtualization)
+        /// @brief Check if coroutine is stored for resumption (final - enables devirtualization)
         [[nodiscard]] bool has_coroutine() const noexcept final {
-            return coro_handle_.operator bool();
+            return resume_coro_handle_.operator bool();
         }
 
         /// @brief Check if stored coroutine is done (final - enables devirtualization)
+        /// @note Checks owning coroutine if set, otherwise resume coroutine
         [[nodiscard]] bool coroutine_done() const noexcept final {
-            return coro_handle_ && coro_handle_.done();
+            if (owns_coroutine_ && owning_coro_handle_) {
+                return owning_coro_handle_.done();
+            }
+            return resume_coro_handle_ && resume_coro_handle_.done();
         }
 
         /// @brief Store coroutine handle (called from await_suspend or coroutine promise)
         /// @param handle The coroutine handle to store
         /// @param owns If true, this state owns the coroutine (from promise)
         ///             If false (default), this is just for resumption (from awaiter)
+        /// @note When owns=true (promise), handle is stored as owning_coro_handle_
+        ///       When owns=false (awaiter), handle is stored as resume_coro_handle_
+        ///       This allows lambda-coroutines to be properly cleaned up even when awaited
         void set_coroutine(std::coroutine_handle<> handle, bool owns = false) noexcept override {
-            coro_handle_ = handle;
-            owns_coroutine_ = owns;
+            if (owns) {
+                // From promise: this coroutine owns this state, store for cleanup
+                owning_coro_handle_ = handle;
+                owns_coroutine_ = true;
+            } else {
+                // From awaiter: this handle should be resumed when state becomes ready
+                resume_coro_handle_ = handle;
+            }
         }
 
         bool set_forward_target_void(future_state_base* target) noexcept override {
@@ -669,8 +684,9 @@ namespace actor_zeta { namespace detail {
 
     private:
         [[no_unique_address]] result_storage<T> storage_;
-        coroutine_handle<void> coro_handle_;
-        bool owns_coroutine_ = false;  // true: coroutine state (from promise), false: awaited state
+        coroutine_handle<void> owning_coro_handle_;  // Coroutine that this state owns (from promise)
+        coroutine_handle<void> resume_coro_handle_;  // Coroutine to resume when ready (from awaiter)
+        bool owns_coroutine_ = false;  // true: we own owning_coro_handle_ and must destroy it
         std::atomic<future_state<T>*> forward_target_;  // TYPED forward target
     };
 
