@@ -915,6 +915,11 @@ namespace actor_zeta {
         }
 
         T await_resume() {
+            // Clear awaiting_on BEFORE getting value - this releases the ref
+            // The awaiter's future still holds a ref, so state stays alive
+            if (promise_state_) {
+                promise_state_->clear_awaiting_on();
+            }
             return std::move(future_).get();
         }
     };
@@ -957,6 +962,11 @@ namespace actor_zeta {
         }
 
         void await_resume() {
+            // Clear awaiting_on BEFORE getting value - this releases the ref
+            // The awaiter's future still holds a ref, so state stays alive
+            if (promise_state_) {
+                promise_state_->clear_awaiting_on();
+            }
             std::move(future_).get();  // void return
         }
     };

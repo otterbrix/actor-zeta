@@ -33,28 +33,29 @@ public:
     }
 
     // Методы для обработки сообщений
-    actor_zeta::unique_future<void> insert(const std::string& key, const std::string& value) {
-        data_.emplace(key, value);
-        std::cerr << id() << " " << key << " " << value << std::endl;
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<void> insert(std::string key, std::string value) {
+        data_.emplace(std::move(key), std::move(value));
+        std::cerr << id() << " insert" << std::endl;
         ++count_insert;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> remove(const std::string& key) {
+    actor_zeta::unique_future<void> remove(std::string key) {
         data_.erase(key);
         std::cerr << id() << " remove " << key << std::endl;
         ++count_remove;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> update(const std::string& key, const std::string& value) {
-        data_[key] = value;
-        std::cerr << id() << " update " << key << " = " << value << std::endl;
+    actor_zeta::unique_future<void> update(std::string key, std::string value) {
+        data_[std::move(key)] = std::move(value);
+        std::cerr << id() << " update" << std::endl;
         ++count_update;
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<std::string> find(const std::string& key) {
+    actor_zeta::unique_future<std::string> find(std::string key) {
         auto it = data_.find(key);
         ++count_find;
         if (it != data_.end()) {
@@ -113,10 +114,11 @@ public:
     }
 
     // Dummy methods - just for dispatch_traits, never actually called
-    actor_zeta::unique_future<void> insert(const std::string&, const std::string&) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<void> remove(const std::string&) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<void> update(const std::string&, const std::string&) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<std::string> find(const std::string&) { return actor_zeta::make_ready_future<std::string>(resource_, std::string("")); }
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<void> insert(std::string, std::string) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> remove(std::string) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> update(std::string, std::string) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<std::string> find(std::string) { return actor_zeta::make_ready_future<std::string>(resource_, std::string("")); }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &collection_t::insert,
