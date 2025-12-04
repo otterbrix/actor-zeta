@@ -115,28 +115,19 @@ namespace actor_zeta { namespace base {
             auto* derived = static_cast<Derived*>(this);
             auto* res = derived->resource();
 
-            // Create message in receiver's resource (avoid cross-arena migration)
-            auto msg = detail::make_message(
+            // Create message + promise in one call (cleaner API)
+            auto [msg, future] = detail::make_message_with_result<R>(
                 res,
                 std::move(sender),
                 cmd,
                 std::forward<Args>(args)...
             );
 
-            // Allocate future_state<R> for result with refcount=2 (future + supervisor code)
-            void* mem = res->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
-            auto* slot = new (mem) detail::future_state<R>(res);
-            msg->set_result_slot(slot);
-
             // Call behavior function with message pointer (synchronous execution)
             behavior_func(msg.get());
 
             // Slot is now ready (behavior already executed)
-            // Return async future (already in ready state, no waiting needed)
-            // Use adopt_ref to take ownership of initial ref (ref_count=1 from constructor)
-            // Message's intrusive_ptr adds ref_count=2, ~message decrements to 1
-            // adopt_ref means unique_future takes initial ref without incrementing
-            return unique_future<R>{adopt_ref, slot, false};  // needs_scheduling=false (sync execution, no mailbox)
+            return std::move(future);
         }
 
     protected:

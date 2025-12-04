@@ -160,22 +160,20 @@ public:
             }
         }
 
-        // Create future_state<R> for balancer's return value
-        void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
-                                         alignof(actor_zeta::detail::future_state<R>));
-        auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
+        // Create result via promise (clean API)
+        actor_zeta::promise<R> p(resource_);
 
         // Extract result from child and set immediately
         if constexpr (std::is_same_v<R, void>) {
             std::move(child_future).get();  // Wait for completion
-            state->set_ready();  // Mark as ready for void
+            p.set_value();  // Mark as ready for void
         } else {
             R result = std::move(child_future).get();  // Get result from child
-            state->set_value(std::move(result));  // Set value directly (ZERO ALLOCATION!)
+            p.set_value(std::move(result));  // Set value
         }
 
-        // Return async future (already in ready state)
-        return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
+        // Return ready future from promise
+        return p.get_future();
     }
 
 protected:

@@ -4,9 +4,9 @@
 #include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/base/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
+#include <actor-zeta/future.hpp>
 // clang-format on
 
-#include <actor-zeta/detail/type_traits.hpp>
 #include <utility>
 
 namespace actor_zeta {
@@ -160,16 +160,73 @@ namespace actor_zeta {
         template<typename Name, typename... Args>
         typename std::enable_if<
             is_valid_name_type<Name>::value &&
-                all_valid_rtt_types<Args...>::value,
+                all_valid_rtt_types<std::decay_t<Args>...>::value,
             mailbox::message_ptr>::type
         make_message(actor_zeta::pmr::memory_resource* resource,
                      base::address_t sender,
                      Name&& name,
-                     Args... args) {
+                     Args&&... args) {
             assert(resource);
             return mailbox::pmr_make_message(resource, resource, std::move(sender),
                                              to_message_id(std::forward<Name>(name)),
-                                             rtt(resource, std::move(args)...));
+                                             rtt(resource, std::forward<Args>(args)...));
+        }
+
+        // =====================================================================
+        // make_message_with_result<R>() - creates message + promise in one call
+        // Returns pair<message_ptr, unique_future<R>>
+        // =====================================================================
+
+        /// @brief Create message with result slot for request-response pattern
+        /// @tparam R Result type for the future (must not be a reference type)
+        /// @param resource Memory resource for allocation
+        /// @param sender Sender address
+        /// @param name Message command/name
+        /// @return pair<message_ptr, unique_future<R>> - message and future for result
+        template<typename R, typename Name>
+        typename std::enable_if<
+            is_valid_name_type<Name>::value,
+            std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>>::type
+        make_message_with_result(
+            actor_zeta::pmr::memory_resource* resource,
+            base::address_t sender,
+            Name&& name
+        ) {
+            static_assert(!std::is_reference_v<R>, "Result type R must not be a reference");
+            assert(resource);
+            auto msg = mailbox::pmr_make_message(resource, resource, std::move(sender),
+                                                 to_message_id(std::forward<Name>(name)));
+            actor_zeta::promise<R> p(resource);
+            msg->set_result_slot(p.internal_state_base());
+            return {std::move(msg), p.get_future()};
+        }
+
+        /// @brief Create message with result slot and arguments
+        /// @tparam R Result type for the future (must not be a reference type)
+        /// @param resource Memory resource for allocation
+        /// @param sender Sender address
+        /// @param name Message command/name
+        /// @param args Message arguments
+        /// @return pair<message_ptr, unique_future<R>> - message and future for result
+        template<typename R, typename Name, typename... Args>
+        typename std::enable_if<
+            is_valid_name_type<Name>::value &&
+                all_valid_rtt_types<std::decay_t<Args>...>::value,
+            std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>>::type
+        make_message_with_result(
+            actor_zeta::pmr::memory_resource* resource,
+            base::address_t sender,
+            Name&& name,
+            Args&&... args
+        ) {
+            static_assert(!std::is_reference_v<R>, "Result type R must not be a reference");
+            assert(resource);
+            auto msg = mailbox::pmr_make_message(resource, resource, std::move(sender),
+                                                 to_message_id(std::forward<Name>(name)),
+                                                 rtt(resource, std::forward<Args>(args)...));
+            actor_zeta::promise<R> p(resource);
+            msg->set_result_slot(p.internal_state_base());
+            return {std::move(msg), p.get_future()};
         }
 
     } // namespace detail

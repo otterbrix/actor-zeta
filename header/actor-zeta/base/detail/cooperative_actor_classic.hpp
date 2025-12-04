@@ -124,19 +124,20 @@ namespace actor_zeta { namespace base {
             mailbox::message_id cmd,
             Args&&... args
         ) {
-            auto msg = detail::make_message(
+            // Create message + promise in one call (cleaner API)
+            auto [msg, future] = detail::make_message_with_result<R>(
                 this->resource(),
                 std::move(sender),
                 cmd,
                 std::forward<Args>(args)...
             );
 
-            promise<R> p(resource());
-            msg->set_result_slot(p.state());
+            // Save result_slot before msg is moved
+            auto result_slot = msg->result_slot();
 
             if (is_destroying(state_.load(std::memory_order_acquire))) {
-                p.state()->set_state(detail::future_state_enum::error);
-                return p.get_future();
+                result_slot->set_state(detail::future_state_enum::error);
+                return std::move(future);
             }
 
             auto result = mailbox().push_back(std::move(msg));
@@ -193,7 +194,7 @@ namespace actor_zeta { namespace base {
                     break;
 
                 case detail::enqueue_result::queue_closed:
-                    p.state()->set_state(detail::future_state_enum::error);
+                    result_slot->set_state(detail::future_state_enum::error);
                     needs_sched = false;
                     break;
 
@@ -203,9 +204,8 @@ namespace actor_zeta { namespace base {
                     break;
             }
 
-            auto future = p.get_future();
             future.set_needs_scheduling(needs_sched);
-            return future;
+            return std::move(future);
         }
 
         scheduler::resume_info resume(size_t max_throughput) noexcept {
