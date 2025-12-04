@@ -4,6 +4,7 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 // Forward declaration
 class calculator_actor;
@@ -74,7 +75,13 @@ public:
                 return actor_zeta::dispatch(this, &calculator_actor::multiply, msg);
             }
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::square>: {
-                return actor_zeta::dispatch(this, &calculator_actor::square, msg);
+                // CRITICAL: Store pending coroutine!
+                // If destroyed immediately, coroutine is destroyed → use-after-free
+                auto future = actor_zeta::dispatch(this, &calculator_actor::square, msg);
+                if (!future.available()) {
+                    pending_.push_back(std::move(future));
+                }
+                return actor_zeta::make_ready_future_void(resource());
             }
             default:
                 std::cerr << "[Calculator] Unknown message\n";
@@ -83,7 +90,24 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
+    /// @brief Poll and resume pending coroutines
+    /// @return true if there are still pending coroutines
+    bool poll_pending() {
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (it->awaiting_ready()) {
+                it->resume();
+                if (it->available()) {
+                    it = pending_.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+        return !pending_.empty();
+    }
+
 private:
+    std::vector<actor_zeta::unique_future<int>> pending_;
 };
 
 int main() {
@@ -121,9 +145,13 @@ int main() {
     {
         auto future = actor_zeta::send(calculator.get(), calculator->address(),
                                        &calculator_actor::square, 5);
-        // Need multiple resume calls for coroutine to complete
-        calculator->resume(100);  // Process square message
-        calculator->resume(100);  // Resume coroutine after multiply completes
+
+        // Process messages and poll pending coroutines until complete
+        while (!future.available()) {
+            calculator->resume(100);        // Process mailbox messages
+            calculator->poll_pending();     // Resume pending coroutines
+        }
+
         int result = std::move(future).get();
         std::cout << "Result: 5^2 = " << result << "\n\n";
     }
@@ -133,7 +161,7 @@ int main() {
     std::cout << "2. Caller uses SAME code: send() and get()\n";
     std::cout << "3. Sync methods use 'make_ready_future()' for immediate results\n";
     std::cout << "4. Async methods use 'co_await' and 'co_return'\n";
-    std::cout << "5. No difference from caller's perspective!\n";
+    std::cout << "5. Coroutines need poll_pending() to resume after co_await\n";
     std::cout << "\n NOTE: Recursive coroutines (like factorial, power) are NOT supported\n";
     std::cout << "   Use iterative algorithms instead.\n\n";
 
