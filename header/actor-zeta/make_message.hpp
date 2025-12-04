@@ -40,16 +40,43 @@ namespace actor_zeta {
                 std::is_integral<decayed_type>::value;
         };
 
+        // =====================================================================
+        // Type validation traits for message arguments
+        // =====================================================================
+
+        /// @brief Check if type can be stored in RTT (message body)
+        /// Requirements:
+        /// - Not a reference (will be stored by value)
+        /// - Not abstract
+        /// - Move or copy constructible
         template<typename T>
         struct is_valid_rtt_type {
-            typedef typename std::decay<T>::type decayed_type;
+            using decayed_type = typename std::decay<T>::type;
 
-            static const bool value =
+            static constexpr bool value =
                 !std::is_reference<T>::value &&
                 !std::is_abstract<decayed_type>::value &&
                 (std::is_copy_constructible<decayed_type>::value ||
                  std::is_move_constructible<decayed_type>::value);
         };
+
+        template<typename T>
+        inline constexpr bool is_valid_rtt_type_v = is_valid_rtt_type<T>::value;
+
+        /// @brief Check if provided argument type is compatible with expected method parameter type
+        /// After decay, types should be convertible
+        template<typename Expected, typename Provided>
+        struct is_convertible_arg {
+            using expected_decay = typename std::decay<Expected>::type;
+            using provided_decay = typename std::decay<Provided>::type;
+
+            static constexpr bool value =
+                std::is_same<expected_decay, provided_decay>::value ||
+                std::is_convertible<provided_decay, expected_decay>::value;
+        };
+
+        template<typename Expected, typename Provided>
+        inline constexpr bool is_convertible_arg_v = is_convertible_arg<Expected, Provided>::value;
 
         template<bool...>
         struct bool_pack {};
@@ -59,6 +86,60 @@ namespace actor_zeta {
 
         template<typename... Args>
         struct all_valid_rtt_types : all_true<is_valid_rtt_type<Args>::value...> {};
+
+        template<typename... Args>
+        inline constexpr bool all_valid_rtt_types_v = all_valid_rtt_types<Args...>::value;
+
+        // =====================================================================
+        // Type list argument validation
+        // =====================================================================
+
+        /// @brief Check if all provided args are compatible with expected args (type_list)
+        template<typename ExpectedList, typename ProvidedList>
+        struct args_compatible;
+
+        // Base case: empty lists are compatible
+        template<>
+        struct args_compatible<type_traits::type_list<>, type_traits::type_list<>> {
+            static constexpr bool value = true;
+        };
+
+        // Mismatch count
+        template<typename... Expected>
+        struct args_compatible<type_traits::type_list<Expected...>, type_traits::type_list<>> {
+            static constexpr bool value = false;
+        };
+
+        template<typename... Provided>
+        struct args_compatible<type_traits::type_list<>, type_traits::type_list<Provided...>> {
+            static constexpr bool value = false;
+        };
+
+        // Recursive check
+        template<typename ExpHead, typename... ExpTail, typename ProvHead, typename... ProvTail>
+        struct args_compatible<
+            type_traits::type_list<ExpHead, ExpTail...>,
+            type_traits::type_list<ProvHead, ProvTail...>
+        > {
+            static constexpr bool value =
+                is_convertible_arg<ExpHead, ProvHead>::value &&
+                args_compatible<
+                    type_traits::type_list<ExpTail...>,
+                    type_traits::type_list<ProvTail...>
+                >::value;
+        };
+
+        template<typename ExpectedList, typename ProvidedList>
+        inline constexpr bool args_compatible_v = args_compatible<ExpectedList, ProvidedList>::value;
+
+        /// @brief Check that all provided args are valid for RTT storage
+        template<typename... Args>
+        struct all_args_storable {
+            static constexpr bool value = all_valid_rtt_types<typename std::decay<Args>::type...>::value;
+        };
+
+        template<typename... Args>
+        inline constexpr bool all_args_storable_v = all_args_storable<Args...>::value;
 
         /// @brief Internal API: Create message with message_id (no arguments)
         /// @note Prefer using send() with method pointers for type-safe messaging

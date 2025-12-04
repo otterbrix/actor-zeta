@@ -1,13 +1,10 @@
 #pragma once
 
 // clang-format off
-#include <actor-zeta/base/handler.hpp>
 #include <actor-zeta/base/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
-#include <actor-zeta/impl/handler.ipp>
 // clang-format on
 
-#include <actor-zeta/base/address.hpp>
 #include <memory>
 
 namespace actor_zeta { namespace base {

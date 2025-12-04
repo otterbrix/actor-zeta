@@ -10,6 +10,7 @@
 
 #include "test/tooltestsuites/scheduler_test.hpp"
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 
 using actor_zeta::pmr::memory_resource;
 class dummy_supervisor;
@@ -27,7 +28,6 @@ public:
     dummy_supervisor(memory_resource* ptr)
         : actor_zeta::base::actor_mixin<dummy_supervisor>()
         , resource_(ptr)
-        , check_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::check))
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
     }
@@ -38,17 +38,27 @@ public:
         return executor_.get();
     }
 
-    void check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
+    actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
-            check_(msg);
+            return dispatch(this, &dummy_supervisor::check, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -59,16 +69,16 @@ protected:
 
 private:
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::behavior_t check_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::set<int64_t> ids_;
 };
 
-void dummy_supervisor::check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data) {
+actor_zeta::unique_future<void> dummy_supervisor::check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data) {
     REQUIRE(data != nullptr);
     REQUIRE(data->number == expected_data.number);
     REQUIRE(data->name.size() == expected_data.name.size());
     REQUIRE(data->name == expected_data.name);
+    return actor_zeta::make_ready_future_void(resource());
 }
 
 TEST_CASE("base move test") {

@@ -11,9 +11,9 @@ if (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"  AND UNIX AND NOT APPLE ) #--------
     list(APPEND CMAKE_MODULE_PATH "${LLVM_DIR}")
 endif() #--------------------------------------------------------------------------- Clang
 
-set(CMAKE_CXX_STANDARD 17 CACHE STRING "The C++ standard whose features are requested.")
-set(CMAKE_CXX_STANDARD_REQUIRED     ON)
-set(CMAKE_CXX_EXTENSIONS            OFF)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS   ON)
 
 option(ALLOW_EXAMPLES               "ALLOW EXAMPLES"            OFF)

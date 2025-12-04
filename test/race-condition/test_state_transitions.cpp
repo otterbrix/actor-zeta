@@ -2,6 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -12,39 +13,34 @@
 class state_test_actor final : public actor_zeta::basic_actor<state_test_actor> {
 public:
     explicit state_test_actor(actor_zeta::pmr::memory_resource* resource)
-        : actor_zeta::basic_actor<state_test_actor>(resource)
-        , compute_behavior_(actor_zeta::make_behavior(resource, this, &state_test_actor::compute))
-        , fast_task_behavior_(actor_zeta::make_behavior(resource, this, &state_test_actor::fast_task)) {
+        : actor_zeta::basic_actor<state_test_actor>(resource) {
     }
 
-    int compute(int value) {
+    actor_zeta::unique_future<int> compute(int value) {
         // Simulate some processing
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        return value * 2;
+        return actor_zeta::make_ready_future<int>(resource(), value * 2);
     }
 
-    int fast_task(int value) {
+    actor_zeta::unique_future<int> fast_task(int value) {
         // Immediate processing (no delay)
-        return value + 1;
+        return actor_zeta::make_ready_future<int>(resource(), value + 1);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<state_test_actor, &state_test_actor::compute>) {
-            compute_behavior_(msg);
+            return dispatch(this, &state_test_actor::compute, msg);
         } else if (cmd == actor_zeta::msg_id<state_test_actor, &state_test_actor::fast_task>) {
-            fast_task_behavior_(msg);
+            return dispatch(this, &state_test_actor::fast_task, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &state_test_actor::compute,
         &state_test_actor::fast_task
     >;
-
-private:
-    actor_zeta::behavior_t compute_behavior_;
-    actor_zeta::behavior_t fast_task_behavior_;
 };
 
 // =============================================================================
@@ -148,7 +144,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
             bool last_state = false;  // Local to poller thread - no data race
 
             while (!stop_polling.load(std::memory_order_acquire)) {
-                bool current_state = future.is_ready();
+                bool current_state = future.available();
 
                 // Detect INVALID transition from true → false (should NEVER happen!)
                 if (last_state && !current_state) {
@@ -178,7 +174,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
         }
 
         // Consume future to clean up
-        if (future.is_ready()) {
+        if (future.available()) {
             auto result = std::move(future).get();
             (void)result;
         }
@@ -234,7 +230,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
             observers.emplace_back([&future, &stop_observing, &observers_saw_ready]() {
                 bool saw_ready = false;
                 while (!stop_observing.load(std::memory_order_acquire)) {
-                    if (future.is_ready()) {
+                    if (future.available()) {
                         saw_ready = true;
                         break;
                     }
@@ -262,7 +258,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
         REQUIRE(observers_saw_ready.load() >= 0);
 
         // Consume future
-        if (future.is_ready()) {
+        if (future.available()) {
             auto result = std::move(future).get();
             REQUIRE(result == i + 1);
         }

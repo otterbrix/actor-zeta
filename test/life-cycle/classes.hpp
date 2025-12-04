@@ -2,6 +2,7 @@
 
 #include "test/tooltestsuites/scheduler_test.hpp"
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <iostream>
 #include <list>
 
@@ -26,8 +27,6 @@ public:
     dummy_supervisor(actor_zeta::pmr::memory_resource* resource, uint64_t threads, uint64_t throughput)
         : actor_mixin<dummy_supervisor>()
         , resource_(resource)
-        , create_storage_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create_storage))
-        , create_test_handlers_(actor_zeta::make_behavior(resource_, this, &dummy_supervisor::create_test_handlers))
         , executor_(new actor_zeta::test::scheduler_test_t(threads, throughput)) {
         scheduler_test()->start();
         constructor_counter++;
@@ -40,12 +39,13 @@ public:
         destructor_counter++;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_storage>) {
-            create_storage_(msg);
+            return dispatch(this, &dummy_supervisor::create_storage, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_test_handlers>) {
-            create_test_handlers_(msg);
+            return dispatch(this, &dummy_supervisor::create_test_handlers, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
@@ -55,17 +55,26 @@ public:
     }
 
 
-    void create_storage();
-    void create_test_handlers();
+    actor_zeta::unique_future<void> create_storage();
+    actor_zeta::unique_future<void> create_test_handlers();
 
     auto actors_count() const -> size_t {
         return storages_.size()+test_handlers_.size();
     }
 
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
         enqueue_base_counter++;
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -81,8 +90,6 @@ protected:
 
 private:
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::behavior_t create_storage_;
-    actor_zeta::behavior_t create_test_handlers_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::list<std::unique_ptr<storage_t,actor_zeta::pmr::deleter_t>> storages_;
     std::list<std::unique_ptr<test_handlers,actor_zeta::pmr::deleter_t>> test_handlers_;
@@ -111,79 +118,64 @@ public:
 
 public:
     explicit storage_t(actor_zeta::pmr::memory_resource* resource_)
-        : actor_zeta::basic_actor<storage_t>(resource_)
-        , init_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::init))
-        , search_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::search))
-        , add_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::add))
-        , delete_table_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::delete_table))
-        , create_table_(actor_zeta::make_behavior(
-              resource(),
-              this,
-              &storage_t::create_table)) {
+        : actor_zeta::basic_actor<storage_t>(resource_) {
         constructor_counter++;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<storage_t, &storage_t::init>) {
-            init_(msg);
+            return dispatch(this, &storage_t::init, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::search>) {
-            search_(msg);
+            return dispatch(this, &storage_t::search, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::add>) {
-            add_(msg);
+            return dispatch(this, &storage_t::add, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::delete_table>) {
-            delete_table_(msg);
+            return dispatch(this, &storage_t::delete_table, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::create_table>) {
-            create_table_(msg);
+            return dispatch(this, &storage_t::create_table, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~storage_t() {
         destructor_counter++;
     }
 
-    void init() {
+    actor_zeta::unique_future<void> init() {
         init_counter++;
         TRACE("+++");
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void search(std::string& key) {
+    actor_zeta::unique_future<void> search(std::string key) {
         search_counter++;
         std::cerr << __func__ << " :: "
                   << "key: " << key
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void add(const std::string& key, const std::string& value) {
+    actor_zeta::unique_future<void> add(std::string key, std::string value) {
         add_counter++;
         std::cerr << __func__ << " :: "
                   << "key: " << key << " | "
                   << "value: " << value << " | "
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void delete_table(const std::string& name, const std::string& path, int type) {
+    actor_zeta::unique_future<void> delete_table(std::string name, std::string path, int type) {
         delete_table_counter++;
         std::cerr << __func__ << " :: "
                   << "table name: " << name << " | "
                   << "path: " << path << " | "
                   << "type: " << type << " | "
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void create_table(const std::string& name, const std::string& path, int type, int time_sync) {
+    actor_zeta::unique_future<void> create_table(std::string name, std::string path, int type, int time_sync) {
         create_table_counter++;
         std::cerr << __func__ << " :: "
                   << "table name: " << name << " | "
@@ -191,6 +183,7 @@ public:
                   << "type: " << type << " | "
                   << "time_sync: " << time_sync << " | "
                   << std::endl;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -200,13 +193,6 @@ public:
         &storage_t::delete_table,
         &storage_t::create_table
     >;
-
-private:
-    actor_zeta::behavior_t init_;
-    actor_zeta::behavior_t search_;
-    actor_zeta::behavior_t add_;
-    actor_zeta::behavior_t delete_table_;
-    actor_zeta::behavior_t create_table_;
 };
 
 uint64_t storage_t::constructor_counter = 0;
@@ -230,60 +216,62 @@ public:
 
 public:
     test_handlers(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<test_handlers>(ptr)
-        , ptr_0_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_0))
-        , ptr_1_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_1))
-        , ptr_2_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_2))
-        , ptr_3_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_3))
-        , ptr_4_(actor_zeta::make_behavior(resource(), this, &test_handlers::ptr_4)) {
+        : actor_zeta::basic_actor<test_handlers>(ptr) {
         init();
     }
 
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_0>) {
-            ptr_0_(msg);
+            return dispatch(this, &test_handlers::ptr_0, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_1>) {
-            ptr_1_(msg);
+            return dispatch(this, &test_handlers::ptr_1, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_2>) {
-            ptr_2_(msg);
+            return dispatch(this, &test_handlers::ptr_2, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_3>) {
-            ptr_3_(msg);
+            return dispatch(this, &test_handlers::ptr_3, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_4>) {
-            ptr_4_(msg);
+            return dispatch(this, &test_handlers::ptr_4, msg);
         } else {
             TRACE("+++");
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~test_handlers() = default;
 
-    void ptr_0() {
+    actor_zeta::unique_future<void> ptr_0() {
         TRACE("+++");
         ptr_0_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_1() {
+    actor_zeta::unique_future<void> ptr_1() {
         TRACE("+++");
         ptr_1_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_2(int&) {
+    actor_zeta::unique_future<void> ptr_2(int data) {
         TRACE("+++");
+        (void)data;
         ptr_2_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_3(int data_1, int& data_2) {
+    actor_zeta::unique_future<void> ptr_3(int data_1, int data_2) {
         TRACE("+++");
         std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
         ptr_3_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void ptr_4(int data_1, int& data_2, const std::string& data_3) {
+    actor_zeta::unique_future<void> ptr_4(int data_1, int data_2, std::string data_3) {
         TRACE("+++");
         std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
         ptr_4_counter++;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -299,12 +287,6 @@ private:
         TRACE("private init");
         init_counter++;
     }
-
-    actor_zeta::behavior_t ptr_0_;
-    actor_zeta::behavior_t ptr_1_;
-    actor_zeta::behavior_t ptr_2_;
-    actor_zeta::behavior_t ptr_3_;
-    actor_zeta::behavior_t ptr_4_;
 };
 
 uint64_t test_handlers::init_counter = 0;
@@ -316,17 +298,18 @@ uint64_t test_handlers::ptr_3_counter = 0;
 uint64_t test_handlers::ptr_4_counter = 0;
 
 
-void dummy_supervisor::create_storage() {
+actor_zeta::unique_future<void> dummy_supervisor::create_storage() {
     TRACE("+++");
     auto uptr = actor_zeta::spawn<storage_t>(resource());
     storages_.emplace_back(std::move(uptr));
     add_actor_impl_counter++;
+    return actor_zeta::make_ready_future_void(resource());
 }
 
-void dummy_supervisor::create_test_handlers() {
+actor_zeta::unique_future<void> dummy_supervisor::create_test_handlers() {
     TRACE("+++");
     auto uptr = actor_zeta::spawn<test_handlers>(resource());
     test_handlers_.emplace_back(std::move(uptr));
     add_actor_impl_counter++;
-
+    return actor_zeta::make_ready_future_void(resource());
 }

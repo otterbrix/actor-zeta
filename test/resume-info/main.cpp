@@ -3,22 +3,24 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
+#include <actor-zeta/dispatch.hpp>
 
 class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
     explicit test_actor(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<test_actor>(ptr)
-        , test_(actor_zeta::make_behavior(resource(), this, &test_actor::test)) {
+        : actor_zeta::basic_actor<test_actor>(ptr) {
     }
 
-    void test() {
+    actor_zeta::unique_future<void> test() {
         ++processed_count_;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
-            test_(msg);
+            return actor_zeta::dispatch(this, &test_actor::test, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     size_t processed_count() const { return processed_count_; }
@@ -26,7 +28,6 @@ public:
     using dispatch_traits = actor_zeta::dispatch_traits<&test_actor::test>;
 
 private:
-    actor_zeta::behavior_t test_;
     size_t processed_count_ = 0;
 };
 

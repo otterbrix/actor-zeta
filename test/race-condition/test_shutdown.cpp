@@ -2,6 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -11,38 +12,34 @@
 class shutdown_test_actor final : public actor_zeta::basic_actor<shutdown_test_actor> {
 public:
     explicit shutdown_test_actor(actor_zeta::pmr::memory_resource* resource)
-        : actor_zeta::basic_actor<shutdown_test_actor>(resource)
-        , slow_task_behavior_(actor_zeta::make_behavior(resource, this, &shutdown_test_actor::slow_task)) {
+        : actor_zeta::basic_actor<shutdown_test_actor>(resource) {
     }
 
-    // CRITICAL: Explicit destructor with begin_shutdown()
-    // Without this, TSan will detect race condition between:
-    // - Main thread destroying behavior_t members
-    // - Worker thread calling behavior() which reads behavior_t
-    ~shutdown_test_actor() {
-        begin_shutdown();  // ← Prevents worker threads from calling behavior()
-        // Now safe to destroy behavior_t members
-    }
+    // NOTE: No explicit destructor needed!
+    // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
+    // This prevents race condition between:
+    // - Main thread destroying dispatch() members
+    // - Worker thread calling behavior() which uses dispatch()
+    // Default destructor = shutdown_guard_t protection + clean dispatch() destruction
+    ~shutdown_test_actor() = default;
 
-    int slow_task(int value) {
+    actor_zeta::unique_future<int> slow_task(int value) {
         // Simulate slow processing
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        return value * 2;
+        return actor_zeta::make_ready_future<int>(resource(), value * 2);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<shutdown_test_actor, &shutdown_test_actor::slow_task>) {
-            slow_task_behavior_(msg);
+            return dispatch(this, &shutdown_test_actor::slow_task, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &shutdown_test_actor::slow_task
     >;
-
-private:
-    actor_zeta::behavior_t slow_task_behavior_;
 };
 
 // =============================================================================
@@ -106,7 +103,7 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
     // Try to get results from futures (may be cancelled or error state)
     int successful = 0;
     for (auto& future : futures) {
-        if (future.is_ready()) {
+        if (future.available()) {
             // Some messages may have been processed before actor destruction
             // Note: get() may return error state - we just count successful completions
             auto result = std::move(future).get();

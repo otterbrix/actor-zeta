@@ -46,3 +46,27 @@ namespace actor_zeta { namespace type_traits {
     constexpr allocator_arg_t allocator_arg = allocator_arg_t();
 
 }} // namespace actor_zeta::type_traits
+
+// Forward declaration for is_unique_future
+namespace actor_zeta {
+    template<typename T>
+    class unique_future;
+}
+
+namespace actor_zeta { namespace type_traits {
+
+    /// @brief Type trait to detect unique_future<T>
+    /// @note Used for handler integration to detect methods returning futures
+    template<typename T>
+    struct is_unique_future : std::false_type {};
+
+    template<typename T>
+    struct is_unique_future<unique_future<T>> : std::true_type {
+        using value_type = T;
+    };
+
+    /// @brief Helper variable template (C++17)
+    template<typename T>
+    constexpr bool is_unique_future_v = is_unique_future<T>::value;
+
+}} // namespace actor_zeta::type_traits

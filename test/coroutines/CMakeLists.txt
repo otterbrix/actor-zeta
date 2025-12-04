@@ -1,4 +1,4 @@
-PROJECT(tests_behavior CXX)
+PROJECT(tests_coroutines CXX)
 
 file(GLOB ${PROJECT_NAME}_HEADERS
     ./*.hpp

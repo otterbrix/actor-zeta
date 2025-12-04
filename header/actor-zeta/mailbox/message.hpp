@@ -15,19 +15,6 @@
 
 namespace actor_zeta { namespace mailbox {
 
-    /// @brief Unified slot status - combines state and error code
-    /// Values 0-1: Normal states (pending, ready)
-    /// Values 2+: Error states with specific error reasons
-    enum class slot_error_code : int {
-        pending = 0,            // Awaiting processing (initial state)
-        ok = 1,                 // Result is ready (success)
-        slot_pool_exhausted = 2,
-        mailbox_full = 3,
-        broken_promise = 4,     // Actor destroyed with pending futures
-        cancelled = 5,          // Cancelled via future.cancel()
-        orphaned = 6            // Future destroyed (forced cancellation)
-    };
-
     /// @brief Message with optional async result support
 
     class message final : public actor_zeta::detail::singly_linked<message> {
@@ -56,11 +43,20 @@ namespace actor_zeta { namespace mailbox {
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
-        /// @brief Get future state (result slot)
-        actor_zeta::detail::future_state_base* result_slot() const noexcept { return result_slot_; }
+        /// @brief Get future state (result slot) - returns intrusive_ptr (copy, calls add_ref())
+        /// This ensures future_state stays alive during method calls, preventing race conditions
+        intrusive_ptr<actor_zeta::detail::future_state_base> result_slot() const noexcept { return result_slot_; }
 
-        /// @brief Set future state (result slot)
-        void set_result_slot(actor_zeta::detail::future_state_base* slot) noexcept { result_slot_ = slot; }
+        /// @brief Get typed promise for result slot - for result propagation
+        /// @tparam T Result type
+        /// @param res Memory resource for promise
+        /// @return Non-owning promise wrapping result_slot
+        /// @note Returns promise that writes directly to caller's future
+        template<typename T>
+        inline auto result_promise(actor_zeta::pmr::memory_resource* res) const noexcept;
+
+        /// @brief Set future state (result slot) - accepts intrusive_ptr
+        void set_result_slot(const intrusive_ptr<actor_zeta::detail::future_state_base>& slot) noexcept { result_slot_ = slot; }
 
         /// @brief Check if cancelled (via result_slot state)
         bool is_cancelled() const noexcept {
@@ -79,46 +75,13 @@ namespace actor_zeta { namespace mailbox {
             return result_slot_ ? result_slot_->state() : actor_zeta::detail::future_state_enum::invalid;
         }
 
-        // DEPRECATED: Kept for backward compatibility, will be removed in future versions
-        slot_error_code error() const noexcept {
-            auto s = state();
-            if (s == actor_zeta::detail::future_state_enum::ready) return slot_error_code::ok;
-            if (s == actor_zeta::detail::future_state_enum::cancelled) return slot_error_code::cancelled;
-            return slot_error_code::pending;
-        }
-
-        void set_error(slot_error_code e) noexcept {
-            // Map legacy error codes to new state enum
-            if (!result_slot_) return;
-
-            switch (e) {
-                case slot_error_code::ok:
-                    result_slot_->set_state(actor_zeta::detail::future_state_enum::ready);
-                    break;
-                case slot_error_code::cancelled:
-                case slot_error_code::orphaned:
-                    result_slot_->set_state(actor_zeta::detail::future_state_enum::cancelled);
-                    break;
-                case slot_error_code::broken_promise:
-                case slot_error_code::mailbox_full:
-                case slot_error_code::slot_pool_exhausted:
-                    result_slot_->set_state(actor_zeta::detail::future_state_enum::error);
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        void mark_orphaned() noexcept { cancel(); }  // Orphaned = cancelled
-        bool is_orphaned() const noexcept { return is_cancelled(); }
-
     private:
         base::address_t sender_;
         message_id command_;
         actor_zeta::detail::rtt body_;
 
-        // Future state for request-response pattern
-        actor_zeta::detail::future_state_base* result_slot_{nullptr};
+        // Future state for request-response pattern (automatic lifetime management via intrusive_ptr)
+        intrusive_ptr<actor_zeta::detail::future_state_base> result_slot_;
     };
 
     static_assert(std::is_move_constructible<message>::value, "");
@@ -192,3 +155,42 @@ namespace actor_zeta { namespace mailbox {
 inline void swap(actor_zeta::mailbox::message& lhs, actor_zeta::mailbox::message& rhs) noexcept {
     lhs.swap(rhs);
 }
+
+// Include future.hpp for promise<T> definition
+#include <actor-zeta/future.hpp>
+
+namespace actor_zeta { namespace mailbox {
+
+    /// @brief Get typed promise for result_slot - INTERNAL USE ONLY
+    /// @tparam T Result type - MUST match the type used when creating the result_slot!
+    /// @param res Memory resource for promise wrapper
+    /// @return Non-owning promise that writes directly to caller's future
+    ///
+    /// @warning TYPE SAFETY: This performs static_cast without runtime type verification.
+    ///          Calling with incorrect T causes UNDEFINED BEHAVIOR (writes wrong type to storage).
+    ///
+    /// @warning INTERNAL API: This is called by dispatch() which deduces T from method signature.
+    ///          DO NOT call directly unless implementing custom dispatch mechanism.
+    ///
+    /// @note Safe usage: Only through dispatch() which knows correct type from method pointer.
+    /// @note Unsafe usage: Direct call with guessed/wrong type T.
+    ///
+    /// @example Safe (via dispatch):
+    /// @code
+    /// // dispatch() deduces T from &Actor::compute return type
+    /// auto future = dispatch(actor, &Actor::compute, msg);
+    /// @endcode
+    ///
+    /// @example DANGEROUS (direct call):
+    /// @code
+    /// // BUG: If result_slot was created with promise<int>, this is UB!
+    /// auto p = msg->result_promise<std::string>(res);  // WRONG TYPE → UB
+    /// p.set_value("hello");  // Corrupts memory!
+    /// @endcode
+    template<typename T>
+    inline auto message::result_promise(actor_zeta::pmr::memory_resource* res) const noexcept {
+        auto* typed_state = static_cast<actor_zeta::detail::future_state<T>*>(result_slot_.get());
+        return actor_zeta::promise<T>::wrap(typed_state, res);
+    }
+
+}} // namespace actor_zeta::mailbox

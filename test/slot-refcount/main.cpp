@@ -13,35 +13,32 @@ using namespace actor_zeta;
 TEST_CASE("future_state<int> - basic construction and destruction") {
     auto* res = pmr::get_default_resource();
 
-    SECTION("construct with initial refcount = 2") {
+    SECTION("construct with initial refcount = 1") {
         // Allocate slot manually
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
         REQUIRE(!slot->is_ready());
 
-        // Cleanup: manually release both references
-        slot->release();  // First release (2 -> 1)
-        slot->release();  // Second release (1 -> 0, deletes)
+        // Cleanup: release single initial reference
+        slot->release();  // Release (1 -> 0, deletes)
 
         // If we reach here, no crash - test passed
     }
 
-    SECTION("set_result makes slot ready") {
+    SECTION("set_value makes slot ready") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
         REQUIRE(!slot->is_ready());
 
-        // Set result
-        rtt value(res, 42);
-        slot->set_result(std::move(value));
+        // Set result using new typed API
+        slot->set_value(42);
 
         REQUIRE(slot->is_ready());
-        REQUIRE(slot->result().get<int>(0) == 42);
+        REQUIRE(slot->get_value() == 42);
 
         // Cleanup
-        slot->release();
         slot->release();
     }
 }
@@ -53,14 +50,13 @@ TEST_CASE("future_state<int> - refcount increment/decrement") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        // Initial refcount = 2
+        // Initial refcount = 1
         // Add 3 more references
+        slot->add_ref();  // 2
         slot->add_ref();  // 3
         slot->add_ref();  // 4
-        slot->add_ref();  // 5
 
-        // Release all 5 references
-        slot->release();  // 4
+        // Release all 4 references
         slot->release();  // 3
         slot->release();  // 2
         slot->release();  // 1
@@ -71,14 +67,8 @@ TEST_CASE("future_state<int> - refcount increment/decrement") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        // Only one release should NOT delete (refcount 2 -> 1)
-        slot->release();
-
-        // Slot still accessible
-        REQUIRE(!slot->is_ready());
-
-        // Second release should delete (refcount 1 -> 0)
-        slot->release();
+        // Refcount = 1, single release should delete
+        slot->release();  // 0 - deletes
 
         // After this point, slot is deleted - no access
     }
@@ -91,27 +81,23 @@ TEST_CASE("future_state<int> - result storage and retrieval") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        rtt value(res, 123);
-        slot->set_result(std::move(value));
+        slot->set_value(123);
 
         REQUIRE(slot->is_ready());
-        REQUIRE(slot->result().get<int>(0) == 123);
+        REQUIRE(slot->get_value() == 123);
 
-        slot->release();
         slot->release();
     }
 
-    SECTION("store and retrieve string") {
+    SECTION("store and retrieve different int") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        rtt value(res, std::string("hello world"));
-        slot->set_result(std::move(value));
+        slot->set_value(999);
 
         REQUIRE(slot->is_ready());
-        REQUIRE(slot->result().get<std::string>(0) == "hello world");
+        REQUIRE(slot->get_value() == 999);
 
-        slot->release();
         slot->release();
     }
 
@@ -121,12 +107,26 @@ TEST_CASE("future_state<int> - result storage and retrieval") {
 
         REQUIRE(!slot->is_ready());
 
-        rtt value(res, 999);
-        slot->set_result(std::move(value));
+        slot->set_value(999);
 
         REQUIRE(slot->is_ready());
 
         slot->release();
+    }
+}
+
+TEST_CASE("future_state<std::string> - string storage") {
+    auto* res = pmr::get_default_resource();
+
+    SECTION("store and retrieve string") {
+        void* mem = res->allocate(sizeof(future_state<std::string>), alignof(future_state<std::string>));
+        auto* slot = new (mem) future_state<std::string>(res);
+
+        slot->set_value(std::string("hello world"));
+
+        REQUIRE(slot->is_ready());
+        REQUIRE(slot->get_value() == "hello world");
+
         slot->release();
     }
 }
@@ -157,9 +157,9 @@ TEST_CASE("future_state<int> - thread safety") {
             t.join();
         }
 
-        // Total refcount should be: 2 (initial) + 10 * 100 = 1002
+        // Total refcount should be: 1 (initial) + 10 * 100 = 1001
         // Release all references
-        for (int i = 0; i < num_threads * refs_per_thread + 2; ++i) {
+        for (int i = 0; i < num_threads * refs_per_thread + 1; ++i) {
             slot->release();
         }
     }
@@ -167,7 +167,7 @@ TEST_CASE("future_state<int> - thread safety") {
     SECTION("concurrent release from multiple threads") {
         constexpr int num_threads = 10;
         constexpr int releases_per_thread = 100;
-        constexpr int total_refs = 2 + num_threads * releases_per_thread;
+        constexpr int total_refs = 1 + num_threads * releases_per_thread;
 
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
@@ -193,9 +193,9 @@ TEST_CASE("future_state<int> - thread safety") {
             t.join();
         }
 
-        // Release remaining 2 initial references
+        // Release remaining 1 initial reference
         slot->release();
-        slot->release();
+        (void)total_refs;  // Suppress unused warning
     }
 
     SECTION("concurrent add_ref and release") {
@@ -240,40 +240,36 @@ TEST_CASE("future_state<int> - thread safety") {
         }
 
         // Net effect: +4000 add_ref, -4000 release = 0 change
-        // Still have initial refs (2) + pre-added refs (8000) = 8002
-        for (int i = 0; i < num_threads * operations + 2; ++i) {
+        // Still have initial refs (1) + pre-added refs (8000) = 8001
+        for (int i = 0; i < num_threads * operations + 1; ++i) {
             slot->release();
         }
     }
 
-    SECTION("concurrent set_result and is_ready") {
+    SECTION("concurrent set_value and is_ready") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
         auto* slot = new (mem) future_state<int>(res);
 
-        std::atomic<bool> result_set{false};
-
         // Thread 1: sets result
-        std::thread writer([slot, &result_set]() {
+        std::thread writer([slot]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            rtt value(pmr::get_default_resource(), 777);
-            slot->set_result(std::move(value));
-            result_set.store(true, std::memory_order_release);
+            slot->set_value(777);
         });
 
-        // Thread 2: polls is_ready
-        std::thread reader([slot, &result_set]() {
+        // Thread 2: polls is_ready and reads result
+        std::thread reader([slot]() {
+            // Wait for result to be ready
             while (!slot->is_ready()) {
                 std::this_thread::yield();
             }
 
-            REQUIRE(result_set.load(std::memory_order_acquire));
-            REQUIRE(slot->result().get<int>(0) == 777);
+            // If is_ready() returned true, result must be visible (release-acquire)
+            REQUIRE(slot->get_value() == 777);
         });
 
         writer.join();
         reader.join();
 
-        slot->release();
         slot->release();
     }
 }
@@ -289,8 +285,7 @@ TEST_CASE("future_state<int> - memory ordering guarantees") {
 
         std::thread writer([slot, &side_effect]() {
             side_effect.store(42, std::memory_order_relaxed);
-            rtt value(pmr::get_default_resource(), 100);
-            slot->set_result(std::move(value));  // Release
+            slot->set_value(100);  // Release
         });
 
         std::thread reader([slot, &side_effect]() {
@@ -305,7 +300,6 @@ TEST_CASE("future_state<int> - memory ordering guarantees") {
         writer.join();
         reader.join();
 
-        slot->release();
         slot->release();
     }
 }

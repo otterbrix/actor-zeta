@@ -31,16 +31,14 @@ namespace actor_zeta { namespace mailbox {
         : sender_(std::move(other.sender_))
         , command_(std::move(other.command_))
         , body_(std::move(other.body_))
-        , result_slot_(other.result_slot_) {
-        other.result_slot_ = nullptr;
+        , result_slot_(std::move(other.result_slot_)) {
     }
 
     message::message(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, message&& other) noexcept
            : sender_(std::move(other.sender_))
            , command_(std::move(other.command_))
            , body_(std::allocator_arg, resource, std::move(other.body_))
-           , result_slot_(other.result_slot_) {
-        other.result_slot_ = nullptr;
+           , result_slot_(std::move(other.result_slot_)) {
     }
 
     message& message::operator=(message&& other) noexcept {
@@ -49,9 +47,7 @@ namespace actor_zeta { namespace mailbox {
         sender_ = std::move(other.sender_);
         command_ = std::move(other.command_);
         body_ = std::move(other.body_);
-        result_slot_ = other.result_slot_;
-
-        other.result_slot_ = nullptr;
+        result_slot_ = std::move(other.result_slot_);
 
         return *this;
     }

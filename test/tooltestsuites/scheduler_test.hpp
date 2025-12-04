@@ -24,7 +24,7 @@ namespace actor_zeta { namespace test {
 
         template<typename T>
         void enqueue(T* actor) {
-            enqueue(scheduler::job_ptr::wrap(actor));
+            enqueue(scheduler::job_ptr(actor, &scheduler::detail::resume_impl<T>));
         }
 
         inline size_t max_throughput() const {

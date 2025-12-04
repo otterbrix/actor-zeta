@@ -11,6 +11,7 @@
 #include <thread>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 std::atomic_int count_collection_part{0};
@@ -27,35 +28,41 @@ class collection_part_t;
 class collection_part_t final : public actor_zeta::basic_actor<collection_part_t> {
 public:
     collection_part_t(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<collection_part_t>(ptr)
-        , insert_(actor_zeta::make_behavior(resource(), this, &collection_part_t::insert))
-        , remove_(actor_zeta::make_behavior(resource(), this, &collection_part_t::remove))
-        , update_(actor_zeta::make_behavior(resource(), this, &collection_part_t::update))
-        , find_(actor_zeta::make_behavior(resource(), this, &collection_part_t::find)) {
+        : actor_zeta::basic_actor<collection_part_t>(ptr) {
         ++count_collection_part;
     }
 
     // Методы для обработки сообщений
-    void insert(std::string& key, std::string& value) {
-        data_.emplace(key, value);
-        std::cerr << id() << " " << key << " " << value << std::endl;
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<void> insert(std::string key, std::string value) {
+        data_.emplace(std::move(key), std::move(value));
+        std::cerr << id() << " insert" << std::endl;
         ++count_insert;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void remove(std::string& key) {
+    actor_zeta::unique_future<void> remove(std::string key) {
         data_.erase(key);
         std::cerr << id() << " remove " << key << std::endl;
         ++count_remove;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    void update(std::string& key, std::string& value) {
-        data_[key] = value;
-        std::cerr << id() << " update " << key << " = " << value << std::endl;
+    actor_zeta::unique_future<void> update(std::string key, std::string value) {
+        data_[std::move(key)] = std::move(value);
+        std::cerr << id() << " update" << std::endl;
         ++count_update;
+        return actor_zeta::make_ready_future_void(resource());
     }
 
-    std::string find(std::string& key) {
-        return data_[key];
+    actor_zeta::unique_future<std::string> find(std::string key) {
+        auto it = data_.find(key);
+        ++count_find;
+        if (it != data_.end()) {
+            return actor_zeta::make_ready_future<std::string>(resource(), it->second);
+        } else {
+            return actor_zeta::make_ready_future<std::string>(resource(), std::string{});
+        }
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -65,32 +72,25 @@ public:
         &collection_part_t::find
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>: {
-                insert_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::insert, msg);
             }
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>: {
-                update_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::update, msg);
             }
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>: {
-                remove_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::remove, msg);
             }
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
-                find_(msg);
-                break;
+                return actor_zeta::dispatch(this, &collection_part_t::find, msg);
             }
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
-    actor_zeta::behavior_t insert_;
-    actor_zeta::behavior_t remove_;
-    actor_zeta::behavior_t update_;
-    actor_zeta::behavior_t find_;
     std::unordered_map<std::string, std::string> data_;
 };
 
@@ -100,10 +100,9 @@ class collection_t final : public actor_zeta::base::actor_mixin<collection_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
+    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler*)
         : actor_zeta::base::actor_mixin<collection_t>()
-        , resource_(resource)
-        , e_(scheduler) {
+        , resource_(resource) {
         ++count_collection;
     }
 
@@ -115,10 +114,11 @@ public:
     }
 
     // Dummy methods - just for dispatch_traits, never actually called
-    void insert(std::string&, std::string&) {}
-    void remove(std::string&) {}
-    void update(std::string&, std::string&) {}
-    std::string find(std::string&) { return ""; }
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<void> insert(std::string, std::string) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> remove(std::string) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<void> update(std::string, std::string) { return actor_zeta::make_ready_future_void(resource_); }
+    actor_zeta::unique_future<std::string> find(std::string) { return actor_zeta::make_ready_future<std::string>(resource_, std::string("")); }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &collection_t::insert,
@@ -127,70 +127,61 @@ public:
         &collection_t::find
     >;
 
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        // Balancer logic: forward message to child actor using round-robin
-        switch (msg->command()) {
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
-                auto index = cursor_ % actors_.size();
-                ++cursor_;
-                ++count_balancer;
+    // NEW API: Forward arguments to child actor (message created in child's resource)
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        // Check if we have any child actors
+        if (actors_.empty()) {
+            std::cerr << "Error: No child actors available" << std::endl;
+            return actor_zeta::make_error_future<R>(resource_);
+        }
 
-                // Forward the message to the selected actor
-                auto child_future = actors_[index]->enqueue_impl<R>(std::move(msg));
+        // Balancer logic: forward to child actor using round-robin
+        auto index = cursor_ % actors_.size();
+        ++cursor_;
+        ++count_balancer;
 
-                // Execute child immediately if needed (inline execution to avoid deadlock)
-                if (child_future.needs_scheduling()) {
-                    // Process child's message immediately on this thread
-                    auto& child = actors_[index];
-                    while (!child_future.is_ready()) {
-                        child->resume(1);  // Process one message
-                    }
-                }
+        // Forward arguments to child actor (child creates message in its own resource)
+        auto child_future = actors_[index]->template enqueue_impl<R>(
+            sender,
+            cmd,
+            std::forward<Args>(args)...
+        );
 
-                // Extract result from child future
-                if constexpr (std::is_same_v<R, void>) {
-                    std::move(child_future).get();  // Wait for completion
-                } else {
-                    // For non-void: get result but we'll return it via future_state below
-                }
-
-                // Create future_state<R> for balancer's return value (already ready)
-                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
-                                                 alignof(actor_zeta::detail::future_state<R>));
-                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
-
-                // Set result immediately (balancer executed synchronously)
-                if constexpr (std::is_same_v<R, void>) {
-                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, int{0}));
-                } else {
-                    R result = std::move(child_future).get();  // Get result from child
-                    state->set_result_rtt(actor_zeta::detail::rtt(resource_, std::move(result)));
-                }
-
-                // Return async future (already in ready state)
-                return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
-            }
-            default: {
-                std::cerr << "unknown command" << std::endl;
-                // Return invalid future for unknown commands
-                void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
-                                                 alignof(actor_zeta::detail::future_state<R>));
-                auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
-                state->set_state(actor_zeta::detail::future_state_enum::error);
-                return unique_future<R>(state, false);
+        // Execute child immediately if needed (inline execution to avoid deadlock)
+        if (child_future.needs_scheduling()) {
+            auto& child = actors_[index];
+            while (!child_future.available()) {
+                child->resume(1);  // Process one message
             }
         }
+
+        // Create future_state<R> for balancer's return value
+        void* mem = resource_->allocate(sizeof(actor_zeta::detail::future_state<R>),
+                                         alignof(actor_zeta::detail::future_state<R>));
+        auto* state = new (mem) actor_zeta::detail::future_state<R>(resource_);
+
+        // Extract result from child and set immediately
+        if constexpr (std::is_same_v<R, void>) {
+            std::move(child_future).get();  // Wait for completion
+            state->set_ready();  // Mark as ready for void
+        } else {
+            R result = std::move(child_future).get();  // Get result from child
+            state->set_value(std::move(result));  // Set value directly (ZERO ALLOCATION!)
+        }
+
+        // Return async future (already in ready state)
+        return unique_future<R>(state, false);  // needs_scheduling=false (sync execution)
     }
 
 protected:
 
 private:
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::scheduler::sharing_scheduler* e_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
 };
@@ -239,7 +230,7 @@ int main() {
 
     // Verify round-robin distribution
     bool success = (count_balancer == 6) && (count_insert == 3) && (count_update == 2) && (count_remove == 1);
-    std::cerr << "\nTest result: " << (success ? "PASSED ✓" : "FAILED ✗") << std::endl;
+    std::cerr << "\nTest result: " << (success ? "PASSED" : "FAILED") << std::endl;
 
     scheduler->stop();
     return success ? 0 : 1;

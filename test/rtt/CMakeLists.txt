@@ -31,6 +31,7 @@ include(Catch)
 # Increase timeout for all tests in this executable (especially rt_tuple with sanitizers)
 # ASan makes test ~10x slower due to debug output
 # TSan makes test ~100x slower due to instrumentation
+# Large test data (1024 maps with 1023 elements each) requires extended timeout
 catch_discover_tests(${PROJECT_NAME}
-    PROPERTIES TIMEOUT 300
+    PROPERTIES TIMEOUT 600
 )

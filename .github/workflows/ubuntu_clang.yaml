@@ -13,26 +13,14 @@ jobs:
   build:
     strategy:
       matrix:
-        cxx_standard: [17, 20]
+        cxx_standard: [20]
         build_type: ["Release", "Debug"]
         configuration: [
-          #{"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"10"},
-          #{"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"11"},
-          #{"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"12"},
-          #{"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"13"},
-          #{"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"14"},
-          #{"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"15"},
-          {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"16"},
-
-          #{"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"13"},
-          #{"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"14"},
-          #{"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"15"},
-          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"16"}
+          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"14"},
+          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"16"},
+          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"17"},
+          {"UBUNTU_VERSION":"22.04", "UBUNTU_RELEASE":"jammy", "TOOLCHAIN_VERSION":"18"}
         ]
-        exclude:
-          # Clang 10 has incomplete C++20 support
-          - configuration: {"UBUNTU_VERSION":"20.04", "UBUNTU_RELEASE":"focal", "TOOLCHAIN_VERSION":"10"}
-            cxx_standard: 20
 
     runs-on: ubuntu-latest
     container:

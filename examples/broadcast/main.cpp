@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
@@ -13,8 +14,9 @@ using actor_zeta::pmr::memory_resource;
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
     // Request-response methods (return results automatically via promise)
-    std::size_t download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/);
-    std::size_t work_data_with_result(const std::string& data, const std::string& /*operatorName*/);
+    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
+    actor_zeta::unique_future<std::size_t> download_with_result(std::string url, std::string /*user*/, std::string /*password*/);
+    actor_zeta::unique_future<std::size_t> work_data_with_result(std::string data, std::string /*operatorName*/);
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &worker_t::download_with_result,
@@ -22,46 +24,44 @@ public:
     >;
 
     worker_t(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<worker_t>(ptr)
-        , download_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::download_with_result))
-        , work_data_with_result_(actor_zeta::make_behavior(resource(), this, &worker_t::work_data_with_result)) {
+        : actor_zeta::basic_actor<worker_t>(ptr) {
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         std::cerr << "[Worker " << id() << "] behavior() called, cmd=" << cmd
-                  << ", error_before=" << static_cast<int>(msg->error()) << std::endl;
+                  << ", state_before=" << static_cast<int>(msg->state()) << std::endl;
 
         switch (cmd) {
             case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>: {
-                download_with_result_(msg);
-                std::cerr << "[Worker " << id() << "] After handler, error=" << static_cast<int>(msg->error()) << std::endl;
-                break;
+                auto result = actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
+                std::cerr << "[Worker " << id() << "] After handler, state=" << static_cast<int>(msg->state()) << std::endl;
+                return result;
             }
             case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>: {
-                work_data_with_result_(msg);
-                break;
+                return actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
             }
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
-    actor_zeta::behavior_t download_with_result_;
-    actor_zeta::behavior_t work_data_with_result_;
     std::string tmp_;
 };
 
 // Request-response implementations - automatically return results via promise
-inline std::size_t worker_t::download_with_result(const std::string& url, const std::string& /*user*/, const std::string& /*password*/) {
+inline actor_zeta::unique_future<std::size_t> worker_t::download_with_result(std::string url, std::string /*user*/, std::string /*password*/) {
     std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
-    tmp_ = url;
+    tmp_ = std::move(url);
     std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
-    return tmp_.size(); // Return downloaded size
+    std::size_t result = tmp_.size(); // Return downloaded size
+    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
 }
 
-inline std::size_t worker_t::work_data_with_result(const std::string& data, const std::string& /*operatorName*/) {
-    tmp_ = data;
-    return tmp_.size(); // Return processed size
+inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(std::string data, std::string /*operatorName*/) {
+    tmp_ = std::move(data);
+    std::size_t result = tmp_.size(); // Return processed size
+    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
 }
 
 /// non thread safe
@@ -72,7 +72,6 @@ public:
     supervisor_lite(memory_resource* ptr)
         : actor_zeta::base::actor_mixin<supervisor_lite>()
         , resource_(ptr)
-        , create_(actor_zeta::make_behavior(resource_,  this, &supervisor_lite::create))
         , e_(new actor_zeta::scheduler::sharing_scheduler(2, 1000)) {
         e_->start();
     }
@@ -84,17 +83,19 @@ public:
         delete e_;
     }
 
-    void create() {
+    actor_zeta::unique_future<void> create() {
         auto ptr = actor_zeta::spawn<worker_t>(resource_);
         actors_.emplace_back(std::move(ptr));
         ++size_actors_;
+        return actor_zeta::make_ready_future_void(resource_);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>) {
-            create_(msg);
+            return actor_zeta::dispatch(this, &supervisor_lite::create, msg);
         }
+        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -117,9 +118,19 @@ public:
         }
     }
 
-    template<typename R>
-    unique_future<R> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
-        return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
+    // NEW API: Forward arguments to enqueue_sync_impl (message created in receiver's resource)
+    template<typename R, typename... Args>
+    unique_future<R> enqueue_impl(
+        actor_zeta::base::address_t sender,
+        actor_zeta::mailbox::message_id cmd,
+        Args&&... args
+    ) {
+        return enqueue_sync_impl<R>(
+            sender,
+            cmd,
+            [this](auto* msg) { behavior(msg); },
+            std::forward<Args>(args)...
+        );
     }
 
 protected:
@@ -130,7 +141,6 @@ private:
     }
 
     actor_zeta::pmr::memory_resource* resource_;
-    actor_zeta::behavior_t create_;
     actor_zeta::scheduler::sharing_scheduler* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};

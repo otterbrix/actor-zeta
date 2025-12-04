@@ -3,36 +3,72 @@
 #include <actor-zeta/base/forwards.hpp>
 #include <actor-zeta/base/dispatch_traits.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
+#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/make_message.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 
 namespace actor_zeta {
 
 namespace detail {
+
+    // =========================================================================
+    // Compile-time argument validation for send()
+    // =========================================================================
+
     template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
     inline auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
         -> typename Actor::template unique_future<
-            typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>
+            unwrap_future_t<typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>>
     {
         using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
-        using result_type = typename callable_trait::result_type;
+        using method_result_type = typename callable_trait::result_type;
+        using expected_args = typename callable_trait::args_types;
+        using provided_args = type_traits::type_list<Args...>;
+
+        // =====================================================================
+        // VALIDATION 1: Argument count must match
+        // =====================================================================
+        constexpr size_t expected_count = callable_trait::number_of_arguments;
+        constexpr size_t provided_count = sizeof...(Args);
+
+        static_assert(
+            expected_count == provided_count,
+            "send(): argument count mismatch - check method signature"
+        );
+
+        // =====================================================================
+        // VALIDATION 2: Argument types must be compatible (convertible)
+        // =====================================================================
+        static_assert(
+            args_compatible_v<expected_args, provided_args>,
+            "send(): argument types are not compatible with method signature"
+        );
+
+        // =====================================================================
+        // VALIDATION 3: All arguments must be storable in RTT
+        // (move/copy constructible, not abstract, not reference)
+        // =====================================================================
+        static_assert(
+            all_args_storable_v<Args...>,
+            "send(): all arguments must be storable in message "
+            "(move/copy constructible, not abstract)"
+        );
+
+        // Unwrap unique_future<T> returns to T for handler integration
+        using actual_result_type = unwrap_future_t<method_result_type>;
 
         Actor* typed_actor;
         if constexpr (std::is_same_v<ActorPtr, base::address_t>) {
-            // address_t provides operator->() which returns the underlying actor pointer
             typed_actor = static_cast<Actor*>(actor->operator->());
         } else {
-            // Direct actor pointer
             typed_actor = actor;
         }
 
-        auto msg = detail::make_message(
-            typed_actor->resource(),
+        return typed_actor->template enqueue_impl<actual_result_type>(
             sender,
             mailbox::make_message_id(ActionId),
-            std::forward<Args>(args)...);
-
-        return typed_actor->template enqueue_impl<result_type>(std::move(msg));
+            std::forward<Args>(args)...
+        );
     }
 } // namespace detail
 
@@ -40,7 +76,7 @@ namespace detail {
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
     [[nodiscard]] inline auto send(ActorPtr* actor, Sender sender, Method method, Args&&... args)
         -> typename Actor::template unique_future<
-            typename type_traits::callable_trait<Method>::result_type>
+            detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
     {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
 
@@ -58,7 +94,7 @@ namespace detail {
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
     [[nodiscard]] inline auto send(base::address_t target, Sender sender, Method method, Args&&... args)
         -> typename Actor::template unique_future<
-            typename type_traits::callable_trait<Method>::result_type>
+            detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
     {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
 

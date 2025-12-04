@@ -1,3 +1,5 @@
+name: macOS CI
+
 on:
   pull_request:
   push:
@@ -11,10 +13,11 @@ jobs:
   build:
     strategy:
       matrix:
-        cxx_standard: [17, 20]
+        cxx_standard: [20]
         build_type: ["Release", "Debug"]
+        os: ["macos-14", "macos-15"]
 
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v3

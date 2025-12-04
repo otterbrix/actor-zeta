@@ -85,10 +85,21 @@ namespace actor_zeta { namespace detail {
             for (std::size_t i = 0; i < objects_idx_; ++i) {
                 objects_[i].destroyer(tmp + objects_[i].offset);
             }
+
+            // Note: capacity_ stores the actual data size, not aligned size
+            // So we need to recalculate aligned size for deallocation
+            // However, the actual allocated size is implementation-defined
+            // For simplicity, we'll use the formula that matches allocation
+            if (allocation) {
+                // Align capacity to objects_t boundary
+                constexpr std::size_t objects_alignment = alignof(objects_t);
+                std::size_t aligned_capacity = (capacity_ + objects_alignment - 1) & ~(objects_alignment - 1);
+                std::size_t allocated_size = aligned_capacity + objects_idx_ * sizeof(objects_t);
+                memory_resource_->deallocate(allocation, allocated_size);
+            }
+
             volume_ = 0;
             objects_idx_ = 0;
-            if (allocation)
-                memory_resource_->deallocate(allocation, capacity_ + capacity_ * sizeof(objects_t));
             allocation = nullptr;
             data_ = nullptr;
             objects_ = nullptr;
@@ -116,11 +127,16 @@ namespace actor_zeta { namespace detail {
 
             constexpr std::size_t sz = getSize<0, Args...>();
             capacity_ = sz;
-            allocation = memory_resource_->allocate(capacity_ + capacity_ * sizeof(objects_t));
+
+            // Align capacity to objects_t boundary to prevent misaligned access
+            constexpr std::size_t objects_alignment = alignof(objects_t);
+            std::size_t aligned_capacity = (capacity_ + objects_alignment - 1) & ~(objects_alignment - 1);
+
+            allocation = memory_resource_->allocate(aligned_capacity + sizeof...(Args) * sizeof(objects_t));
             assert(allocation);
             data_ = static_cast<char*>(allocation);
             assert(data_);
-            objects_ = static_cast<objects_t*>(static_cast<void*>(data_ + capacity_));
+            objects_ = static_cast<objects_t*>(static_cast<void*>(data_ + aligned_capacity));
             assert(objects_);
 
             EXPAND_VARIADIC(push_back_no_realloc(std::forward<Args>(args)));
@@ -332,10 +348,26 @@ namespace actor_zeta { namespace detail {
         left.swap(right);
     }
 
+    /// @brief Extract argument from rtt at index I according to type list List
+    ///
+    /// Handles different parameter types:
+    /// - const T&: return const reference to stored value (no copy, no move)
+    /// - T: use std::move to support move-only types (e.g., unique_ptr)
+    ///
+    /// Note: Non-const lvalue references (T&) are forbidden by dispatch() static_assert
     template<std::size_t I, class List>
-    typename type_traits::type_list_at_t<List, I> get(rtt& r) {
-        return static_cast<typename type_traits::type_list_at_t<List, I>>(
-            r.get<typename type_traits::decay_t<type_traits::type_list_at_t<List, I>>>(I));
+    auto get(rtt& r) -> typename type_traits::type_list_at_t<List, I> {
+        using requested_type = typename type_traits::type_list_at_t<List, I>;
+        using decay_type = typename type_traits::decay_t<requested_type>;
+
+        if constexpr (std::is_lvalue_reference_v<requested_type>) {
+            // For const T& (non-const T& is forbidden by dispatch static_assert)
+            // Return reference to stored value
+            return r.get<decay_type>(I);
+        } else {
+            // For value types: use std::move to support move-only types
+            return std::move(r.get<decay_type>(I));
+        }
     }
 
 }} // namespace actor_zeta::detail

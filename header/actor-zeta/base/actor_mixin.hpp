@@ -2,9 +2,9 @@
 
 #include <actor-zeta/base/address.hpp>
 #include <actor-zeta/detail/memory_resource.hpp>
-#include <actor-zeta/detail/pmr/polymorphic_allocator.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/future.hpp>
+#include <actor-zeta/make_message.hpp>
 
 namespace actor_zeta { namespace base {
 
@@ -14,7 +14,6 @@ namespace actor_zeta { namespace base {
     template<typename Derived>
     class actor_mixin {
     public:
-        // ===== Actor ID type =====
         class id_t final {
         public:
             id_t() = delete;
@@ -68,8 +67,6 @@ namespace actor_zeta { namespace base {
             actor_mixin* impl_{nullptr};
         };
 
-        // ===== Placement new/delete operators =====
-        // CRITICAL: These control actor allocation - only placement new with tag is allowed
         struct placement_tag {};
         constexpr static placement_tag placement = {};
 
@@ -79,20 +76,13 @@ namespace actor_zeta { namespace base {
 
         static void operator delete(void*, void*, placement_tag) noexcept {}
 
-        static void operator delete(void* ptr) noexcept {
-            // Empty - actor managed by unique_ptr with custom deleter
-            // Actual deallocation done by pmr::deleter_t
-            (void)ptr;
-        }
+        static void operator delete(void* ptr) noexcept { (void)ptr; }
 
-        // Explicitly deleted operators to prevent incorrect usage
         static void* operator new(size_t, void* ptr) = delete;
         static void* operator new(size_t) = delete;
         static void* operator new[](size_t) = delete;
         static void operator delete[](void*) = delete;
 
-        // ===== Deleted copy and move operations =====
-        // CRITICAL: Actors must not be copied or moved - only unique_ptr ownership
         actor_mixin(const actor_mixin&) = delete;
         actor_mixin& operator=(const actor_mixin&) = delete;
         actor_mixin(actor_mixin&&) = delete;
@@ -109,20 +99,29 @@ namespace actor_zeta { namespace base {
         }
 
         /// @brief Get polymorphic allocator for type T
-        /// @note Uses CRTP to call derived class's resource() method
         template<class T>
         pmr::polymorphic_allocator<T> allocator() const noexcept {
             return {static_cast<const Derived*>(this)->resource()};
         }
 
-        /// @brief Helper for supervisors - simplifies enqueue_impl<R>() implementation
-        /// @note Supervisor calls behavior() synchronously, but returns async future (already ready)
-        /// @note Supervisor just calls: return enqueue_sync_impl<R>(std::move(msg), [this](auto* msg) { behavior(msg); });
-        /// @note Uses CRTP to call derived class's resource() method
-        template<typename R, typename BehaviorFunc>
-        unique_future<R> enqueue_sync_impl(mailbox::message_ptr msg, BehaviorFunc&& behavior_func) {
+        /// @brief Sync enqueue for supervisors - calls behavior synchronously, returns ready future
+        template<typename R, typename BehaviorFunc, typename... Args>
+        unique_future<R> enqueue_sync_impl(
+            base::address_t sender,
+            mailbox::message_id cmd,
+            BehaviorFunc&& behavior_func,
+            Args&&... args
+        ) {
             auto* derived = static_cast<Derived*>(this);
             auto* res = derived->resource();
+
+            // Create message in receiver's resource (avoid cross-arena migration)
+            auto msg = detail::make_message(
+                res,
+                std::move(sender),
+                cmd,
+                std::forward<Args>(args)...
+            );
 
             // Allocate future_state<R> for result with refcount=2 (future + supervisor code)
             void* mem = res->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
@@ -134,7 +133,10 @@ namespace actor_zeta { namespace base {
 
             // Slot is now ready (behavior already executed)
             // Return async future (already in ready state, no waiting needed)
-            return unique_future<R>{slot, false};  // needs_scheduling=false (sync execution, no mailbox)
+            // Use adopt_ref to take ownership of initial ref (ref_count=1 from constructor)
+            // Message's intrusive_ptr adds ref_count=2, ~message decrements to 1
+            // adopt_ref means unique_future takes initial ref without incrementing
+            return unique_future<R>{adopt_ref, slot, false};  // needs_scheduling=false (sync execution, no mailbox)
         }
 
     protected:
