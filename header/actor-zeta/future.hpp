@@ -684,8 +684,8 @@ namespace actor_zeta {
             promise_type_base() noexcept : resource_(nullptr), state_(nullptr) {}
 
             template<typename First, typename... Args>
-            promise_type_base(First&& first, Args&&...) noexcept
-                : resource_(extract_resource_impl(first))
+            promise_type_base(First&& first, Args&&... args) noexcept
+                : resource_(extract_resource_from_args(std::forward<First>(first), std::forward<Args>(args)...))
                 , state_(nullptr) {}
 
             ~promise_type_base() noexcept = default;
@@ -721,6 +721,25 @@ namespace actor_zeta {
             // Direct overload for pmr::memory_resource* - enables lambda-coroutines
             static pmr::memory_resource* extract_resource_impl(pmr::memory_resource* res) noexcept {
                 return res;
+            }
+
+            // Base case: no arguments left
+            static pmr::memory_resource* extract_resource_from_args() noexcept {
+                return nullptr;
+            }
+
+            // Recursive search through all arguments for memory_resource
+            // This is needed for lambda-coroutines with captures, where the closure
+            // object is passed as the first argument to the promise constructor,
+            // and the actual parameters (including pmr::memory_resource*) follow after.
+            template<typename First, typename... Rest>
+            static pmr::memory_resource* extract_resource_from_args(First&& first, Rest&&... rest) noexcept {
+                auto res = extract_resource_impl(std::forward<First>(first));
+                if (res != nullptr) return res;
+                if constexpr (sizeof...(Rest) > 0) {
+                    return extract_resource_from_args(std::forward<Rest>(rest)...);
+                }
+                return nullptr;
             }
 
             pmr::memory_resource* resource_;
