@@ -626,8 +626,17 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Resume stored coroutine (final - enables devirtualization)
-        /// @note Uses resume_coro_handle_ - the coroutine waiting for this state to become ready
+        /// @note For coroutine's own state: resumes owning_coro_handle_ (set by promise)
+        /// @note For awaited state: resumes resume_coro_handle_ (set by awaiter)
         void resume_coroutine() noexcept final {
+            // If we own a coroutine (from promise), resume it
+            // This is used when poll_pending() resumes a coroutine via its own state
+            if (owns_coroutine_ && owning_coro_handle_ && !owning_coro_handle_.done()) {
+                owning_coro_handle_.resume();
+                return;
+            }
+            // Otherwise, resume the awaiting coroutine (from awaiter)
+            // This is used when a state becomes ready and needs to wake its awaiter
             if (resume_coro_handle_ && !resume_coro_handle_.done()) {
                 resume_coro_handle_.resume();
             }
