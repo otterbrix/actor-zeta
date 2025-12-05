@@ -71,9 +71,9 @@ TEST_CASE("dispatch_traits - compile-time msg_id generation") {
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
 
     // message_id has default priority flag, so check that ActionId in lower bits is correct
-    REQUIRE((id1.integer_value() & 0xFFFFFFFF) == 0);
-    REQUIRE((id2.integer_value() & 0xFFFFFFFF) == 1);
-    REQUIRE((id3.integer_value() & 0xFFFFFFFF) == 2);
+    REQUIRE((id1 & 0xFFFFFFFF) == 0);
+    REQUIRE((id2 & 0xFFFFFFFF) == 1);
+    REQUIRE((id3 & 0xFFFFFFFF) == 2);
 }
 
 TEST_CASE("dispatch_traits - unique message IDs") {
@@ -93,9 +93,9 @@ TEST_CASE("dispatch_traits - sequential indexing") {
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
 
     // Extract ActionId from lower bits
-    constexpr uint64_t action1 = id1.integer_value() & 0xFFFFFFFF;
-    constexpr uint64_t action2 = id2.integer_value() & 0xFFFFFFFF;
-    constexpr uint64_t action3 = id3.integer_value() & 0xFFFFFFFF;
+    constexpr uint64_t action1 = id1 & 0xFFFFFFFF;
+    constexpr uint64_t action2 = id2 & 0xFFFFFFFF;
+    constexpr uint64_t action3 = id3 & 0xFFFFFFFF;
 
     REQUIRE(action1 == 0);
     REQUIRE(action2 == 1);

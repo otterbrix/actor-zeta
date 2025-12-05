@@ -320,7 +320,32 @@ namespace actor_zeta {
             }
 
             detail::suspend_never initial_suspend() noexcept { return {}; }
-            detail::suspend_always final_suspend() noexcept { return {}; }
+
+            /// @brief Final awaiter with symmetric transfer support
+            /// When coroutine completes, directly resumes awaiting coroutine (if any)
+            /// This avoids scheduler roundtrip for chained coroutines
+            auto final_suspend() noexcept {
+                struct final_awaiter {
+                    coroutine_state_type* state_;
+
+                    bool await_ready() noexcept { return false; }
+
+                    /// @brief Symmetric transfer at coroutine completion
+                    /// @return Continuation handle if someone is waiting, else noop
+                    std::coroutine_handle<> await_suspend(
+                        std::coroutine_handle<promise_type> /*h*/
+                    ) noexcept {
+                        // If there's a waiting coroutine, resume it directly
+                        if (auto cont = state_->take_continuation()) {
+                            return cont;  // Symmetric transfer!
+                        }
+                        return std::noop_coroutine();  // No waiter - stay suspended
+                    }
+
+                    void await_resume() noexcept {}
+                };
+                return final_awaiter{this->state_};
+            }
 
             template<typename U>
             auto await_transform(unique_future<U>&& future) noexcept {
@@ -595,25 +620,32 @@ namespace actor_zeta {
             return future_.available();
         }
 
-        bool await_suspend(std::coroutine_handle<> handle) noexcept {
+        /// @brief Symmetric transfer version of await_suspend
+        /// @return Handle to resume (caller for immediate resume, noop for suspend)
+        /// @note Symmetric transfer avoids extra suspend/resume overhead in coroutine chains
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
+            // If already ready, resume caller immediately (symmetric transfer)
             if (future_.available()) {
-                return false;
+                return caller;
             }
 
             auto* state = future_.get_state();
             if (!state) {
-                return false;
+                return caller;  // No state = immediate resume
             }
 
-            state->set_coroutine(handle);
+            // Store continuation for later resumption
+            state->set_coroutine(caller);
             if (promise_state_) {
                 promise_state_->set_awaiting_on(state);
             }
 
+            // Double-check after setting up (race condition protection)
             if (future_.available()) {
-                return false;
+                return caller;  // Resume immediately
             }
-            return true;
+
+            return std::noop_coroutine();  // Suspend
         }
 
         /// @brief Resume and return result (void or T)

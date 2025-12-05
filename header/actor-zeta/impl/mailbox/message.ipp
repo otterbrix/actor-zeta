@@ -12,7 +12,7 @@ namespace actor_zeta { namespace mailbox {
     }
 
     message::operator bool() {
-        return command_.integer_value() != 0 || bool(sender_) || !body_.empty();
+        return command_ != 0 || bool(sender_) || !body_.empty();
     }
 
     message::message(actor_zeta::pmr::memory_resource* resource, address_t sender, message_id name)
@@ -70,7 +70,7 @@ namespace actor_zeta { namespace mailbox {
     }
 
     bool message::is_high_priority() const {
-        return command_.priority() == detail::high_message_priority;
+        return message_priority(command_) == detail::high_message_priority;
     }
 
     auto message::body() -> actor_zeta::detail::rtt& {

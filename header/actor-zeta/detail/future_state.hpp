@@ -249,6 +249,16 @@ namespace actor_zeta { namespace detail {
             awaiting_on_ = nullptr;
         }
 
+        /// @brief Atomically take continuation handle for symmetric transfer
+        /// @return The stored continuation handle, or empty handle if none
+        /// @note Clears the stored handle after taking (single-shot)
+        /// @note Used by final_suspend to resume awaiting coroutine directly
+        [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
+            auto h = resume_coro_handle_;
+            resume_coro_handle_ = {};
+            return h;
+        }
+
 #ifndef NDEBUG
         [[nodiscard]] uint64_t generation() const noexcept { return generation_; }
 #endif
