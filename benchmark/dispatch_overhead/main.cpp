@@ -119,12 +119,166 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
 BENCHMARK(BM_OldStyleDispatch)->DenseRange(0, 4)->Unit(benchmark::kNanosecond);
 
 // =====================================================================
-// TODO: NEW STYLE with fold expression dispatch (after implementation)
+// Benchmark: Direct method call vs dispatch()
 // =====================================================================
 
-// static void BM_NewStyleDispatch(benchmark::State& state) {
-//     // Will be implemented in Phase 2-3
-// }
-// BENCHMARK(BM_NewStyleDispatch)->DenseRange(0, 4)->Unit(benchmark::kNanosecond);
+class coroutine_actor : public base::basic_actor<coroutine_actor> {
+public:
+    // Coroutine methods (no make_ready_future needed)
+    unique_future<int> compute(int x) {
+        co_return x * 2;
+    }
+
+    unique_future<void> noop() {
+        co_return;
+    }
+
+    unique_future<int> sum(int a, int b) {
+        co_return a + b;
+    }
+
+    unique_future<int> sum3(int a, int b, int c) {
+        co_return a + b + c;
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &coroutine_actor::compute,
+        &coroutine_actor::noop,
+        &coroutine_actor::sum,
+        &coroutine_actor::sum3
+    >;
+
+    explicit coroutine_actor(pmr::memory_resource* resource)
+        : base::basic_actor<coroutine_actor>(resource) {}
+
+    unique_future<void> behavior(mailbox::message* msg) {
+        auto cmd = msg->command();
+        if (cmd == msg_id<coroutine_actor, &coroutine_actor::compute>) {
+            dispatch(this, &coroutine_actor::compute, msg);
+        } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::noop>) {
+            dispatch(this, &coroutine_actor::noop, msg);
+        } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::sum>) {
+            dispatch(this, &coroutine_actor::sum, msg);
+        } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::sum3>) {
+            dispatch(this, &coroutine_actor::sum3, msg);
+        }
+        co_return;
+    }
+};
+
+// Direct method call (baseline - no dispatch overhead)
+static void BM_DirectCall_Coroutine(benchmark::State& state) {
+    auto resource = pmr::get_default_resource();
+    auto actor = spawn<coroutine_actor>(resource);
+
+    for (auto _ : state) {
+        auto future = actor->compute(42);
+        int result = std::move(future).get();
+        benchmark::DoNotOptimize(result);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_DirectCall_Coroutine)->Unit(benchmark::kNanosecond);
+
+// dispatch() with 0 args
+static void BM_Dispatch_0Args(benchmark::State& state) {
+    auto resource = pmr::get_default_resource();
+    auto actor = spawn<coroutine_actor>(resource);
+
+    // Create message once, reuse
+    auto msg = detail::make_message(
+        resource,
+        actor->address(),
+        msg_id<coroutine_actor, &coroutine_actor::noop>
+    );
+
+    for (auto _ : state) {
+        auto future = dispatch(actor.get(), &coroutine_actor::noop, msg.get());
+        benchmark::DoNotOptimize(future);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Dispatch_0Args)->Unit(benchmark::kNanosecond);
+
+// dispatch() with 1 arg
+static void BM_Dispatch_1Arg(benchmark::State& state) {
+    auto resource = pmr::get_default_resource();
+    auto actor = spawn<coroutine_actor>(resource);
+
+    for (auto _ : state) {
+        auto msg = detail::make_message(
+            resource,
+            actor->address(),
+            msg_id<coroutine_actor, &coroutine_actor::compute>,
+            42
+        );
+        auto future = dispatch(actor.get(), &coroutine_actor::compute, msg.get());
+        int result = std::move(future).get();
+        benchmark::DoNotOptimize(result);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Dispatch_1Arg)->Unit(benchmark::kNanosecond);
+
+// dispatch() with 2 args
+static void BM_Dispatch_2Args(benchmark::State& state) {
+    auto resource = pmr::get_default_resource();
+    auto actor = spawn<coroutine_actor>(resource);
+
+    for (auto _ : state) {
+        auto msg = detail::make_message(
+            resource,
+            actor->address(),
+            msg_id<coroutine_actor, &coroutine_actor::sum>,
+            10, 20
+        );
+        auto future = dispatch(actor.get(), &coroutine_actor::sum, msg.get());
+        int result = std::move(future).get();
+        benchmark::DoNotOptimize(result);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Dispatch_2Args)->Unit(benchmark::kNanosecond);
+
+// dispatch() with 3 args
+static void BM_Dispatch_3Args(benchmark::State& state) {
+    auto resource = pmr::get_default_resource();
+    auto actor = spawn<coroutine_actor>(resource);
+
+    for (auto _ : state) {
+        auto msg = detail::make_message(
+            resource,
+            actor->address(),
+            msg_id<coroutine_actor, &coroutine_actor::sum3>,
+            10, 20, 30
+        );
+        auto future = dispatch(actor.get(), &coroutine_actor::sum3, msg.get());
+        int result = std::move(future).get();
+        benchmark::DoNotOptimize(result);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Dispatch_3Args)->Unit(benchmark::kNanosecond);
+
+// Full send/dispatch/resume cycle for comparison
+static void BM_FullCycle_Coroutine(benchmark::State& state) {
+    auto resource = pmr::get_default_resource();
+    auto actor = spawn<coroutine_actor>(resource);
+
+    for (auto _ : state) {
+        auto f = send(actor.get(), actor->address(), &coroutine_actor::compute, 42);
+        while (!f.available()) { actor->resume(1); }
+        int result = std::move(f).get();
+        benchmark::DoNotOptimize(result);
+    }
+
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_FullCycle_Coroutine)->Unit(benchmark::kNanosecond);
 
 BENCHMARK_MAIN();

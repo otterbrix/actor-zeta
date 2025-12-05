@@ -5,8 +5,10 @@
 #include <actor-zeta/detail/memory_resource.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/detail/rtt.hpp>
+#include <actor-zeta/detail/coro_frame_header.hpp>
 
 #include <cassert>
+#include <new>
 #include <chrono>
 #include <thread>
 #include <type_traits>
@@ -308,8 +310,7 @@ namespace actor_zeta {
                 void* mem = resource_->allocate(sizeof(coroutine_state_type), alignof(coroutine_state_type));
                 state_ = new (mem) coroutine_state_type(resource_);
 
-                auto handle = std::coroutine_handle<struct promise_type>::from_promise(
-                    static_cast<struct promise_type&>(*this));
+                auto handle = std::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
                 state_->set_coroutine_owning(handle);  // This state owns the coroutine
 
                 // For void: coroutine_state_type* (future_state<void>*) → state_type* (future_state_base*)
@@ -434,6 +435,44 @@ namespace actor_zeta {
         // Final promise_type selects correct base
         struct promise_type : promise_type_return<T, is_void_type> {
             using promise_type_return<T, is_void_type>::promise_type_return;
+
+            // =========================================================================
+            // Custom coroutine frame allocation using actor's memory_resource
+            // =========================================================================
+
+            /// @brief Allocate coroutine frame using actor's memory_resource
+            /// @note Compiler passes coroutine arguments to operator new
+            /// @note First argument is typically 'this' pointer (actor*)
+            template<typename First, typename... Args>
+            static void* operator new(std::size_t size, First&& first, Args&&... args) {
+                auto* res = promise_type_base::extract_resource_from_args(
+                    std::forward<First>(first),
+                    std::forward<Args>(args)...
+                );
+                return detail::allocate_coro_frame(res, size);
+            }
+
+            /// @brief Matching placement delete (called if promise constructor throws)
+            /// @note Required for exception safety, though we compile with -fno-exceptions
+            template<typename First, typename... Args>
+            static void operator delete(void* ptr, std::size_t size, First&&, Args&&...) noexcept {
+                detail::deallocate_coro_frame(ptr, size);
+            }
+
+            /// @brief Regular sized delete (called when coroutine is destroyed)
+            /// @note Uses header to recover memory_resource pointer
+            static void operator delete(void* ptr, std::size_t size) noexcept {
+                detail::deallocate_coro_frame(ptr, size);
+            }
+
+            /// @brief Fallback for compilers that don't pass size
+            /// @note Should not be called in practice with C++20 coroutines
+            static void operator delete(void* ptr) noexcept {
+                // Cannot recover size - this indicates a compiler bug or misuse
+                // Best effort: assume minimum frame size
+                assert(false && "Unsized delete called on coroutine frame - please report!");
+                detail::deallocate_coro_frame(ptr, 64);  // Minimum reasonable size
+            }
         };
 
     private:

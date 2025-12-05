@@ -12,9 +12,10 @@ namespace actor_zeta {
 
 namespace detail {
 
-    /// @brief Set up result chaining from method_future to msg->result_slot()
+    /// @brief Set up result chaining from method_future to msg->result_slot() (inline version)
+    /// @note Unified for both void and non-void types using if constexpr
     template<typename T>
-    void setup_result_chaining(
+    inline void setup_result_chaining_inline(
         unique_future<T>& method_future,
         mailbox::message* msg
     ) noexcept {
@@ -23,48 +24,39 @@ namespace detail {
             return;
         }
 
-        auto* result_slot = static_cast<detail::future_state<T>*>(result_slot_base.get());
+        if constexpr (std::is_void_v<T>) {
+            auto* result_slot = static_cast<detail::future_state<void>*>(result_slot_base.get());
 
-        if (method_future.available()) {
-            result_slot->set_value(std::move(method_future).get());
-            return;
+            if (method_future.available()) {
+                result_slot->set_ready();
+                return;
+            }
+
+            auto* method_state = method_future.get_state();
+            if (!method_state) {
+                assert(false && "Non-available void future has no state!");
+                result_slot->set_state(detail::future_state_enum::error);
+                return;
+            }
+
+            method_state->set_forward_target_void(result_slot);
+        } else {
+            auto* result_slot = static_cast<detail::future_state<T>*>(result_slot_base.get());
+
+            if (method_future.available()) {
+                result_slot->set_value(std::move(method_future).get());
+                return;
+            }
+
+            auto* method_state = method_future.get_state();
+            if (!method_state) {
+                assert(false && "Non-available typed future has no state!");
+                result_slot->set_state(detail::future_state_enum::error);
+                return;
+            }
+
+            method_state->set_forward_target(result_slot);
         }
-
-        auto* method_state = method_future.get_state();
-        if (!method_state) {
-            assert(false && "Non-available typed future has no state!");
-            result_slot->set_state(detail::future_state_enum::error);
-            return;
-        }
-
-        method_state->set_forward_target(result_slot);
-    }
-
-    /// @brief Specialization for void futures
-    inline void setup_result_chaining(
-        unique_future<void>& method_future,
-        mailbox::message* msg
-    ) noexcept {
-        auto result_slot_base = msg->result_slot();
-        if (!result_slot_base) {
-            return;
-        }
-
-        auto* result_slot = static_cast<detail::future_state<void>*>(result_slot_base.get());
-
-        if (method_future.available()) {
-            result_slot->set_ready();
-            return;
-        }
-
-        auto* method_state = method_future.get_state();
-        if (!method_state) {
-            assert(false && "Non-available void future has no state!");
-            result_slot->set_state(detail::future_state_enum::error);
-            return;
-        }
-
-        method_state->set_forward_target_void(result_slot);
     }
 
 } // namespace detail
@@ -117,6 +109,11 @@ namespace detail {
 
     /// @brief Dispatch message to actor method, returns unique_future with result
     ///
+    /// Optimized version:
+    /// - Unified code path for all argument counts using index_sequence
+    /// - No lambda allocation for setup_chaining
+    /// - Single if constexpr for void/non-void handling
+    ///
     /// Compile-time validation:
     /// - All argument types must be valid for RTT storage
     ///
@@ -127,10 +124,10 @@ namespace detail {
         using call_trait = type_traits::get_callable_trait_t<Method>;
         using result_type = typename call_trait::result_type;
         using args_type_list = typename call_trait::args_types;
-        constexpr int args_size = call_trait::number_of_arguments;
+        constexpr std::size_t args_size = call_trait::number_of_arguments;
 
         // =====================================================================
-        // COMPILE-TIME VALIDATION: All argument types must be valid for RTT
+        // COMPILE-TIME VALIDATION
         // =====================================================================
         static_assert(
             dispatch_validation::validate_args_list_v<args_type_list>,
@@ -138,12 +135,6 @@ namespace detail {
             "(move/copy constructible, not abstract)"
         );
 
-        // =====================================================================
-        // COMPILE-TIME VALIDATION: No non-const lvalue references allowed
-        // Non-const refs (T&) are semantically wrong: RTT stores copies,
-        // changes to the copy don't affect the sender's original data.
-        // Use: T (value), const T& (read-only ref), T&& (move)
-        // =====================================================================
         static_assert(
             dispatch_validation::no_non_const_refs_v<args_type_list>,
             "dispatch(): non-const lvalue reference parameters (T&) are not allowed. "
@@ -151,66 +142,31 @@ namespace detail {
         );
 
         // =====================================================================
-        // RUNTIME VALIDATION: Message body size matches expected argument count
+        // RUNTIME VALIDATION
         // =====================================================================
         if constexpr (args_size > 0) {
-            assert(msg->body().size() == static_cast<std::size_t>(args_size) &&
+            assert(msg->body().size() == args_size &&
                    "dispatch(): message argument count mismatch");
         }
 
-        auto setup_chaining = [msg](auto& future) {
-            detail::setup_result_chaining(future, msg);
+        // =====================================================================
+        // UNIFIED DISPATCH - single code path for all cases
+        // =====================================================================
+        auto invoke_method = [&]<std::size_t... I>(std::index_sequence<I...>) {
+            if constexpr (args_size == 0) {
+                return (self->*method)();
+            } else {
+                auto& args = msg->body();
+                return (self->*method)((detail::get<I, args_type_list>(args))...);
+            }
         };
 
-        if constexpr (args_size == 0) {
-            if constexpr (std::is_void_v<result_type>) {
-                (self->*method)();
-                auto future = make_ready_future_void(self->resource());
-                setup_chaining(future);
-                return future;
-            } else {
-                auto future = (self->*method)();
-                setup_chaining(future);
-                return future;
-            }
-        } else if constexpr (args_size == 1) {
-            auto& args = msg->body();
-            using arg_type = type_traits::type_list_at_t<args_type_list, 0>;
-            using clear_arg_type = type_traits::decay_t<arg_type>;
+        auto future = invoke_method(std::make_index_sequence<args_size>{});
 
-            // Compile-time: validate single argument type
-            static_assert(
-                detail::is_valid_rtt_type_v<clear_arg_type>,
-                "dispatch(): argument type must be valid for RTT storage"
-            );
+        // Inline result chaining (no lambda overhead)
+        detail::setup_result_chaining_inline(future, msg);
 
-            // Use detail::get<> for consistency with multi-arg case
-            // (std::move is inside detail::get<> in rtt.hpp)
-            if constexpr (std::is_void_v<result_type>) {
-                (self->*method)(detail::get<0, args_type_list>(args));
-                auto future = make_ready_future_void(self->resource());
-                setup_chaining(future);
-                return future;
-            } else {
-                auto future = (self->*method)(detail::get<0, args_type_list>(args));
-                setup_chaining(future);
-                return future;
-            }
-        } else {
-            auto& args = msg->body();
-            return [&]<std::size_t... I>(std::index_sequence<I...>) {
-                if constexpr (std::is_void_v<result_type>) {
-                    (self->*method)((detail::get<I, args_type_list>(args))...);
-                    auto future = make_ready_future_void(self->resource());
-                    setup_chaining(future);
-                    return future;
-                } else {
-                    auto future = (self->*method)((detail::get<I, args_type_list>(args))...);
-                    setup_chaining(future);
-                    return future;
-                }
-            }(type_traits::make_index_sequence<args_size>{});
-        }
+        return future;
     }
 
 } // namespace actor_zeta
