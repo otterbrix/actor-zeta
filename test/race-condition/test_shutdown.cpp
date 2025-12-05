@@ -255,65 +255,61 @@ TEST_CASE("Shutdown Test 4.3: Resume during shutdown") {
 TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
     // TEST OBJECTIVE:
     // Test actor lifecycle with sequential creation and destruction.
-    // This catches shutdown race conditions in a controlled manner.
+    // Verifies that actors can be safely created and destroyed in cycles.
     //
     // SCENARIO:
-    // 1. Create actor, send message, destroy actor
-    // 2. Repeat sequentially
-    // 3. Each cycle uses its own scheduler to avoid cross-cycle interference
+    // 1. Create actor, send message, wait for completion, destroy actor
+    // 2. Repeat sequentially with different timing patterns
     //
-    // NOTE: This is a more conservative version that tests shutdown safety
-    // without the additional complexity of concurrent actor creation.
+    // NOTE: Actor MUST NOT be destroyed while running (assertion in destructor).
+    // All patterns must wait for message processing to complete before destruction.
     //
     // EXPECTED BEHAVIOR:
-    // - No use-after-free (shutdown_guard_t protection)
+    // - All messages processed successfully
     // - No memory leaks
     // - No crashes
 
     auto* resource = actor_zeta::pmr::get_default_resource();
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    scheduler->start();
 
     constexpr int NUM_CYCLES = 50;
     std::atomic<int> completed_cycles{0};
 
     for (int i = 0; i < NUM_CYCLES; ++i) {
-        auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
-        scheduler->start();
+        // Create actor
+        auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
 
-        {
-            // Create actor
-            auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
+        // Send message
+        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                                      &shutdown_test_actor::slow_task, i);
 
-            // Send message
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
-                                          &shutdown_test_actor::slow_task, i);
-
-            if (future.needs_scheduling()) {
-                scheduler->enqueue(actor.get());
-            }
-
-            // Vary destruction timing
-            switch (i % 4) {
-                case 0: // Immediate
-                    break;
-                case 1: // Yield
-                    std::this_thread::yield();
-                    break;
-                case 2: // Small sleep
-                    std::this_thread::sleep_for(std::chrono::microseconds(500));
-                    break;
-                case 3: // Wait for result
-                    if (future.available()) {
-                        (void)std::move(future).get();
-                    }
-                    break;
-            }
-
-            // Actor destroyed here
+        if (future.needs_scheduling()) {
+            scheduler->enqueue(actor.get());
         }
 
-        scheduler->stop();
+        // Vary timing BEFORE waiting for result (to test different scheduling scenarios)
+        switch (i % 4) {
+            case 0: // Immediate wait
+                break;
+            case 1: // Yield first
+                std::this_thread::yield();
+                break;
+            case 2: // Small sleep first
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+                break;
+            case 3: // No extra delay
+                break;
+        }
+
+        // Always wait for result before destroying actor
+        int result = std::move(future).get();
+        REQUIRE(result == i * 2);
+
+        // Actor destroyed here - safe because message was processed
         completed_cycles.fetch_add(1, std::memory_order_relaxed);
     }
 
+    scheduler->stop();
     REQUIRE(completed_cycles.load() == NUM_CYCLES);
 }
