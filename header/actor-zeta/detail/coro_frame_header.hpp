@@ -11,6 +11,7 @@ namespace actor_zeta::detail {
     /// Layout: [header][padding][coroutine_frame]
     struct coro_frame_header {
         pmr::memory_resource* resource;
+        std::size_t frame_size;  // Store frame size for unsized delete
 
         /// @brief Size of header with alignment padding
         /// Ensures coroutine frame starts at max_align_t boundary
@@ -41,15 +42,16 @@ namespace actor_zeta::detail {
             return nullptr;
         }
 
-        // Store resource pointer in header
+        // Store resource pointer and frame size in header
         auto* header = static_cast<coro_frame_header*>(raw);
         header->resource = res;
+        header->frame_size = frame_size;
 
         // Return pointer to coroutine frame (after header)
         return static_cast<char*>(raw) + coro_frame_header::padded_size();
     }
 
-    /// @brief Deallocate coroutine frame with header
+    /// @brief Deallocate coroutine frame with header (sized version)
     /// @param frame Pointer to coroutine frame (returned by allocate_coro_frame)
     /// @param frame_size Size of coroutine frame
     inline void deallocate_coro_frame(void* frame, std::size_t frame_size) noexcept {
@@ -61,6 +63,30 @@ namespace actor_zeta::detail {
         void* raw = static_cast<char*>(frame) - coro_frame_header::padded_size();
         auto* header = static_cast<coro_frame_header*>(raw);
 
+        const std::size_t total_size = coro_frame_header::padded_size() + frame_size;
+        const std::size_t align = alignof(std::max_align_t);
+
+        if (header->resource) {
+            header->resource->deallocate(raw, total_size, align);
+        } else {
+            ::operator delete(raw, std::align_val_t{align}, std::nothrow);
+        }
+    }
+
+    /// @brief Deallocate coroutine frame with header (unsized version for GCC)
+    /// @param frame Pointer to coroutine frame (returned by allocate_coro_frame)
+    /// @note Recovers frame_size from header - used when compiler doesn't pass size
+    inline void deallocate_coro_frame_unsized(void* frame) noexcept {
+        if (!frame) {
+            return;
+        }
+
+        // Get header before the frame
+        void* raw = static_cast<char*>(frame) - coro_frame_header::padded_size();
+        auto* header = static_cast<coro_frame_header*>(raw);
+
+        // Recover frame size from header
+        const std::size_t frame_size = header->frame_size;
         const std::size_t total_size = coro_frame_header::padded_size() + frame_size;
         const std::size_t align = alignof(std::max_align_t);
 

@@ -468,9 +468,10 @@ namespace actor_zeta {
             /// @brief Allocate coroutine frame using actor's memory_resource
             /// @note Compiler passes coroutine arguments to operator new
             /// @note First argument is typically 'this' pointer (actor*)
-            /// @note We don't use std::forward here to avoid GCC 11 ambiguity with collapsed references
+            /// @note We pass arguments without std::forward to avoid GCC 11 ambiguity with collapsed references
             template<typename First, typename... Args>
-            static void* operator new(std::size_t size, First& first, Args&... args) {
+            static void* operator new(std::size_t size, First&& first, Args&&... args) {
+                // Don't use std::forward - just pass as lvalues to avoid GCC 11 ambiguity
                 auto* res = promise_type_base::extract_resource_from_args(first, args...);
                 return detail::allocate_coro_frame(res, size);
             }
@@ -488,13 +489,10 @@ namespace actor_zeta {
                 detail::deallocate_coro_frame(ptr, size);
             }
 
-            /// @brief Fallback for compilers that don't pass size
-            /// @note Should not be called in practice with C++20 coroutines
+            /// @brief Fallback for compilers that don't pass size (GCC)
+            /// @note Frame size is recovered from header stored during allocation
             static void operator delete(void* ptr) noexcept {
-                // Cannot recover size - this indicates a compiler bug or misuse
-                // Best effort: assume minimum frame size
-                assert(false && "Unsized delete called on coroutine frame - please report!");
-                detail::deallocate_coro_frame(ptr, 64);  // Minimum reasonable size
+                detail::deallocate_coro_frame_unsized(ptr);
             }
         };
 
