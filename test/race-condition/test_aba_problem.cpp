@@ -5,8 +5,27 @@
 #include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
+
+// Helper: wait for future with timeout to prevent CI/CD hangs
+template<typename T>
+std::pair<bool, T> wait_with_timeout(actor_zeta::unique_future<T>&& future,
+                                      std::chrono::milliseconds timeout) {
+    auto start = std::chrono::steady_clock::now();
+    while (!future.available()) {
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        if (elapsed > timeout) {
+            return {false, T{}};  // Timeout - return failure
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return {true, std::move(future).get()};
+}
+
+// Timeout constant for CI/CD (should complete much faster normally)
+constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(10);
 
 // Test actor for ABA problem testing
 class aba_test_actor final : public actor_zeta::basic_actor<aba_test_actor> {
@@ -83,11 +102,16 @@ TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
                 // Random: sometimes wait for result, sometimes drop future immediately
                 // Dropping future quickly increases message object recycling → more ABA probability
                 if (i % 3 == 0) {
-                    // Wait for result (verify message processing works)
-                    int result = std::move(future).get();
+                    // Wait for result with timeout (verify message processing works)
+                    auto [success, result] = wait_with_timeout(std::move(future), FUTURE_TIMEOUT);
                     // NOTE: Can't use REQUIRE here - Catch2 not thread-safe!
-                    // Just verify result is non-zero (actor processed it)
+                    // Just verify we didn't timeout
                     (void)result;  // Suppress unused warning
+                    if (!success) {
+                        // Signal timeout occurred - will be caught after thread join
+                        total_processed.store(-1, std::memory_order_relaxed);
+                        return;
+                    }
                     total_processed.fetch_add(1, std::memory_order_relaxed);
                 } else {
                     // Drop future - message still processed, but faster object recycling
@@ -109,8 +133,12 @@ TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
 
     scheduler->stop();
 
-    // Verification
-    REQUIRE(total_processed.load() == NUM_THREADS * MESSAGES_PER_THREAD);
+    // Verification - check for timeout first
+    int processed = total_processed.load();
+    if (processed == -1) {
+        FAIL("TIMEOUT: Future.get() took longer than 10 seconds - possible deadlock");
+    }
+    REQUIRE(processed == NUM_THREADS * MESSAGES_PER_THREAD);
     // If we reach here without TSan/ASan errors or assert failures, ABA problem not detected!
 }
 
@@ -152,9 +180,10 @@ TEST_CASE("ABA Test 2: Rapid actor creation/destruction stress test") {
             futures.push_back(std::move(future));
         }
 
-        // Wait for all futures
+        // Wait for all futures with timeout
         for (size_t i = 0; i < futures.size(); ++i) {
-            int result = std::move(futures[i]).get();
+            auto [success, result] = wait_with_timeout(std::move(futures[i]), FUTURE_TIMEOUT);
+            REQUIRE(success);  // Fail fast if timeout
             REQUIRE(result == static_cast<int>(i) * 2);
         }
 

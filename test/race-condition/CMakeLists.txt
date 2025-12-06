@@ -12,6 +12,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
 
 # Phase 1 Critical Tests: Refcount Management
 set(CURRENT_TEST_NAME tests_race_refcount)
@@ -25,6 +26,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
 
 # Phase 1 Critical Tests: Actor Shutdown
 set(CURRENT_TEST_NAME tests_race_shutdown)
@@ -38,6 +40,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
 
 # Phase 1 Critical Tests: State Transitions
 set(CURRENT_TEST_NAME tests_race_state_transitions)
@@ -51,6 +54,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
 
 # Aggressive Shutdown Tests: Race condition reproduction
 set(CURRENT_TEST_NAME tests_shutdown_aggressive)
@@ -64,6 +68,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
 
 # ABA Problem Stress Tests: CAS operations and lock-free queue
 set(CURRENT_TEST_NAME tests_aba_problem)
@@ -77,6 +82,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
 
 # Intrusive Ptr Stress Tests: Refcount operations and pointer operations
 set(CURRENT_TEST_NAME tests_stress_intrusive_ptr)
