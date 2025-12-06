@@ -5,8 +5,41 @@
 #include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
+
+// Helper: wait for future with timeout to prevent CI/CD hangs
+template<typename T>
+std::pair<bool, T> wait_with_timeout(actor_zeta::unique_future<T>&& future,
+                                      std::chrono::milliseconds timeout) {
+    auto start = std::chrono::steady_clock::now();
+    while (!future.available()) {
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        if (elapsed > timeout) {
+            return {false, T{}};
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return {true, std::move(future).get()};
+}
+
+// Wait for available() with timeout
+template<typename T>
+bool wait_available_with_timeout(actor_zeta::unique_future<T>& future,
+                                  std::chrono::milliseconds timeout) {
+    auto start = std::chrono::steady_clock::now();
+    while (!future.available()) {
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        if (elapsed > timeout) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(10);
 
 // Simple test actor for refcount testing
 class refcount_test_actor final : public actor_zeta::basic_actor<refcount_test_actor> {
@@ -254,8 +287,9 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
                 scheduler->enqueue(actor.get());
             }
 
-            // Wait and consume
-            int result = std::move(future).get();
+            // Wait and consume with timeout
+            auto [success, result] = wait_with_timeout(std::move(future), FUTURE_TIMEOUT);
+            REQUIRE(success);
             REQUIRE(result == i);
         }
     }
@@ -269,10 +303,9 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
                 scheduler->enqueue(actor.get());
             }
 
-            // Wait for ready
-            while (!future.available()) {
-                std::this_thread::yield();
-            }
+            // Wait for ready with timeout
+            bool ready = wait_available_with_timeout(future, FUTURE_TIMEOUT);
+            REQUIRE(ready);
 
             // Destroy without calling get()
             // Refcount should still reach 0 correctly
@@ -301,10 +334,8 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
                                 (void)std::move(future).get();
                             }
                             break;
-                        case 2: // Wait then destroy
-                            while (!future.available()) {
-                                std::this_thread::yield();
-                            }
+                        case 2: // Wait then destroy (with timeout)
+                            (void)wait_available_with_timeout(future, FUTURE_TIMEOUT);
                             break;
                         case 3: // Random delay
                             std::this_thread::sleep_for(std::chrono::microseconds(std::rand() % 10));
