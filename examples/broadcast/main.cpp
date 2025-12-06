@@ -9,7 +9,7 @@
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
-using actor_zeta::pmr::memory_resource;
+using std::pmr::memory_resource;
 
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
@@ -23,7 +23,7 @@ public:
         &worker_t::work_data_with_result
     >;
 
-    worker_t(actor_zeta::pmr::memory_resource* ptr)
+    worker_t(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_t>(ptr) {
     }
 
@@ -65,18 +65,18 @@ inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(st
 }
 
 /// non thread safe
-class supervisor_lite final : public actor_zeta::base::actor_mixin<supervisor_lite> {
+class supervisor_lite final : public actor_zeta::actor::actor_mixin<supervisor_lite> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
     supervisor_lite(memory_resource* ptr)
-        : actor_zeta::base::actor_mixin<supervisor_lite>()
+        : actor_zeta::actor::actor_mixin<supervisor_lite>()
         , resource_(ptr)
         , e_(new actor_zeta::scheduler::sharing_scheduler(2, 1000)) {
         e_->start();
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+    std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     ~supervisor_lite() {
         e_->stop();
@@ -121,7 +121,7 @@ public:
     // NEW API: Forward arguments to enqueue_sync_impl (message created in receiver's resource)
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -140,7 +140,7 @@ private:
         return size_actors_.load();
     }
 
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
     std::atomic<int64_t> size_actors_{0};
@@ -148,7 +148,7 @@ private:
 };
 
 int main() {
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
+    auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<supervisor_lite>(mr_ptr);
 
     int const actors = 5;

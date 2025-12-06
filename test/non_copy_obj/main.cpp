@@ -12,7 +12,7 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/dispatch.hpp>
 
-using actor_zeta::pmr::memory_resource;
+using std::pmr::memory_resource;
 class dummy_supervisor;
 class storage_t;
 
@@ -21,18 +21,18 @@ struct dummy_data {
     std::string name{"default_name"};
 };
 
-class dummy_supervisor final : public actor_zeta::base::actor_mixin<dummy_supervisor> {
+class dummy_supervisor final : public actor_zeta::actor::actor_mixin<dummy_supervisor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
     dummy_supervisor(memory_resource* ptr)
-        : actor_zeta::base::actor_mixin<dummy_supervisor>()
+        : actor_zeta::actor::actor_mixin<dummy_supervisor>()
         , resource_(ptr)
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+    std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
         return executor_.get();
@@ -49,7 +49,7 @@ public:
 
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -68,7 +68,7 @@ public:
 protected:
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::set<int64_t> ids_;
 };
@@ -82,7 +82,7 @@ actor_zeta::unique_future<void> dummy_supervisor::check(std::unique_ptr<dummy_da
 }
 
 TEST_CASE("base move test") {
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
+    auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
 
     auto ptr_data = std::unique_ptr<dummy_data>(new dummy_data);
@@ -94,7 +94,7 @@ TEST_CASE("base move test") {
 }
 
 TEST_CASE("construct in place") {
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
+    auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
 
     auto data = dummy_data();

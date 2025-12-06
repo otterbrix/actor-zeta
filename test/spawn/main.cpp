@@ -30,7 +30,7 @@ class dummy_supervisor;
 
 class storage_t final : public actor_zeta::basic_actor<storage_t> {
 public:
-    storage_t(actor_zeta::pmr::memory_resource* resource_ptr, dummy_supervisor* ptr);
+    storage_t(std::pmr::memory_resource* resource_ptr, dummy_supervisor* ptr);
 
     ~storage_t() = default;
 
@@ -57,29 +57,29 @@ private:
     void remove() {}
 };
 
-class dummy_supervisor_sub final : public actor_zeta::base::actor_mixin<dummy_supervisor_sub> {
+class dummy_supervisor_sub final : public actor_zeta::actor::actor_mixin<dummy_supervisor_sub> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
     dummy_supervisor_sub(dummy_supervisor* ptr);
 
-    dummy_supervisor_sub(actor_zeta::pmr::memory_resource* ptr, dummy_supervisor*)
-        : actor_zeta::base::actor_mixin<dummy_supervisor_sub>()
+    dummy_supervisor_sub(std::pmr::memory_resource* ptr, dummy_supervisor*)
+        : actor_zeta::actor::actor_mixin<dummy_supervisor_sub>()
         , resource_(ptr)
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
         supervisor_sub_counter++;
     }
 
-    dummy_supervisor_sub(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::base::actor_mixin<dummy_supervisor_sub>()
+    dummy_supervisor_sub(std::pmr::memory_resource* ptr)
+        : actor_zeta::actor::actor_mixin<dummy_supervisor_sub>()
         , resource_(ptr)
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
         supervisor_sub_counter++;
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+    std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
         return executor_.get();
@@ -93,7 +93,7 @@ public:
     /// @brief Override enqueue_impl для supervisor - используем helper
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -108,23 +108,23 @@ public:
 protected:
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
 };
 
-class dummy_supervisor final : public actor_zeta::base::actor_mixin<dummy_supervisor> {
+class dummy_supervisor final : public actor_zeta::actor::actor_mixin<dummy_supervisor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    dummy_supervisor(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::base::actor_mixin<dummy_supervisor>()
+    dummy_supervisor(std::pmr::memory_resource* ptr)
+        : actor_zeta::actor::actor_mixin<dummy_supervisor>()
         , resource_(ptr)
         , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
         executor_->start();
         supervisor_counter++;
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+    std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
         return executor_.get();
@@ -168,7 +168,7 @@ public:
     /// @brief Override enqueue_impl для supervisor - используем helper
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -183,18 +183,18 @@ public:
 protected:
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::vector<storage_t::unique_actor> actors_;
     std::vector<std::unique_ptr<dummy_supervisor_sub, actor_zeta::pmr::deleter_t>> supervisor_;
 };
 
 
- storage_t::storage_t(actor_zeta::pmr::memory_resource* resource_ptr, dummy_supervisor*): actor_zeta::basic_actor<storage_t>(resource_ptr) {
+ storage_t::storage_t(std::pmr::memory_resource* resource_ptr, dummy_supervisor*): actor_zeta::basic_actor<storage_t>(resource_ptr) {
     actor_counter++;
 }
 
-dummy_supervisor_sub::dummy_supervisor_sub(dummy_supervisor* ptr): actor_zeta::base::actor_mixin<dummy_supervisor_sub>()
+dummy_supervisor_sub::dummy_supervisor_sub(dummy_supervisor* ptr): actor_zeta::actor::actor_mixin<dummy_supervisor_sub>()
        , resource_(ptr->resource())
        , executor_(new actor_zeta::test::scheduler_test_t(1, 1)) {
     ///auto * ptr_sheduler = scheduler();
@@ -206,7 +206,7 @@ dummy_supervisor_sub::dummy_supervisor_sub(dummy_supervisor* ptr): actor_zeta::b
 TEST_CASE("spawn base supervisor") {
     supervisor_counter = 0;
     actor_counter = 0;
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
+    auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
     REQUIRE(supervisor_counter == 1);
 }
@@ -215,7 +215,7 @@ TEST_CASE("spawn supervisor") {
     supervisor_counter = 0;
     supervisor_sub_counter = 0;
     actor_counter = 0;
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
+    auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
     auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor);
     supervisor->scheduler_test()->run_once();
@@ -228,7 +228,7 @@ TEST_CASE("spawn supervisor custom resource") {
     supervisor_counter = 0;
     supervisor_sub_counter = 0;
     actor_counter = 0;
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
+    auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
     auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor_custom_resource);
     supervisor->scheduler_test()->run_once();
@@ -240,7 +240,7 @@ TEST_CASE("spawn supervisor custom resource") {
 TEST_CASE("spawn actor") {
     supervisor_counter = 0;
     actor_counter = 0;
-    auto* mr_ptr = actor_zeta::pmr::get_default_resource();
+    auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
     auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_actor);
     supervisor->scheduler_test()->run_once();

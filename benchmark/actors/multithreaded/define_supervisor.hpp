@@ -11,13 +11,13 @@ class simple_supervisor final : public actor_zeta::base::actor_mixin<simple_supe
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor_1_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
 
 public:
     template<typename T>
     using unique_future = actor_zeta::unique_future<T>;
 
-    explicit simple_supervisor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
+    explicit simple_supervisor(std::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : actor_zeta::base::actor_mixin<simple_supervisor<Actor>>()
         , actor_0_(nullptr, actor_zeta::pmr::deleter_t(ptr))
         , actor_1_(nullptr, actor_zeta::pmr::deleter_t(ptr))
@@ -25,7 +25,7 @@ public:
         , resource_(ptr) {
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept {
+    std::pmr::memory_resource* resource() const noexcept {
         return resource_;
     }
 

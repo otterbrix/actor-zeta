@@ -26,7 +26,7 @@ class BenchActor : public actor_zeta::basic_actor<BenchActor> {
 public:
     using base_type = actor_zeta::basic_actor<BenchActor>;
 
-    explicit BenchActor(actor_zeta::pmr::memory_resource* res)
+    explicit BenchActor(std::pmr::memory_resource* res)
         : base_type(res)
         , call_count_(0) {}
 
@@ -73,7 +73,7 @@ private:
 // =============================================================================
 
 static void BM_CoroCreation_Void(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
 
     for (auto _ : state) {
@@ -87,7 +87,7 @@ static void BM_CoroCreation_Void(benchmark::State& state) {
 BENCHMARK(BM_CoroCreation_Void);
 
 static void BM_CoroCreation_Int(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
 
     for (auto _ : state) {
@@ -102,7 +102,7 @@ static void BM_CoroCreation_Int(benchmark::State& state) {
 BENCHMARK(BM_CoroCreation_Int);
 
 static void BM_CoroCreation_String(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
 
     for (auto _ : state) {
@@ -121,7 +121,7 @@ BENCHMARK(BM_CoroCreation_String);
 // =============================================================================
 
 static void BM_CoroSequence(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
     const int count = state.range(0);
 
@@ -156,7 +156,7 @@ static void BM_RawAlloc_New(benchmark::State& state) {
 BENCHMARK(BM_RawAlloc_New)->Range(64, 1024);
 
 static void BM_RawAlloc_PMR(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     const size_t size = state.range(0);
 
     for (auto _ : state) {
@@ -175,7 +175,7 @@ BENCHMARK(BM_RawAlloc_PMR)->Range(64, 1024);
 // =============================================================================
 
 static void BM_FutureState_Int(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     for (auto _ : state) {
         actor_zeta::promise<int> p(resource);
@@ -191,7 +191,7 @@ static void BM_FutureState_Int(benchmark::State& state) {
 BENCHMARK(BM_FutureState_Int);
 
 static void BM_FutureState_Void(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     for (auto _ : state) {
         actor_zeta::promise<void> p(resource);
@@ -210,7 +210,7 @@ BENCHMARK(BM_FutureState_Void);
 // =============================================================================
 
 static void BM_MakeReadyFuture_Int(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     for (auto _ : state) {
         auto future = actor_zeta::make_ready_future<int>(resource, 42);
@@ -224,7 +224,7 @@ static void BM_MakeReadyFuture_Int(benchmark::State& state) {
 BENCHMARK(BM_MakeReadyFuture_Int);
 
 static void BM_MakeReadyFuture_Void(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     for (auto _ : state) {
         auto future = actor_zeta::make_ready_future_void(resource);
@@ -243,7 +243,7 @@ BENCHMARK(BM_MakeReadyFuture_Void);
 // This measures the DIFFERENCE between coroutine and make_ready_future
 // to estimate pure coroutine frame allocation cost
 static void BM_CoroOverhead_Estimate(benchmark::State& state) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
 
     // Warm up

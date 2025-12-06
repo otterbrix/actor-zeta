@@ -51,7 +51,7 @@ using namespace actor_zeta;
 class manager_dispatcher_t final : public basic_actor<manager_dispatcher_t> {
 public:
     explicit manager_dispatcher_t(
-            pmr::memory_resource* mr,
+            std::pmr::memory_resource* mr,
             address_t memory_storage,
             const std::string& name)
         : basic_actor<manager_dispatcher_t>(mr)
@@ -447,13 +447,13 @@ public:
                   name_, session.data(), collection, multiplier);
 
         // Lambda that IS a coroutine - has co_await/co_return INSIDE
-        // CRITICAL: First parameter MUST be pmr::memory_resource* for promise!
+        // CRITICAL: First parameter MUST be std::pmr::memory_resource* for promise!
         // Capture everything else BY VALUE (not by reference!)
         auto async_get_size = [this,
                                session_copy = std::move(session),         // MOVE
                                collection_copy = std::move(collection),   // MOVE
                                multiplier_copy = multiplier               // copy (int is cheap)
-                              ](pmr::memory_resource* /*res*/) -> unique_future<int> {
+                              ](std::pmr::memory_resource* /*res*/) -> unique_future<int> {
             // ^^ resource passed as first param for promise_type constructor
 
             g_log.log("[%::coroutine_lambda] Starting async operation...", name_);
@@ -493,7 +493,7 @@ public:
             session_id_t session,
             std::string collection) {
         auto build_cursor = [this, s = std::move(session), coll = std::move(collection)]
-                (pmr::memory_resource*) -> unique_future<cursor_t_ptr> {
+                (std::pmr::memory_resource*) -> unique_future<cursor_t_ptr> {
             auto size = co_await send(memory_storage_, address(), &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
             auto cursor = std::make_unique<cursor_t>();
@@ -510,12 +510,12 @@ public:
             session_id_t session,
             logical_plan_t plan) {
         // Step 1: Validate plan
-        auto validate = [](pmr::memory_resource*, const logical_plan_t& p) -> unique_future<bool> {
+        auto validate = [](std::pmr::memory_resource*, const logical_plan_t& p) -> unique_future<bool> {
             co_return !p.collection.database.empty() && !p.collection.collection.empty();
         };
         // Step 2: Execute if valid
         auto execute = [this, &validate, s = std::move(session)]
-                (pmr::memory_resource* res, logical_plan_t p) -> unique_future<cursor_t_ptr> {
+                (std::pmr::memory_resource* res, logical_plan_t p) -> unique_future<cursor_t_ptr> {
             bool is_valid = co_await validate(res, p);
             if (!is_valid) {
                 auto err = std::make_unique<cursor_t>();
@@ -532,7 +532,7 @@ public:
 
     /// @brief Get statistics across all collections - parallel lambda-coroutines
     unique_future<aggregate_result_t> get_database_statistics(session_id_t session) {
-        auto fetch_size = [this, s = session](pmr::memory_resource*, std::string coll)
+        auto fetch_size = [this, s = session](std::pmr::memory_resource*, std::string coll)
                 -> unique_future<std::size_t> {
             co_return co_await send(memory_storage_, address(), &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
@@ -560,7 +560,7 @@ public:
             session_id_t session,
             std::unique_ptr<std::vector<std::string>> batch) {
         auto process = [this, s = std::move(session), b = std::move(batch)]
-                (pmr::memory_resource*) -> unique_future<transaction_result_t> {
+                (std::pmr::memory_resource*) -> unique_future<transaction_result_t> {
             transaction_result_t result;
             if (!b || b->empty()) {
                 result.has_error = true;
@@ -600,7 +600,7 @@ public:
             std::string collection,
             int max_retries) {
         auto try_fetch = [this, s = session, coll = collection]
-                (pmr::memory_resource*, bool simulate_error) -> unique_future<size_result_t> {
+                (std::pmr::memory_resource*, bool simulate_error) -> unique_future<size_result_t> {
             if (simulate_error)
                 co_return size_result_t::error("connection_timeout");
             auto size = co_await send(memory_storage_, address(), &memory_storage_t::size,
@@ -783,161 +783,63 @@ public:
                !pending_detail_.empty();
     }
 
-    /// @brief Recursively resume awaiting chain
-    ///
-    /// KEY INSIGHT: The coroutine handle is stored in the AWAITED state, not the awaiter's state!
-    ///
-    /// When coroutine X does `co_await future_Y`:
-    /// - X's coroutine handle is set on Y's state (via awaiter::await_suspend)
-    /// - X's state gets awaiting_on = Y's state
-    ///
-    /// So: state.awaiting_on.coro_handle_ = the coroutine that's waiting on awaiting_on
-    ///
-    /// Chain example:
-    /// - outer_state.awaiting_on -> lambda_state (holds outer's coroutine)
-    /// - lambda_state.awaiting_on -> storage_state (holds lambda's coroutine)
-    ///
-    /// When storage_state is ready:
-    /// 1. Resume storage_state's coroutine (which is lambda's coroutine)
-    /// 2. Lambda completes, lambda_state becomes ready
-    /// 3. Resume lambda_state's coroutine (which is outer's coroutine)
-    ///
-    /// @return true if any coroutine was resumed
-    bool resume_awaiting_chain(detail::future_state_base* state) {
-        if (!state) return false;
-
-        auto* awaiting = state->get_awaiting_on();
-        if (!awaiting) return false;
-
-        // If awaiting is NOT ready, check if IT is waiting on something ready
-        if (!awaiting->is_ready() && awaiting->get_awaiting_on()) {
-            // Recurse: try to resume awaiting's awaiting first
-            if (resume_awaiting_chain(awaiting)) {
-                // After recursion, check if awaiting is now ready
-                // If so, resume the coroutine stored in awaiting (which is state's coroutine)
-                if (awaiting->is_ready() && awaiting->has_coroutine()) {
-                    g_log.log("[%::resume_awaiting_chain] Inner completed, resuming from awaiting", name_);
-                    awaiting->resume_coroutine();
-                    return true;
-                }
-                return true;  // Something was resumed in recursion
-            }
-        }
-
-        // Base case: awaiting is ready, resume the coroutine stored IN awaiting
-        // (which is the coroutine that was waiting on awaiting)
-        if (awaiting->is_ready() && awaiting->has_coroutine()) {
-            g_log.log("[%::resume_awaiting_chain] Awaiting ready, resuming coroutine from awaiting", name_);
-            awaiting->resume_coroutine();
-            return true;
-        }
-
-        return false;
-    }
-
-    /// @brief Poll and resume pending coroutines
+    /// @brief Clean up completed futures
+    /// @note With auto-resume in set_value()/set_ready(), coroutines resume automatically
+    /// This function just removes completed futures from pending lists
     void poll_pending() {
-        // Poll size futures
+        // Clean up completed size futures
         for (auto it = pending_size_.begin(); it != pending_size_.end();) {
-            auto* state = it->get_state();
-            if (state) {
-                resume_awaiting_chain(state);
+            if (it->available()) {
+                g_log.log("[%::poll_pending] size coroutine completed", name_);
+                it = pending_size_.erase(it);
+            } else {
+                ++it;
             }
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] size awaiting ready, resuming coroutine", name_);
-                it->resume();
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] size coroutine completed", name_);
-                    it = pending_size_.erase(it);
-                    continue;
-                }
-            }
-            ++it;
         }
-        // Poll execute futures
+        // Clean up completed execute futures
         for (auto it = pending_execute_.begin(); it != pending_execute_.end();) {
-            auto* state = it->get_state();
-            if (state) {
-                resume_awaiting_chain(state);
+            if (it->available()) {
+                g_log.log("[%::poll_pending] execute coroutine completed", name_);
+                it = pending_execute_.erase(it);
+            } else {
+                ++it;
             }
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] execute awaiting ready, resuming coroutine", name_);
-                it->resume();
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] execute coroutine completed", name_);
-                    it = pending_execute_.erase(it);
-                    continue;
-                }
-            }
-            ++it;
         }
-        // Poll transaction futures
+        // Clean up completed transaction futures
         for (auto it = pending_transaction_.begin(); it != pending_transaction_.end();) {
-            auto* state = it->get_state();
-            if (state) {
-                resume_awaiting_chain(state);
+            if (it->available()) {
+                g_log.log("[%::poll_pending] transaction coroutine completed", name_);
+                it = pending_transaction_.erase(it);
+            } else {
+                ++it;
             }
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] transaction awaiting ready, resuming coroutine", name_);
-                it->resume();
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] transaction coroutine completed", name_);
-                    it = pending_transaction_.erase(it);
-                    continue;
-                }
-            }
-            ++it;
         }
-        // Poll aggregate futures
+        // Clean up completed aggregate futures
         for (auto it = pending_aggregate_.begin(); it != pending_aggregate_.end();) {
-            auto* state = it->get_state();
-            if (state) {
-                resume_awaiting_chain(state);
+            if (it->available()) {
+                g_log.log("[%::poll_pending] aggregate coroutine completed", name_);
+                it = pending_aggregate_.erase(it);
+            } else {
+                ++it;
             }
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] aggregate awaiting ready, resuming coroutine", name_);
-                it->resume();
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] aggregate coroutine completed", name_);
-                    it = pending_aggregate_.erase(it);
-                    continue;
-                }
-            }
-            ++it;
         }
-        // Poll detail futures
+        // Clean up completed detail futures
         for (auto it = pending_detail_.begin(); it != pending_detail_.end();) {
-            auto* state = it->get_state();
-            if (state) {
-                resume_awaiting_chain(state);
+            if (it->available()) {
+                g_log.log("[%::poll_pending] detail coroutine completed", name_);
+                it = pending_detail_.erase(it);
+            } else {
+                ++it;
             }
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] detail awaiting ready, resuming coroutine", name_);
-                it->resume();
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] detail coroutine completed", name_);
-                    it = pending_detail_.erase(it);
-                    continue;
-                }
-            }
-            ++it;
         }
-        // Poll transform futures (lambda-coroutines)
+        // Clean up completed transform futures
         for (auto it = pending_transform_.begin(); it != pending_transform_.end();) {
-            auto* state = it->get_state();
-            if (state) {
-                resume_awaiting_chain(state);
+            if (it->available()) {
+                g_log.log("[%::poll_pending] transform coroutine completed", name_);
+                it = pending_transform_.erase(it);
+            } else {
+                ++it;
             }
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] transform awaiting ready, resuming coroutine", name_);
-                it->resume();
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] transform coroutine completed", name_);
-                    it = pending_transform_.erase(it);
-                    continue;
-                }
-            }
-            ++it;
         }
     }
 

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace actor_zeta { namespace base {
+namespace actor_zeta { namespace actor {
 
     class address_t;
 

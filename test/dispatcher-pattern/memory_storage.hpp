@@ -30,7 +30,7 @@ using namespace actor_zeta;
 /// Returns: collection sizes, cursors with data
 class memory_storage_t final : public basic_actor<memory_storage_t> {
 public:
-    explicit memory_storage_t(pmr::memory_resource* mr, const std::string& name)
+    explicit memory_storage_t(std::pmr::memory_resource* mr, const std::string& name)
         : basic_actor<memory_storage_t>(mr)
         , name_(name) {
         // Initialize "database" with test data

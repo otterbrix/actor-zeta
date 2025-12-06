@@ -11,7 +11,7 @@ using namespace actor_zeta;
 /// @brief Worker актор - обрабатывает запросы
 class worker_actor final : public basic_actor<worker_actor> {
 public:
-    explicit worker_actor(pmr::memory_resource* resource)
+    explicit worker_actor(std::pmr::memory_resource* resource)
         : basic_actor<worker_actor>(resource) {
     }
 
@@ -40,7 +40,7 @@ public:
 /// Resume управляется supervisor'ом снаружи
 class client_actor final : public basic_actor<client_actor> {
 public:
-    explicit client_actor(pmr::memory_resource* resource, address_t worker_address)
+    explicit client_actor(std::pmr::memory_resource* resource, address_t worker_address)
         : basic_actor<client_actor>(resource)
         , worker_address_(worker_address)
         , final_result_(0) {
@@ -92,18 +92,16 @@ public:
         return make_ready_future_void(resource());
     }
 
-    /// @brief Poll pending coroutines and resume if ready
+    /// @brief Clean up completed pending futures
     /// @return true if there are still pending coroutines
+    /// With auto-resume in set_value(), coroutines resume automatically
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->awaiting_ready()) {
-                it->resume();
-                if (it->available()) {
-                    it = pending_.erase(it);
-                    continue;
-                }
+            if (it->available()) {
+                it = pending_.erase(it);
+            } else {
+                ++it;
             }
-            ++it;
         }
         return !pending_.empty();
     }
@@ -155,7 +153,7 @@ private:
 
 
 TEST_CASE("worker only") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource);
 
     // Supervisor управляет resume
@@ -173,7 +171,7 @@ TEST_CASE("worker only") {
 
 
 TEST_CASE("client-worker coroutine with supervisor") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource);
     auto client = spawn<client_actor>(resource, worker->address());
 

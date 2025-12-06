@@ -44,7 +44,7 @@ constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(10);
 // Simple test actor for refcount testing
 class refcount_test_actor final : public actor_zeta::basic_actor<refcount_test_actor> {
 public:
-    explicit refcount_test_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit refcount_test_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<refcount_test_actor>(resource) {
     }
 
@@ -87,7 +87,7 @@ TEST_CASE("Refcount Test 2.1: Concurrent actor + future release") {
     // - TSan will detect data races on refcount
     // - Test completes without crashes = SUCCESS
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -155,7 +155,7 @@ TEST_CASE("Refcount Test 2.2: Stress test with 1000 concurrent futures") {
     // - ASan will detect memory errors
     // - TSan will detect data races
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
 
@@ -252,7 +252,7 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
     // - ASan: detects memory errors
     // - Test completion without crash = SUCCESS
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 

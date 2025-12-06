@@ -22,7 +22,7 @@
 // Tracking Memory Resource - monitors all allocations
 // =============================================================================
 
-class tracking_resource : public actor_zeta::pmr::memory_resource {
+class tracking_resource : public std::pmr::memory_resource {
 public:
     struct allocation_record {
         void* ptr;
@@ -130,7 +130,7 @@ class TestActor : public actor_zeta::basic_actor<TestActor> {
 public:
     using base_type = actor_zeta::basic_actor<TestActor>;
 
-    explicit TestActor(actor_zeta::pmr::memory_resource* res)
+    explicit TestActor(std::pmr::memory_resource* res)
         : base_type(res) {}
 
     // Simple void coroutine

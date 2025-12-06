@@ -11,7 +11,7 @@
 // Simple test actor for shutdown testing
 class shutdown_test_actor final : public actor_zeta::basic_actor<shutdown_test_actor> {
 public:
-    explicit shutdown_test_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit shutdown_test_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<shutdown_test_actor>(resource) {
     }
 
@@ -65,7 +65,7 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
     // - ASan will detect memory leaks
     // - Test completes without crashes = SUCCESS
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -139,7 +139,7 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
     // - All futures return correct results
     // - No memory leaks (ASan)
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -206,7 +206,7 @@ TEST_CASE("Shutdown Test 4.3: Resume during shutdown") {
     // - TSan detects data races
     // - Test completes without crashes = SUCCESS
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     constexpr int NUM_ITERATIONS = 50;
 
@@ -269,7 +269,7 @@ TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
     // - No memory leaks
     // - No crashes
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 

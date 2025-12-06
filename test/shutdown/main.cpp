@@ -12,7 +12,7 @@
 // Basic actor that just handles messages
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
-    explicit worker_actor(actor_zeta::pmr::memory_resource* ptr)
+    explicit worker_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<worker_actor>(ptr) {
     }
 
@@ -32,12 +32,12 @@ public:
 };
 
 // Balancer actor that manually enqueues and schedules
-class balancer_actor final : public actor_zeta::base::actor_mixin<balancer_actor> {
+class balancer_actor final : public actor_zeta::actor::actor_mixin<balancer_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    balancer_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::base::actor_mixin<balancer_actor>()
+    balancer_actor(std::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
+        : actor_zeta::actor::actor_mixin<balancer_actor>()
         , resource_(resource)
         , scheduler_(scheduler) {
     }
@@ -48,7 +48,7 @@ public:
         workers_.clear();
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+    std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     void add_worker() {
         auto worker = actor_zeta::spawn<worker_actor>(resource_);
@@ -62,7 +62,7 @@ public:
 
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -77,14 +77,14 @@ public:
 protected:
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
     size_t cursor_ = 0;
     std::vector<worker_actor::unique_actor> workers_;
 };
 
 TEST_CASE("shutdown - basic test") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
@@ -110,7 +110,7 @@ TEST_CASE("shutdown - basic test") {
 }
 
 TEST_CASE("shutdown - multiple actors") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
@@ -142,7 +142,7 @@ TEST_CASE("shutdown - multiple actors") {
 }
 
 TEST_CASE("shutdown - immediate stop") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
@@ -176,7 +176,7 @@ TEST_CASE("shutdown - concurrent enqueue during destruction") {
     //       Thread 1 sees scheduled_destroying and asserts
     // Expected: No assertion failure, enqueue should handle destroying state
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
@@ -222,7 +222,7 @@ TEST_CASE("shutdown - concurrent resume during destruction") {
     //       Thread 1 sees scheduled_destroying and asserts
     // Expected: No assertion failure, resume_guard should handle destroying state
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
 
@@ -254,7 +254,7 @@ TEST_CASE("shutdown - three-way race: enqueue + resume + destroy") {
     // Thread 3: Destroying actor
     // Expected: No assertions, clean shutdown
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(2, 100));
 

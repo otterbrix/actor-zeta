@@ -2,16 +2,22 @@
 
 #include <cassert>
 #include <atomic>
+#include <memory_resource>
 
-#include <actor-zeta/base/forwards.hpp>
-#include <actor-zeta/mailbox/priority.hpp>
-#include <actor-zeta/mailbox/id.hpp>
-#include <actor-zeta/detail/rtt.hpp>
+#include "actor-zeta/detail/memory.hpp"
+#include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
-#include <actor-zeta/detail/memory_resource.hpp>
-#include "actor-zeta/detail/memory.hpp"
+#include <actor-zeta/detail/rtt.hpp>
+#include <actor-zeta/mailbox/id.hpp>
+#include <actor-zeta/mailbox/priority.hpp>
+
+namespace actor_zeta {
+    /// @brief Tag for internal constructors (public but convention: don't use in user code)
+    struct internal_construct_tag {};
+    template<typename T> class promise;
+}
 
 namespace actor_zeta { namespace mailbox {
 
@@ -24,19 +30,19 @@ namespace actor_zeta { namespace mailbox {
         message& operator=(const message&) = delete;
         message(message&& other) noexcept;  // Cannot be default due to atomic fields
         message& operator=(message&& other) noexcept;
-        explicit message(actor_zeta::pmr::memory_resource* /* resource */);
-        message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/);
-        message(actor_zeta::pmr::memory_resource* /* resource */, base::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt&& /*body*/);
+        explicit message(std::pmr::memory_resource* /* resource */);
+        message(std::pmr::memory_resource* /* resource */, actor::address_t /*sender*/, message_id /*name*/);
+        message(std::pmr::memory_resource* /* resource */, actor::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt&& /*body*/);
 
         // Allocator-extended move constructor (PMR migration)
-        message(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, message&& other) noexcept;
+        message(std::allocator_arg_t, std::pmr::memory_resource* resource, message&& other) noexcept;
 
         ~message() noexcept;
         message* prev;
         auto command() const noexcept -> message_id;
-        auto sender() & noexcept -> base::address_t&;
-        auto sender() && noexcept -> base::address_t&&;
-        auto sender() const& noexcept -> base::address_t const&;
+        auto sender() & noexcept -> actor::address_t&;
+        auto sender() && noexcept -> actor::address_t&&;
+        auto sender() const& noexcept -> actor::address_t const&;
 
         auto body() -> actor_zeta::detail::rtt&;
         operator bool();
@@ -50,25 +56,32 @@ namespace actor_zeta { namespace mailbox {
         /// @brief Set future state (result slot) - accepts intrusive_ptr
         void set_result_slot(const intrusive_ptr<actor_zeta::detail::future_state_base>& slot) noexcept { result_slot_ = slot; }
 
-        /// @brief Check if cancelled (via result_slot state)
-        bool is_cancelled() const noexcept {
-            return result_slot_ && result_slot_->is_cancelled();
-        }
-
-        /// @brief Request cancellation (sets state in result_slot)
-        void cancel() noexcept {
-            if (result_slot_) {
-                result_slot_->set_state(actor_zeta::detail::future_state_enum::cancelled);
-            }
-        }
-
         /// @brief Get current state from result_slot
         [[nodiscard]] actor_zeta::detail::future_state_enum state() const noexcept {
             return result_slot_ ? result_slot_->state() : actor_zeta::detail::future_state_enum::invalid;
         }
 
+        /// @brief Get result promise (typed) for this message's result slot
+        /// @note Uses internal_construct_tag to wrap existing state without allocating
+        /// @note Returns promise that shares refcount with result_slot_
+        /// @note Requires future.hpp to be included before instantiation
+        template<typename T>
+        [[nodiscard]] actor_zeta::promise<T> get_result_promise() const noexcept {
+            auto* typed_state = static_cast<actor_zeta::detail::future_state<T>*>(result_slot_.get());
+            return actor_zeta::promise<T>(
+                actor_zeta::internal_construct_tag{},
+                typed_state,
+                typed_state ? typed_state->memory_resource() : nullptr
+            );
+        }
+
+        /// @brief Check if message has a result slot
+        [[nodiscard]] bool has_result_slot() const noexcept {
+            return result_slot_ != nullptr;
+        }
+
     private:
-        base::address_t sender_;
+        actor::address_t sender_;
         message_id command_;
         actor_zeta::detail::rtt body_;
 
@@ -91,7 +104,7 @@ namespace actor_zeta { namespace mailbox {
                                       : alignof(std::max_align_t);
 
         struct BlockHdr {
-            actor_zeta::pmr::memory_resource* r;
+            std::pmr::memory_resource* r;
             std::size_t total;
         };
 
@@ -124,7 +137,7 @@ namespace actor_zeta { namespace mailbox {
 
     // Factory function for heap-allocated messages with PMR
     template<class... Args>
-    message_ptr pmr_make_message(actor_zeta::pmr::memory_resource* resource, Args&&... args) {
+    message_ptr pmr_make_message(std::pmr::memory_resource* resource, Args&&... args) {
         constexpr std::size_t front = detail::kFront;
         constexpr std::size_t msg_size = sizeof(message);
         const std::size_t total = front + msg_size;

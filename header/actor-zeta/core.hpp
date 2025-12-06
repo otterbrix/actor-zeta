@@ -1,21 +1,21 @@
 #pragma once
 
 // clang-format off
-#include <actor-zeta/base/address.hpp>
+#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
 #include <actor-zeta/future.hpp>
 // clang-format on
 
-#include <actor-zeta/base/cooperative_actor.hpp>
-#include <actor-zeta/base/dispatch_traits.hpp>
-#include <actor-zeta/detail/memory_resource.hpp>
+#include <actor-zeta/actor/cooperative_actor.hpp>
+#include <actor-zeta/actor/dispatch_traits.hpp>
+#include <memory_resource>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/send.hpp>
 
 namespace actor_zeta {
 
-    using base::address_t;
-    using base::basic_actor;
+    using actor::address_t;
+    using actor::basic_actor;
 
     using mailbox::message;
     using mailbox::message_ptr;

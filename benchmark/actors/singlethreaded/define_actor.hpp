@@ -11,7 +11,7 @@ class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Arg
     ping_pong_actor* partner_;
 
 public:
-    explicit ping_pong_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit ping_pong_actor(std::pmr::memory_resource* resource)
         : base_type(resource)
         , partner_(nullptr) {
     }

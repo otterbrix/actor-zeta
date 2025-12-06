@@ -23,7 +23,7 @@ namespace benchmark_messages {
 
         BENCHMARK_TEMPLATE_DEFINE_F(fixture_t, RawPtrMessage_Name, raw_t)
         (benchmark::State& state) {
-            auto* resource = actor_zeta::pmr::get_default_resource();
+            auto* resource =std::pmr::get_default_resource();
             while (state.KeepRunning()) {
                 auto message = actor_zeta::detail::make_message(
                     resource,
@@ -37,7 +37,7 @@ namespace benchmark_messages {
 
         BENCHMARK_TEMPLATE_DEFINE_F(fixture_t, SmartPtrMessage_Name, smart_t)
         (benchmark::State& state) {
-            auto* resource = actor_zeta::pmr::get_default_resource();
+            auto* resource =std::pmr::get_default_resource();
             while (state.KeepRunning()) {
                 auto message = actor_zeta::detail::make_message(
                     resource,
@@ -63,7 +63,7 @@ namespace benchmark_messages {
 
             template<typename... Args>
             auto message_arg_tmpl(uint64_t name_, Args&&... args) -> void {
-                auto* resource = actor_zeta::pmr::get_default_resource();
+                auto* resource =std::pmr::get_default_resource();
                 auto message = actor_zeta::detail::make_message(
                     resource,
                     actor_zeta::base::address_t::empty_address(),
@@ -85,7 +85,7 @@ namespace benchmark_messages {
 
             template<typename... Args>
             auto message_arg_tmpl(uint64_t name_, Args&&... args) -> void {
-                auto* resource = actor_zeta::pmr::get_default_resource();
+                auto* resource =std::pmr::get_default_resource();
                 auto message = actor_zeta::detail::make_message(
                     resource,
                     actor_zeta::base::address_t::empty_address(),

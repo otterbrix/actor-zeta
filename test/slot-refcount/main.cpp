@@ -2,7 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/memory_resource.hpp>
+#include <memory_resource>
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -11,7 +11,7 @@ using namespace actor_zeta::detail;
 using namespace actor_zeta;
 
 TEST_CASE("future_state<int> - basic construction and destruction") {
-    auto* res = pmr::get_default_resource();
+    auto* res = std::pmr::get_default_resource();
 
     SECTION("construct with initial refcount = 1") {
         // Allocate slot manually
@@ -44,7 +44,7 @@ TEST_CASE("future_state<int> - basic construction and destruction") {
 }
 
 TEST_CASE("future_state<int> - refcount increment/decrement") {
-    auto* res = pmr::get_default_resource();
+    auto* res = std::pmr::get_default_resource();
 
     SECTION("add_ref increases refcount") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
@@ -75,7 +75,7 @@ TEST_CASE("future_state<int> - refcount increment/decrement") {
 }
 
 TEST_CASE("future_state<int> - result storage and retrieval") {
-    auto* res = pmr::get_default_resource();
+    auto* res = std::pmr::get_default_resource();
 
     SECTION("store and retrieve int") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
@@ -116,7 +116,7 @@ TEST_CASE("future_state<int> - result storage and retrieval") {
 }
 
 TEST_CASE("future_state<std::string> - string storage") {
-    auto* res = pmr::get_default_resource();
+    auto* res = std::pmr::get_default_resource();
 
     SECTION("store and retrieve string") {
         void* mem = res->allocate(sizeof(future_state<std::string>), alignof(future_state<std::string>));
@@ -132,7 +132,7 @@ TEST_CASE("future_state<std::string> - string storage") {
 }
 
 TEST_CASE("future_state<int> - thread safety") {
-    auto* res = pmr::get_default_resource();
+    auto* res = std::pmr::get_default_resource();
 
     SECTION("concurrent add_ref from multiple threads") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));
@@ -275,7 +275,7 @@ TEST_CASE("future_state<int> - thread safety") {
 }
 
 TEST_CASE("future_state<int> - memory ordering guarantees") {
-    auto* res = pmr::get_default_resource();
+    auto* res = std::pmr::get_default_resource();
 
     SECTION("release-acquire semantics for ready flag") {
         void* mem = res->allocate(sizeof(future_state<int>), alignof(future_state<int>));

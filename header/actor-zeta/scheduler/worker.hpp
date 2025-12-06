@@ -26,7 +26,7 @@ namespace actor_zeta { namespace scheduler {
             , data_(init) {}
 
         void start() {
-            assert(this_thread_.get_id() == std::thread::id{}); /// TODO: see implement asio
+            assert(this_thread_.get_id() == std::thread::id{});
             this_thread_ = actor_zeta::detail::launch_thread("worker", [this] { run(); });
         }
 

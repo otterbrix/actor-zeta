@@ -13,7 +13,7 @@ class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Arg
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
 
 public:
-    explicit ping_pong_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
+    explicit ping_pong_actor(std::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : base_type(resource)
         , partner_(nullptr)
         , scheduler_(sched) {

@@ -12,7 +12,7 @@
 class storage_t;
 class test_handlers;
 
-class dummy_supervisor final : public actor_zeta::base::actor_mixin<dummy_supervisor> {
+class dummy_supervisor final : public actor_zeta::actor::actor_mixin<dummy_supervisor> {
 public:
     template<typename T>
     using unique_future = actor_zeta::unique_future<T>;
@@ -24,7 +24,7 @@ public:
     static uint64_t add_supervisor_impl_counter;
     static uint64_t enqueue_base_counter;
 
-    dummy_supervisor(actor_zeta::pmr::memory_resource* resource, uint64_t threads, uint64_t throughput)
+    dummy_supervisor(std::pmr::memory_resource* resource, uint64_t threads, uint64_t throughput)
         : actor_mixin<dummy_supervisor>()
         , resource_(resource)
         , executor_(new actor_zeta::test::scheduler_test_t(threads, throughput)) {
@@ -64,7 +64,7 @@ public:
 
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -82,14 +82,14 @@ public:
         &dummy_supervisor::create_test_handlers
     >;
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept {
+    std::pmr::memory_resource* resource() const noexcept {
         return resource_;
     }
 
 protected:
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::list<std::unique_ptr<storage_t,actor_zeta::pmr::deleter_t>> storages_;
     std::list<std::unique_ptr<test_handlers,actor_zeta::pmr::deleter_t>> test_handlers_;
@@ -117,7 +117,7 @@ public:
     static uint64_t create_table_counter;
 
 public:
-    explicit storage_t(actor_zeta::pmr::memory_resource* resource_)
+    explicit storage_t(std::pmr::memory_resource* resource_)
         : actor_zeta::basic_actor<storage_t>(resource_) {
         constructor_counter++;
     }
@@ -215,7 +215,7 @@ public:
     static uint64_t ptr_4_counter;
 
 public:
-    test_handlers(actor_zeta::pmr::memory_resource* ptr)
+    test_handlers(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_handlers>(ptr) {
         init();
     }

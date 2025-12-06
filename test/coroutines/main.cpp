@@ -36,7 +36,7 @@ TEST_CASE("promise_type in unique_future<T>") {
 // ============================================================================
 class coroutine_test_actor final : public actor_zeta::basic_actor<coroutine_test_actor> {
 public:
-    explicit coroutine_test_actor(actor_zeta::pmr::memory_resource* res)
+    explicit coroutine_test_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<coroutine_test_actor>(res) {
     }
 
@@ -80,7 +80,7 @@ public:
 };
 
 TEST_CASE("simple coroutines with co_return") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("co_return int") {
@@ -139,7 +139,7 @@ TEST_CASE("simple coroutines with co_return") {
 // ============================================================================
 
 TEST_CASE("future_state coroutine methods") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     SECTION("future_state<int> has coroutine methods") {
         void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
@@ -175,7 +175,7 @@ TEST_CASE("future_state coroutine methods") {
 // ============================================================================
 
 TEST_CASE("coroutine handle can be stored in future_state") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("set_coroutine stores handle") {
@@ -208,7 +208,7 @@ TEST_CASE("coroutine handle can be stored in future_state") {
 
 TEST_CASE("virtual methods marked as final") {
     // This is a compile-time check - if it compiles, final is working
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
                                     alignof(actor_zeta::detail::future_state<int>));
@@ -235,7 +235,7 @@ TEST_CASE("virtual methods marked as final") {
 // ============================================================================
 
 TEST_CASE("future_state destroys stored coroutine") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     SECTION("destructor calls coro_handle_.destroy() if not done") {
         // Create future_state
@@ -262,7 +262,7 @@ TEST_CASE("future_state destroys stored coroutine") {
 // ============================================================================
 
 TEST_CASE("Coroutine futures") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("co_return creates valid future") {
@@ -288,7 +288,7 @@ TEST_CASE("Coroutine futures") {
     }
 
     SECTION("cancel works on futures") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
 
         // Create future via promise (clean API)
         actor_zeta::promise<int> p(resource);
@@ -308,13 +308,13 @@ TEST_CASE("Coroutine futures") {
 
 // Sync method returning unique_future<int>
 actor_zeta::unique_future<int> sync_add(int a, int b) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     return actor_zeta::make_ready_future(resource, a + b);
 }
 
 // Sync method returning unique_future<std::string>
 actor_zeta::unique_future<std::string> sync_concat(const std::string& a, const std::string& b) {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     return actor_zeta::make_ready_future(resource, a + b);
 }
 
@@ -363,7 +363,7 @@ TEST_CASE("sync methods with unique_future return type") {
 // Test actor with methods returning unique_future<T>
 class future_test_actor final : public actor_zeta::basic_actor<future_test_actor> {
 public:
-    explicit future_test_actor(actor_zeta::pmr::memory_resource* res)
+    explicit future_test_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<future_test_actor>(res) {
     }
 
@@ -394,7 +394,7 @@ public:
 };
 
 TEST_CASE("Handler integration - unique_future<T> return types") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     SECTION("sync method with ready future") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
@@ -504,7 +504,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 // This test ensures basic coroutine lifecycle works without crashing.
 
 TEST_CASE("coroutine cleanup does not crash") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("simple coroutine with co_return") {

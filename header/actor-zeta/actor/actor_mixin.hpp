@@ -1,12 +1,12 @@
 #pragma once
 
-#include <actor-zeta/base/address.hpp>
-#include <actor-zeta/detail/memory_resource.hpp>
+#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/detail/future_state.hpp>
+#include <memory_resource>
 #include <actor-zeta/future.hpp>
 #include <actor-zeta/make_message.hpp>
 
-namespace actor_zeta { namespace base {
+namespace actor_zeta { namespace actor {
 
     /// @brief Actor mixin - common functionality for all actor types
     /// Provides: id_t, address(), placement operators, enqueue_sync_impl()
@@ -100,14 +100,14 @@ namespace actor_zeta { namespace base {
 
         /// @brief Get polymorphic allocator for type T
         template<class T>
-        pmr::polymorphic_allocator<T> allocator() const noexcept {
+        std::pmr::polymorphic_allocator<T> allocator() const noexcept {
             return {static_cast<const Derived*>(this)->resource()};
         }
 
         /// @brief Sync enqueue for supervisors - calls behavior synchronously, returns ready future
         template<typename R, typename BehaviorFunc, typename... Args>
         unique_future<R> enqueue_sync_impl(
-            base::address_t sender,
+            actor::address_t sender,
             mailbox::message_id cmd,
             BehaviorFunc&& behavior_func,
             Args&&... args

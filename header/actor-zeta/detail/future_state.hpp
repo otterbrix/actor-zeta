@@ -1,6 +1,6 @@
 #pragma once
 
-#include <actor-zeta/detail/memory_resource.hpp>
+#include <memory_resource>
 #include <actor-zeta/detail/rtt.hpp>
 #include <actor-zeta/detail/coroutine.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
@@ -43,7 +43,7 @@ namespace actor_zeta { namespace detail {
     /// Coroutine handles stored here (not type-dependent) to avoid virtual dispatch
     class future_state_base {
     public:
-        explicit future_state_base(pmr::memory_resource* res) noexcept
+        explicit future_state_base(std::pmr::memory_resource* res) noexcept
             : resource_(res)
             , state_(future_state_enum::pending)
             // Initial refcount = 1:
@@ -175,7 +175,7 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Get memory resource
-        [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
+        [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept {
             return resource_;
         }
 
@@ -267,7 +267,7 @@ namespace actor_zeta { namespace detail {
         /// @brief Virtual destruction - derived class implements actual deallocation
         virtual void destroy() noexcept = 0;
 
-        pmr::memory_resource* resource_;
+        std::pmr::memory_resource* resource_;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
         intrusive_ptr<future_state_base> awaiting_on_;  // Future this coroutine is waiting on
@@ -320,7 +320,7 @@ namespace actor_zeta { namespace detail {
 
         result_storage() noexcept = default;
 
-        explicit result_storage(pmr::memory_resource*) noexcept
+        explicit result_storage(std::pmr::memory_resource*) noexcept
             : storage_()
             , has_value_(false)
 #ifndef NDEBUG
@@ -459,7 +459,7 @@ namespace actor_zeta { namespace detail {
     /// @brief Void specialization - no storage needed
     template<>
     struct result_storage<void> {
-        explicit result_storage(pmr::memory_resource*) noexcept {}
+        explicit result_storage(std::pmr::memory_resource*) noexcept {}
 
         // Void storage is trivially copyable/movable (empty struct)
         result_storage() noexcept = default;
@@ -478,7 +478,7 @@ namespace actor_zeta { namespace detail {
         static constexpr bool has_result = !std::is_void_v<T>;
 
     public:
-        explicit future_state(pmr::memory_resource* res) noexcept
+        explicit future_state(std::pmr::memory_resource* res) noexcept
             : future_state_base(res)
             , storage_(res)
             , forward_target_(nullptr)
@@ -602,6 +602,18 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
+            // Auto-resume continuation when value is set
+            // BUT: If this state owns a coroutine (set by coroutine promise), DON'T resume here!
+            // Let final_suspend() do symmetric transfer instead. Otherwise:
+            // 1. set_value() resumes continuation
+            // 2. Continuation calls get() and destroys this state
+            // 3. We return to set_value() but state is destroyed
+            // 4. Coroutine runs final_suspend() on destroyed state → crash
+            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
+                auto cont = resume_coro_handle_;
+                resume_coro_handle_ = {};  // Clear before resume (single-shot)
+                cont.resume();
+            }
         }
 
         /// @brief Get value reference (only for non-void) - returns T&
@@ -670,6 +682,13 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
+            // Auto-resume continuation when ready (void version)
+            // Same logic as set_value: don't resume if we own a coroutine
+            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
+                auto cont = resume_coro_handle_;
+                resume_coro_handle_ = {};  // Clear before resume (single-shot)
+                cont.resume();
+            }
         }
 
         // Coroutine methods inherited from future_state_base (non-virtual)

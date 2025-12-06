@@ -19,7 +19,7 @@ namespace rtt_test = actor_zeta::detail::rtt_test;
 
 TEST_CASE("rt_tuple") {
     SECTION("actor_zeta::detail::get f1") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         auto f = [](
                      int8_t a1,
                      int16_t a2,
@@ -44,7 +44,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("actor_zeta::detail::get f2") { // @TODO !!! here is a type_traits mismatch: const type == type !!!
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         auto f = [](
                      const int8_t a1,
                      const int16_t a2,
@@ -73,7 +73,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("actor_zeta::detail::get f3") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         auto f = [](
                      int8_t& a1,
                      int16_t& a2,
@@ -98,7 +98,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("actor_zeta::detail::get f4") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         auto f = [](
                      const int8_t& a1,
                      const int16_t& a2,
@@ -123,7 +123,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("actor_zeta::detail::get f5") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         auto f = [](
                      std::unique_ptr<int64_t>&& up1,
                      std::unique_ptr<int64_t>&& up2,
@@ -154,7 +154,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("actor_zeta::detail::get f6") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         struct pointer_test {
             size_t d1;
             size_t d2;
@@ -193,7 +193,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("test_getSize") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         test_getSize(
             static_cast<int8_t>(3457),
             static_cast<int64_t>(57),
@@ -516,43 +516,43 @@ TEST_CASE("rt_tuple") {
 #endif
 
     SECTION("rtt created from an empty set of elements is empty") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         const auto t = rtt(resource);
         REQUIRE(t.empty());
     }
 
     SECTION("The size of a rtt created from an empty set of elements is zero ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         const auto t = rtt(resource);
         REQUIRE(t.size() == 0);
     }
 
     SECTION("The volume of a rtt created from an empty set of elements is zero ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         const auto t = rtt(resource);
         REQUIRE(t.volume() == 0);
     }
 
     SECTION("The capacity of a rtt created from an empty set of elements is zero ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource =std::pmr::get_default_resource();
         const auto t = rtt(resource);
         REQUIRE(t.capacity() == 0);
     }
 
     SECTION("rtt created from a non-empty set of elements is not empty ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         const auto t = rtt(resource, 42, 3.14);
         REQUIRE(not t.empty());
     }
 
     SECTION("The size of a rtt created from a non-empty set of elements is equal to the number of these elements ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         const auto t = rtt(resource, std::string("123"), 42, 2.71, false);
         REQUIRE(t.size() == 4);
     }
 
     SECTION("The volume of a rtt created from a set of elements is equal to the volume of a rtt created by sequential insertion of the same elements into the end of an empty rtt. ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         const auto constructed = rtt(resource, 42, 3.14, std::string("123"), true);
 
         auto pushed_back = rtt{resource, 42, 3.14, std::string("123"), true};
@@ -561,13 +561,13 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("The capacity of a recreation center created from a set of elements is greater than or equal to the volume of this recreation center ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         const auto t = rtt(resource, std::vector<std::size_t>{}, 42, X{}, 3.14);
         REQUIRE(t.capacity() >= t.volume());
     }
 
     SECTION("The size of the rtt is equal to the number of elements it contains") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         const auto some_vector = std::vector<std::size_t>{};
         const auto some_integer = 42;
         const auto some_struct = X{};
@@ -578,7 +578,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("rtt can be created from an arbitrary set of objects ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt t(resource, std::string("123"), 42, true, X{17, std::vector<int>{1, 2, 3}});
         REQUIRE(t.size() == 4);
         REQUIRE(t.get<std::string>(0) == std::string("123"));
@@ -589,7 +589,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("Arbitrary objects can be inserted at the end of the rtt") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt t(resource, X{17, std::vector<int>{1, 2, 3}}, true, std::string("123"));
 
         REQUIRE(t.size() == 3);
@@ -600,7 +600,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("Vectors of int8_t") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt t(resource,
               std::vector<int8_t>{1, 2, 3, 4, 5, 6, 7, 8},
               std::vector<int8_t>{1, 2, 3, 4, 5, 6, 7, 8},
@@ -683,7 +683,7 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
 #endif
 
     SECTION("Objects stored in the rtt can be changed externally ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt t(resource, true, std::vector<char>{'a', 'b', 'c'}, 10);
 
         auto& vector = t.get<std::vector<char>>(1);
@@ -698,20 +698,20 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     // MOVE RTT
 
     SECTION("The rtt transfer constructor transfers elements of one rtt into another, rather than inserting one rtt inside another rtt") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt moved(resource, 2.71, 3, false);
         rtt constructed(std::move(moved));
         REQUIRE(constructed.size() == 3);
     }
 
     SECTION("rtt may contain rtt") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt t(resource, rtt(resource, 1, 2), rtt(resource, 3, 4));
         REQUIRE(t.size() == 2);
     }
 
     SECTION("Objects stored in the rtt are transferred when transferring the rtt") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         REQUIRE(dummy::instances_count == 0);
         {
             rtt one(resource, dummy{});
@@ -727,7 +727,7 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("Objects stored in the rtt are destroyed during transfer assignment") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         REQUIRE(dummy::instances_count == 0);
         rtt initial(resource, dummy{});
         REQUIRE(dummy::instances_count == 1);
@@ -738,14 +738,14 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("The transfer constructor leaves the portable rtt instance empty") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt source(resource, 13, 3.14, true);
         rtt destination(std::move(source));
         REQUIRE(source.empty());
     }
 
     SECTION("The takeover assignment operator leaves the portable copy of the rtt empty") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt source(resource, std::string("move me"));
         rtt destination(resource, std::string("some items here"));
         destination = std::move(source);
@@ -753,14 +753,14 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("The size of the rtt source after transfer is equal to zero") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt source(resource, 13, 3.14, true);
         rtt destination(std::move(source));
         REQUIRE(source.size() == 0);
     }
 
     SECTION("The size of the rtt-source after carrying takeover assignment is equal to zero ") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt source(resource, std::string("move me"));
         rtt destination(resource, std::string("some items here"));
         destination = std::move(source);
@@ -768,14 +768,14 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("The volume of the rtt source after transfer is equal to zero") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt source(resource, 13, 3.14, true);
         rtt destination(resource, std::move(source));
         REQUIRE(source.volume() == 0);
     }
 
     SECTION("The volume of the rtt-source after carrying takeover assignment is equal to zero") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         rtt source(resource, std::string("move me"));
         rtt destination(resource, std::string("some items here"));
         destination = std::move(source);
@@ -783,7 +783,7 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("Transferring rtt assignment does not lead to leaks") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         REQUIRE(dummy::instances_count == 0);
         {
             rtt t(resource, dummy{});
@@ -798,7 +798,7 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("movable only objects") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         movable_only mv_only;
         auto t = rtt(resource, std::move(mv_only));
         REQUIRE_FALSE(mv_only.alive);
@@ -806,7 +806,7 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("actor_zeta::detail::get custom uptr instances_count check") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         using type_t = dummy;
         using type_ptr = std::unique_ptr<type_t>;
         type_t::created_times = 0;
@@ -862,14 +862,14 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     // REFERENCES
 
     SECTION("Knows how to give references to immutable values by their indentation in the rtt") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         const rtt t(resource, std::string("123"), 42, true);
         auto int_offset = t.offset(1);
         REQUIRE(t.get_by_offset<int>(int_offset) == 42);
     }
 
     SECTION("Knows how to give links to mutable values by their indentation in rtt") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         auto old_value = 42;
         auto new_value = 99;
 
@@ -883,7 +883,7 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
     }
 
     SECTION("swap") {
-        auto* resource = actor_zeta::pmr::get_default_resource();
+        auto* resource = std::pmr::get_default_resource();
         auto t = rtt(resource, 1, 3.14);
         auto u = rtt(resource, std::string("qwe"), true);
 

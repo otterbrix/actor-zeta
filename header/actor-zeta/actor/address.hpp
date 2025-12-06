@@ -5,7 +5,7 @@
 #include "forwards.hpp"
 #include <type_traits>
 
-namespace actor_zeta { namespace base {
+namespace actor_zeta { namespace actor {
     ///
     /// @brief
     ///

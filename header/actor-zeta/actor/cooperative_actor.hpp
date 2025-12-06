@@ -1,17 +1,17 @@
 #pragma once
 
+#include <actor-zeta/actor/actor_mixin.hpp>
+#include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/config.hpp>
-#include <actor-zeta/mailbox/default_mailbox.hpp>
-#include <actor-zeta/base/actor_mixin.hpp>
-#include <actor-zeta/base/forwards.hpp>
-#include <actor-zeta/detail/memory.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/detail/ignore_unused.hpp>
+#include <actor-zeta/detail/memory.hpp>
+#include <actor-zeta/detail/queue/enqueue_result.hpp>
+#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/future.hpp>
+#include <actor-zeta/mailbox/default_mailbox.hpp>
 #include <actor-zeta/make_message.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
-#include <actor-zeta/detail/ignore_unused.hpp>
-#include <actor-zeta/detail/queue/enqueue_result.hpp>
 
 #include <actor-zeta/mailbox/mailbox.hpp>
 #include <actor-zeta/mailbox/default_mailbox.hpp>
@@ -19,7 +19,7 @@
 #include <thread>
 #include <chrono>
 
-namespace actor_zeta { namespace base {
+namespace actor_zeta { namespace actor {
 
     using default_mailbox = mailbox::mailbox_t<mailbox::default_mailbox_impl>;
 
@@ -132,7 +132,7 @@ namespace actor_zeta { namespace base {
         template<typename R, typename... Args>
         [[nodiscard("Check needs_scheduling() and call schedule() if needed")]]
         unique_future<R> enqueue_impl(
-            base::address_t sender,
+            actor::address_t sender,
             mailbox::message_id cmd,
             Args&&... args
         ) {
@@ -435,7 +435,7 @@ namespace actor_zeta { namespace base {
             return finalize(result, handled, keep_scheduled);
         }
 
-        pmr::memory_resource* resource() const noexcept {
+        std::pmr::memory_resource* resource() const noexcept {
 #ifndef NDEBUG
             assert(magic_ == kMagicAlive && "Use-after-free: resource() called on destroyed actor!");
 #endif
@@ -474,7 +474,7 @@ namespace actor_zeta { namespace base {
         }
 
     protected:
-        explicit cooperative_actor(pmr::memory_resource* in_resource)
+        explicit cooperative_actor(std::pmr::memory_resource* in_resource)
             : actor_mixin<Actor>()
             , shutdown_guard_(this)       // Initialize FIRST (destroyed LAST!)
             , resource_(check_ptr(in_resource))
@@ -566,7 +566,7 @@ namespace actor_zeta { namespace base {
 
         shutdown_guard_t shutdown_guard_;
 
-        pmr::memory_resource* resource_;
+        std::pmr::memory_resource* resource_;
         mailbox::message* current_message_;
         mailbox_t mailbox_;
         std::atomic<actor_state> state_{actor_state::idle};

@@ -6,7 +6,7 @@
 
 class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
-    explicit test_actor(actor_zeta::pmr::memory_resource* ptr)
+    explicit test_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_actor>(ptr)
         , call_count1_(0)
         , call_count2_(0)
@@ -108,7 +108,7 @@ TEST_CASE("dispatch_traits - simple one-line syntax") {
     // This test verifies that the new syntax compiles
     // using dispatch_traits = actor_zeta::dispatch_traits<&Actor::method1, ...>;
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
     REQUIRE(actor != nullptr);

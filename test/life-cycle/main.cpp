@@ -5,7 +5,7 @@
 #include <actor-zeta.hpp>
 
 TEST_CASE("life-cycle") {
-    std::unique_ptr<actor_zeta::pmr::memory_resource> resource = std::unique_ptr<actor_zeta::pmr::memory_resource>(actor_zeta::pmr::get_default_resource());
+    std::unique_ptr<std::pmr::memory_resource> resource = std::unique_ptr<std::pmr::memory_resource>(std::pmr::get_default_resource());
     {
         // singal actor
         {

@@ -1,7 +1,6 @@
 #pragma once
 
-#include <actor-zeta/detail/memory_resource.hpp>
-#include <actor-zeta/detail/pmr/aligned_allocate.hpp>
+#include <memory_resource>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
@@ -68,7 +67,7 @@ namespace actor_zeta { namespace detail {
             destroyer_t destroyer;
         };
 
-        actor_zeta::pmr::memory_resource* memory_resource_ = nullptr;
+        std::pmr::memory_resource* memory_resource_ = nullptr;
 
         std::size_t capacity_ = 0;
         std::size_t volume_ = 0;
@@ -108,8 +107,8 @@ namespace actor_zeta { namespace detail {
 
     public:
         template<typename... Args>
-        explicit rtt(actor_zeta::pmr::memory_resource* resource, Args&&... args)
-            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+        explicit rtt(std::pmr::memory_resource* resource, Args&&... args)
+            : memory_resource_([](std::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(0)
             , volume_(0)
             , allocation(nullptr)
@@ -146,8 +145,8 @@ namespace actor_zeta { namespace detail {
 #endif
         }
 
-        rtt(actor_zeta::pmr::memory_resource* resource)
-            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+        rtt(std::pmr::memory_resource* resource)
+            : memory_resource_([](std::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(0)
             , volume_(0)
             , allocation(nullptr)
@@ -182,8 +181,8 @@ namespace actor_zeta { namespace detail {
         }
 
 
-        rtt(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, rtt&& other) noexcept
-            : memory_resource_([](actor_zeta::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+        rtt(std::allocator_arg_t, std::pmr::memory_resource* resource, rtt&& other) noexcept
+            : memory_resource_([](std::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(0)
             , volume_(0)
             , allocation(nullptr)
@@ -262,7 +261,7 @@ namespace actor_zeta { namespace detail {
         char* try_to_align(const T&) {
             auto space_left = capacity_ - volume_;
             void* creation_place = data_ + volume_;
-            auto aligned_place = actor_zeta::detail::align(alignof(T), sizeof(T), creation_place, space_left);
+            auto aligned_place = std::align(alignof(T), sizeof(T), creation_place, space_left);
             return static_cast<char*>(aligned_place);
         }
 
@@ -339,7 +338,7 @@ namespace actor_zeta { namespace detail {
 
         /// @brief Get memory resource used by this rtt
         /// @return Pointer to memory resource, or nullptr if rtt was moved-from
-        actor_zeta::pmr::memory_resource* memory_resource() const noexcept {
+        std::pmr::memory_resource* memory_resource() const noexcept {
             return memory_resource_;
         }
     };

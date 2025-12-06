@@ -30,7 +30,7 @@ constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(10);
 // Test actor for ABA problem testing
 class aba_test_actor final : public actor_zeta::basic_actor<aba_test_actor> {
 public:
-    explicit aba_test_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit aba_test_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<aba_test_actor>(resource) {
     }
 
@@ -75,7 +75,7 @@ TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
     // - Fast recycling of message objects (increases ABA probability)
     // - Random delays to create race windows
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
 
@@ -156,7 +156,7 @@ TEST_CASE("ABA Test 2: Rapid actor creation/destruction stress test") {
     // - Assert in enqueue_impl will catch invalid state transitions
     // - TSan will detect data races on state_ atomic
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
 
@@ -208,7 +208,7 @@ TEST_CASE("ABA Test 3: Concurrent enqueue from multiple threads") {
     // - Assert in enqueue_impl will catch invalid states
     // - TSan will detect data races on state_ atomic
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
     scheduler->start();
 
@@ -261,7 +261,7 @@ TEST_CASE("ABA Test 4: Interleaved enqueue/resume stress test") {
     // - TSan detects data races
     // - Livelock detection catches infinite CAS retries
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
     scheduler->start();
 

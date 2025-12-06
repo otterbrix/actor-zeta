@@ -2,7 +2,7 @@
 
 // clang-format off
 #include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/base/address.hpp>
+#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
 #include <actor-zeta/future.hpp>
 // clang-format on
@@ -147,8 +147,8 @@ namespace actor_zeta {
         typename std::enable_if<
             is_valid_name_type<Name>::value,
             mailbox::message_ptr>::type
-        make_message(actor_zeta::pmr::memory_resource* resource,
-                     base::address_t sender,
+        make_message(std::pmr::memory_resource* resource,
+                     actor::address_t sender,
                      Name&& name) {
             assert(resource);
             return mailbox::pmr_make_message(resource, resource, std::move(sender),
@@ -162,8 +162,8 @@ namespace actor_zeta {
             is_valid_name_type<Name>::value &&
                 all_valid_rtt_types<std::decay_t<Args>...>::value,
             mailbox::message_ptr>::type
-        make_message(actor_zeta::pmr::memory_resource* resource,
-                     base::address_t sender,
+        make_message(std::pmr::memory_resource* resource,
+                     actor::address_t sender,
                      Name&& name,
                      Args&&... args) {
             assert(resource);
@@ -188,8 +188,8 @@ namespace actor_zeta {
             is_valid_name_type<Name>::value,
             std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>>::type
         make_message_with_result(
-            actor_zeta::pmr::memory_resource* resource,
-            base::address_t sender,
+            std::pmr::memory_resource* resource,
+            actor::address_t sender,
             Name&& name
         ) {
             static_assert(!std::is_reference_v<R>, "Result type R must not be a reference");
@@ -214,8 +214,8 @@ namespace actor_zeta {
                 all_valid_rtt_types<std::decay_t<Args>...>::value,
             std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>>::type
         make_message_with_result(
-            actor_zeta::pmr::memory_resource* resource,
-            base::address_t sender,
+            std::pmr::memory_resource* resource,
+            actor::address_t sender,
             Name&& name,
             Args&&... args
         ) {

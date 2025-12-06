@@ -1,6 +1,6 @@
 #pragma once
 
-#include <actor-zeta/detail/memory_resource.hpp>
+#include <memory_resource>
 #include <cstddef>
 #include <cstdint>
 
@@ -10,7 +10,7 @@ namespace actor_zeta::detail {
     /// This allows operator delete to know which allocator to use
     /// Layout: [header][padding][coroutine_frame]
     struct coro_frame_header {
-        pmr::memory_resource* resource;
+        std::pmr::memory_resource* resource;
         std::size_t frame_size;  // Store frame size for unsized delete
 
         /// @brief Size of header with alignment padding
@@ -27,7 +27,7 @@ namespace actor_zeta::detail {
     /// @param res Memory resource to use (nullptr = use global new)
     /// @param frame_size Size of coroutine frame
     /// @return Pointer to coroutine frame (after header)
-    inline void* allocate_coro_frame(pmr::memory_resource* res, std::size_t frame_size) noexcept {
+    inline void* allocate_coro_frame(std::pmr::memory_resource* res, std::size_t frame_size) noexcept {
         const std::size_t total_size = coro_frame_header::padded_size() + frame_size;
         const std::size_t align = alignof(std::max_align_t);
 

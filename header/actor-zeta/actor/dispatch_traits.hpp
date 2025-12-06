@@ -1,11 +1,11 @@
 #pragma once
 
-#include <cstdint>
+#include <actor-zeta/actor/forwards.hpp>
+#include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/mailbox/id.hpp>
-#include <actor-zeta/base/forwards.hpp>
+#include <cstdint>
 
 namespace actor_zeta {
 
@@ -225,7 +225,7 @@ namespace actor_zeta {
         }
 
         template<typename Sender, typename... Args>
-        static auto dispatch(Method method, base::address_t target, Sender sender, Args&&... args)
+        static auto dispatch(Method method, actor::address_t target, Sender sender, Args&&... args)
             -> typename Actor::template unique_future<
                 detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
         {

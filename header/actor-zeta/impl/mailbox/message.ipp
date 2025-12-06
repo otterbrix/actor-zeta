@@ -2,7 +2,7 @@
 
 #include <utility>
 
-#include <actor-zeta/base/address.hpp>
+#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
 
 namespace actor_zeta { namespace mailbox {
@@ -15,13 +15,13 @@ namespace actor_zeta { namespace mailbox {
         return command_ != 0 || bool(sender_) || !body_.empty();
     }
 
-    message::message(actor_zeta::pmr::memory_resource* resource, address_t sender, message_id name)
+    message::message(std::pmr::memory_resource* resource, address_t sender, message_id name)
         : sender_(std::move(sender))
         , command_(std::move(name))
         , body_(resource)
         , result_slot_(nullptr) {}
 
-    message::message(actor_zeta::pmr::memory_resource* resource, address_t sender, message_id name, actor_zeta::detail::rtt&& body)
+    message::message(std::pmr::memory_resource* resource, address_t sender, message_id name, actor_zeta::detail::rtt&& body)
         : sender_(std::move(sender))
         , command_(std::move(name))
         , body_(std::allocator_arg, resource, std::move(body))
@@ -34,7 +34,7 @@ namespace actor_zeta { namespace mailbox {
         , result_slot_(std::move(other.result_slot_)) {
     }
 
-    message::message(std::allocator_arg_t, actor_zeta::pmr::memory_resource* resource, message&& other) noexcept
+    message::message(std::allocator_arg_t, std::pmr::memory_resource* resource, message&& other) noexcept
            : sender_(std::move(other.sender_))
            , command_(std::move(other.command_))
            , body_(std::allocator_arg, resource, std::move(other.body_))
@@ -52,7 +52,7 @@ namespace actor_zeta { namespace mailbox {
         return *this;
     }
 
-    message::message(actor_zeta::pmr::memory_resource* resource)
+    message::message(std::pmr::memory_resource* resource)
         : singly_linked(nullptr)
         , prev(nullptr)
         , sender_(address_t::empty_address())
@@ -78,15 +78,15 @@ namespace actor_zeta { namespace mailbox {
         return body_;
     }
 
-    auto message::sender() & noexcept -> base::address_t& {
+    auto message::sender() & noexcept -> actor::address_t& {
         return sender_;
     }
 
-    auto message::sender() && noexcept -> base::address_t&& {
+    auto message::sender() && noexcept -> actor::address_t&& {
         return std::move(sender_);
     }
 
-    auto message::sender() const& noexcept -> base::address_t const& {
+    auto message::sender() const& noexcept -> actor::address_t const& {
         return sender_;
     }
 

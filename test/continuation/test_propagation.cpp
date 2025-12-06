@@ -2,7 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/memory_resource.hpp>
+#include <memory_resource>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
 
 #include <thread>
@@ -12,13 +12,13 @@ using namespace actor_zeta::detail;
 
 // Helper: allocate future_state using PMR (matches destroy() deallocation)
 template<typename T>
-future_state<T>* allocate_future_state(actor_zeta::pmr::memory_resource* resource) {
+future_state<T>* allocate_future_state(std::pmr::memory_resource* resource) {
     void* mem = resource->allocate(sizeof(future_state<T>), alignof(future_state<T>));
     return new (mem) future_state<T>(resource);
 }
 
 TEST_CASE("forward_target propagation - basic typed", "[forward_target][propagation]") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     // Create source and target states using PMR allocate (matches destroy() deallocation)
     auto* source_state = allocate_future_state<int>(resource);
@@ -67,7 +67,7 @@ TEST_CASE("forward_target propagation - basic typed", "[forward_target][propagat
 // CRITICAL TEST: Void forward_target propagation
 // ============================================================================
 TEST_CASE("forward_target propagation - void specialization", "[forward_target][propagation][void][critical]") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto* source_state = allocate_future_state<void>(resource);
     auto* target_state = allocate_future_state<void>(resource);
@@ -92,7 +92,7 @@ TEST_CASE("forward_target propagation - void specialization", "[forward_target][
 }
 
 TEST_CASE("forward_target propagation - chain of 3 typed", "[forward_target][propagation][chain]") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     // Create chain: A → B → C
     auto* state_a = allocate_future_state<int>(resource);
@@ -125,7 +125,7 @@ TEST_CASE("forward_target propagation - chain of 3 typed", "[forward_target][pro
 }
 
 TEST_CASE("forward_target propagation - chain of 3 void", "[forward_target][propagation][chain][void]") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     // Create void chain: A → B → C
     auto* state_a = allocate_future_state<void>(resource);
@@ -154,7 +154,7 @@ TEST_CASE("forward_target propagation - chain of 3 void", "[forward_target][prop
 }
 
 TEST_CASE("forward_target propagation - no double propagation", "[forward_target][edge-case]") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto* source_state = allocate_future_state<int>(resource);
     auto* target_state = allocate_future_state<int>(resource);
@@ -178,7 +178,7 @@ TEST_CASE("forward_target propagation - no double propagation", "[forward_target
 }
 
 TEST_CASE("forward_target propagation - void no double propagation", "[forward_target][edge-case][void]") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto* source_state = allocate_future_state<void>(resource);
     auto* target_state = allocate_future_state<void>(resource);
@@ -199,7 +199,7 @@ TEST_CASE("forward_target propagation - void no double propagation", "[forward_t
 }
 
 TEST_CASE("forward_target propagation - cancelled source", "[forward_target][edge-case]") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto* source_state = allocate_future_state<int>(resource);
     auto* target_state = allocate_future_state<int>(resource);

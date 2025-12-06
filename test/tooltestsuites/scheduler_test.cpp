@@ -1,5 +1,5 @@
 // clang-format off
-#include <actor-zeta/base/address.hpp>
+#include <actor-zeta/actor/address.hpp>
 #include "scheduler_test.hpp"
 // clang-format on
 

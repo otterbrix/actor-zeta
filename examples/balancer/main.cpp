@@ -27,7 +27,7 @@ class collection_part_t;
 
 class collection_part_t final : public actor_zeta::basic_actor<collection_part_t> {
 public:
-    collection_part_t(actor_zeta::pmr::memory_resource* ptr)
+    collection_part_t(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<collection_part_t>(ptr) {
         ++count_collection_part;
     }
@@ -96,17 +96,17 @@ private:
 
 
 
-class collection_t final : public actor_zeta::base::actor_mixin<collection_t> {
+class collection_t final : public actor_zeta::actor::actor_mixin<collection_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    collection_t(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler*)
-        : actor_zeta::base::actor_mixin<collection_t>()
+    collection_t(std::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler*)
+        : actor_zeta::actor::actor_mixin<collection_t>()
         , resource_(resource) {
         ++count_collection;
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+    std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     void create() {
         auto ptr = actor_zeta::spawn<collection_part_t> (resource_);
@@ -130,7 +130,7 @@ public:
     // NEW API: Forward arguments to child actor (message created in child's resource)
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -179,7 +179,7 @@ public:
 protected:
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
 };
@@ -191,7 +191,7 @@ static constexpr auto sleep_time = std::chrono::milliseconds(100);
 
 
 int main() {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
     auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());

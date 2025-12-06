@@ -1,62 +1,30 @@
 #pragma once
 
-#include <actor-zeta/base/forwards.hpp>
+#include <actor-zeta/actor/forwards.hpp>
+#include <actor-zeta/detail/callable_trait.hpp>
+#include <actor-zeta/detail/rtt.hpp>
+#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/future.hpp>
 #include <actor-zeta/mailbox/message.hpp>
-#include <actor-zeta/detail/callable_trait.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/detail/rtt.hpp>
-#include <actor-zeta/make_message.hpp>  // for is_valid_rtt_type_v
+#include <actor-zeta/make_message.hpp> // for is_valid_rtt_type_v
 
 namespace actor_zeta {
 
 namespace detail {
 
-    /// @brief Set up result chaining from method_future to msg->result_slot() (inline version)
-    /// @note Unified for both void and non-void types using if constexpr
+    /// @brief Set up result chaining from method_future to msg's result promise
+    /// @note Uses forward_to(promise&) - clean API without exposing detail::
     template<typename T>
     inline void setup_result_chaining_inline(
         unique_future<T>& method_future,
         mailbox::message* msg
     ) noexcept {
-        auto result_slot_base = msg->result_slot();
-        if (!result_slot_base) {
+        if (!msg->has_result_slot()) {
             return;
         }
 
-        if constexpr (std::is_void_v<T>) {
-            auto* result_slot = static_cast<detail::future_state<void>*>(result_slot_base.get());
-
-            if (method_future.available()) {
-                result_slot->set_ready();
-                return;
-            }
-
-            auto* method_state = method_future.get_state();
-            if (!method_state) {
-                assert(false && "Non-available void future has no state!");
-                result_slot->set_state(detail::future_state_enum::error);
-                return;
-            }
-
-            method_state->set_forward_target_void(result_slot);
-        } else {
-            auto* result_slot = static_cast<detail::future_state<T>*>(result_slot_base.get());
-
-            if (method_future.available()) {
-                result_slot->set_value(std::move(method_future).get());
-                return;
-            }
-
-            auto* method_state = method_future.get_state();
-            if (!method_state) {
-                assert(false && "Non-available typed future has no state!");
-                result_slot->set_state(detail::future_state_enum::error);
-                return;
-            }
-
-            method_state->set_forward_target(result_slot);
-        }
+        auto result_promise = msg->get_result_promise<T>();
+        method_future.forward_to(result_promise);
     }
 
 } // namespace detail

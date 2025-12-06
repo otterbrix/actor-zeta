@@ -1,11 +1,11 @@
 #pragma once
 
-#include <actor-zeta/base/forwards.hpp>
-#include <actor-zeta/base/dispatch_traits.hpp>
+#include <actor-zeta/actor/dispatch_traits.hpp>
+#include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/make_message.hpp>
 #include <actor-zeta/mailbox/id.hpp>
+#include <actor-zeta/make_message.hpp>
 
 namespace actor_zeta {
 
@@ -58,7 +58,7 @@ namespace detail {
         using actual_result_type = unwrap_future_t<method_result_type>;
 
         Actor* typed_actor;
-        if constexpr (std::is_same_v<ActorPtr, base::address_t>) {
+        if constexpr (std::is_same_v<ActorPtr, actor::address_t>) {
             typed_actor = static_cast<Actor*>(actor->operator->());
         } else {
             typed_actor = actor;
@@ -92,7 +92,7 @@ namespace detail {
 
     template<typename Sender, typename Method, typename... Args,
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
-    [[nodiscard]] inline auto send(base::address_t target, Sender sender, Method method, Args&&... args)
+    [[nodiscard]] inline auto send(actor::address_t target, Sender sender, Method method, Args&&... args)
         -> typename Actor::template unique_future<
             detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>>
     {

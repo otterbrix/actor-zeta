@@ -41,7 +41,7 @@ public:
         &old_style_actor::method5
     >;
 
-    explicit old_style_actor(pmr::memory_resource* resource)
+    explicit old_style_actor(std::pmr::memory_resource* resource)
         : base::basic_actor<old_style_actor>(resource)
         , counter_(0) {}
 
@@ -72,7 +72,7 @@ private:
 // =====================================================================
 
 static void BM_OldStyleDispatch(benchmark::State& state) {
-    auto resource = pmr::get_default_resource();
+    auto resource = std::pmr::get_default_resource();
     auto actor = spawn<old_style_actor>(resource);
 
     int method_id = static_cast<int>(state.range(0));
@@ -148,7 +148,7 @@ public:
         &coroutine_actor::sum3
     >;
 
-    explicit coroutine_actor(pmr::memory_resource* resource)
+    explicit coroutine_actor(std::pmr::memory_resource* resource)
         : base::basic_actor<coroutine_actor>(resource) {}
 
     unique_future<void> behavior(mailbox::message* msg) {
@@ -168,7 +168,7 @@ public:
 
 // Direct method call (baseline - no dispatch overhead)
 static void BM_DirectCall_Coroutine(benchmark::State& state) {
-    auto resource = pmr::get_default_resource();
+    auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
@@ -183,7 +183,7 @@ BENCHMARK(BM_DirectCall_Coroutine)->Unit(benchmark::kNanosecond);
 
 // dispatch() with 0 args
 static void BM_Dispatch_0Args(benchmark::State& state) {
-    auto resource = pmr::get_default_resource();
+    auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     // Create message once, reuse
@@ -204,7 +204,7 @@ BENCHMARK(BM_Dispatch_0Args)->Unit(benchmark::kNanosecond);
 
 // dispatch() with 1 arg
 static void BM_Dispatch_1Arg(benchmark::State& state) {
-    auto resource = pmr::get_default_resource();
+    auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
@@ -225,7 +225,7 @@ BENCHMARK(BM_Dispatch_1Arg)->Unit(benchmark::kNanosecond);
 
 // dispatch() with 2 args
 static void BM_Dispatch_2Args(benchmark::State& state) {
-    auto resource = pmr::get_default_resource();
+    auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
@@ -246,7 +246,7 @@ BENCHMARK(BM_Dispatch_2Args)->Unit(benchmark::kNanosecond);
 
 // dispatch() with 3 args
 static void BM_Dispatch_3Args(benchmark::State& state) {
-    auto resource = pmr::get_default_resource();
+    auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
@@ -267,7 +267,7 @@ BENCHMARK(BM_Dispatch_3Args)->Unit(benchmark::kNanosecond);
 
 // Full send/dispatch/resume cycle for comparison
 static void BM_FullCycle_Coroutine(benchmark::State& state) {
-    auto resource = pmr::get_default_resource();
+    auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {

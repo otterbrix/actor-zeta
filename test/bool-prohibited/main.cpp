@@ -7,7 +7,7 @@
 // Good actor - uses void (fire-and-forget) and other types (request-response)
 class good_actor final : public actor_zeta::basic_actor<good_actor> {
 public:
-    explicit good_actor(actor_zeta::pmr::memory_resource* ptr)
+    explicit good_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<good_actor>(ptr) {
     }
 
@@ -61,7 +61,7 @@ private:
 };
 
 TEST_CASE("void methods work (fire-and-forget)") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
@@ -81,7 +81,7 @@ TEST_CASE("void methods work (fire-and-forget)") {
 }
 
 TEST_CASE("int methods work (request-response)") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
@@ -100,7 +100,7 @@ TEST_CASE("int methods work (request-response)") {
 }
 
 TEST_CASE("enum methods work (request-response)") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
@@ -119,7 +119,7 @@ TEST_CASE("enum methods work (request-response)") {
 }
 
 TEST_CASE("string methods work (request-response)") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
@@ -138,7 +138,7 @@ TEST_CASE("string methods work (request-response)") {
 }
 
 TEST_CASE("address_t works with all method types") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
     auto addr = actor->address();
@@ -191,7 +191,7 @@ TEST_CASE("address_t works with all method types") {
 
 class bad_actor final : public actor_zeta::basic_actor<bad_actor> {
 public:
-    explicit bad_actor(actor_zeta::pmr::memory_resource* ptr)
+    explicit bad_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<bad_actor>(ptr) {}
 
     // ❌ PROHIBITED: returns bool
@@ -205,7 +205,7 @@ public:
 };
 
 TEST_CASE("bool methods are prohibited") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<bad_actor>(resource);
 
     // ❌ Compilation error: "Actor methods must not return bool"

@@ -12,7 +12,7 @@
 // Test actor that can be cancelled during processing
 class state_test_actor final : public actor_zeta::basic_actor<state_test_actor> {
 public:
-    explicit state_test_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit state_test_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<state_test_actor>(resource) {
     }
 
@@ -66,7 +66,7 @@ TEST_CASE("State Test 1.1: set_result vs cancel race") {
     // - TSan will detect data races on state transitions
     // - Test completes without crashes = SUCCESS
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -123,7 +123,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
     // - TSan will detect data races
     // - Test verifies monotonic transition (false → true, never true → false)
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -204,7 +204,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
     // - TSan will detect data races
     // - All observer threads complete successfully
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -291,7 +291,7 @@ TEST_CASE("State Test 1.4: State transition ordering") {
     // - TSan detects ordering violations
     // - Value mismatch detection in test
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -362,7 +362,7 @@ TEST_CASE("State Test 1.5: Happens-before across state transitions") {
     //
     // This tests that the state transition acts as a synchronization point.
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 

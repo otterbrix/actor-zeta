@@ -1,13 +1,13 @@
 #pragma once
 
 // clang-format off
-#include <actor-zeta/base/address.hpp>
+#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
 // clang-format on
 
 #include <memory>
 
-namespace actor_zeta { namespace base {
+namespace actor_zeta { namespace actor {
 
     address_t::address_t() noexcept
         : ptr_(nullptr) {
