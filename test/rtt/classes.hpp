@@ -19,7 +19,7 @@ template<class Head, class... Tail>
 void place(char* data, size_t capacity, size_t volume, __attribute__((unused)) Head head, Tail... tail) {
     auto space_left = capacity - volume;
     void* creation_place = data + volume;
-    auto aligned_place = actor_zeta::detail::align(alignof(Head), sizeof(Head), creation_place, space_left);
+    auto aligned_place = std::align(alignof(Head), sizeof(Head), creation_place, space_left);
     printf("%s :: data: %p, capacity: %lu, volume: %lu, space_left: %lu, creation_place: %p, aligned_place: %p\n",
            __func__, static_cast<void*>(data), capacity, volume, space_left, creation_place, aligned_place);
     REQUIRE(aligned_place);

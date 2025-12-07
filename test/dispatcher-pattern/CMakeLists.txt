@@ -10,7 +10,6 @@ add_executable(
 target_link_libraries(
         tests_dispatcher_pattern
         PRIVATE
-        actor-zeta
         tooltestsuites
         Catch2::Catch2
 )

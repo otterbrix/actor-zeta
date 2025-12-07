@@ -31,7 +31,7 @@ using namespace dispatcher_test;
 // ============================================================================
 
 TEST_CASE("dispatcher-pattern: single-thread basic flow") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: single-thread basic flow ==========");
 
@@ -82,7 +82,7 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
 }
 
 TEST_CASE("dispatcher-pattern: error handling") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: error handling ==========");
 
@@ -122,7 +122,7 @@ TEST_CASE("dispatcher-pattern: error handling") {
 }
 
 TEST_CASE("dispatcher-pattern: multiple requests") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: multiple requests ==========");
 
@@ -197,7 +197,7 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
 }
 
 TEST_CASE("dispatcher-pattern: non-existent collection") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: non-existent collection ==========");
 
@@ -235,7 +235,7 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
 }
 
 TEST_CASE("dispatcher-pattern: multi-thread execution") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: multi-thread execution ==========");
 
@@ -297,7 +297,7 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
 // ============================================================================
 
 TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: execute_plan with cursor ==========");
 
@@ -339,7 +339,7 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
 }
 
 TEST_CASE("dispatcher-pattern: execute_plan with invalid plan") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: execute_plan with invalid plan ==========");
 
@@ -371,7 +371,7 @@ TEST_CASE("dispatcher-pattern: execute_plan with invalid plan") {
 }
 
 TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: execute_plan non-existent collection ==========");
 
@@ -410,7 +410,7 @@ TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
 // ============================================================================
 
 TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: transaction - sequential co_await ==========");
 
@@ -453,7 +453,7 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
 }
 
 TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: transaction - error in step 1 ==========");
 
@@ -490,7 +490,7 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
 // ============================================================================
 
 TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: aggregate - parallel requests + nested coroutine ==========");
 
@@ -545,7 +545,7 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
 }
 
 TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: aggregate - small dataset ==========");
 
@@ -580,7 +580,7 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
 }
 
 TEST_CASE("dispatcher-pattern: aggregate - empty collection list") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: aggregate - empty collection list ==========");
 
@@ -612,7 +612,7 @@ TEST_CASE("dispatcher-pattern: aggregate - empty collection list") {
 // ============================================================================
 
 TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: parallel clients ==========");
 
@@ -702,7 +702,7 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
 // ============================================================================
 
 TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: lambda-inside: simple lambda in method ==========");
 
@@ -727,7 +727,7 @@ TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
 }
 
 TEST_CASE("lambda-inside: lambda capturing this and state (compute_with_lambda_and_state)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: lambda-inside: lambda capturing this and state ==========");
 
@@ -752,7 +752,7 @@ TEST_CASE("lambda-inside: lambda capturing this and state (compute_with_lambda_a
 }
 
 TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: lambda-inside: lambda + coroutine ==========");
 
@@ -786,7 +786,7 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
 }
 
 TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: lambda-inside: lambda + coroutine with orders ==========");
 
@@ -816,7 +816,7 @@ TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
 }
 
 TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: lambda-inside: coroutine lambda ==========");
 
@@ -852,7 +852,7 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
 }
 
 TEST_CASE("lambda-inside: coroutine lambda with orders") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: lambda-inside: coroutine lambda with orders ==========");
 
@@ -887,7 +887,7 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
 // ============================================================================
 
 TEST_CASE("database: create_cursor_from_query - lambda-coroutine returns unique_ptr") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: create_cursor_from_query ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -911,7 +911,7 @@ TEST_CASE("database: create_cursor_from_query - lambda-coroutine returns unique_
 }
 
 TEST_CASE("database: validate_and_execute - chained lambda-coroutines") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: validate_and_execute ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -938,7 +938,7 @@ TEST_CASE("database: validate_and_execute - chained lambda-coroutines") {
 }
 
 TEST_CASE("database: validate_and_execute - validation failure") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: validate_and_execute - validation failure ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -962,7 +962,7 @@ TEST_CASE("database: validate_and_execute - validation failure") {
 }
 
 TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: get_database_statistics ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -996,7 +996,7 @@ TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
 }
 
 TEST_CASE("database: process_batch_buffer - move-only argument") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: process_batch_buffer ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -1023,7 +1023,7 @@ TEST_CASE("database: process_batch_buffer - move-only argument") {
 }
 
 TEST_CASE("database: process_batch_buffer - empty batch") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: process_batch_buffer - empty batch ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -1046,7 +1046,7 @@ TEST_CASE("database: process_batch_buffer - empty batch") {
 }
 
 TEST_CASE("database: get_cached_value - promise direct manipulation") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: get_cached_value ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -1077,7 +1077,7 @@ TEST_CASE("database: get_cached_value - promise direct manipulation") {
 }
 
 TEST_CASE("database: execute_with_retry - success without retry") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: execute_with_retry - success ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
@@ -1102,7 +1102,7 @@ TEST_CASE("database: execute_with_retry - success without retry") {
 }
 
 TEST_CASE("database: execute_with_retry - retry after failure") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     g_log.log("\n========== TEST: execute_with_retry - retry ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");

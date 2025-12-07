@@ -1,42 +1,44 @@
-#define CATCH_CONFIG_MAIN // This tells Catch to provide a main() - only do this in one cpp file
+#define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
 
-using actor_zeta::make_message_id;
-using actor_zeta::message_id;
+using actor_zeta::mailbox::make_message_id;
+using actor_zeta::mailbox::message_id;
+using actor_zeta::mailbox::message_priority;
 
-TEST_CASE("default construction") {
-    message_id x;
-    REQUIRE(x.is_answered() == false);
-    REQUIRE(x.priority() == actor_zeta::mailbox::detail::normal_message_priority);
-    REQUIRE(x.is_high_message() == false);
-    REQUIRE(x.is_normal_message() == true);
-    REQUIRE(x.integer_value() == actor_zeta::mailbox::detail::default_async_value);
-}
-
-TEST_CASE("make_message_id") {
+TEST_CASE("make_message_id default") {
     auto x = make_message_id();
-    message_id y;
-    REQUIRE(x == y);
-    REQUIRE(x.integer_value() == y.integer_value());
+    REQUIRE(message_priority(x) == 1);  // normal priority
 }
 
-TEST_CASE("from integer value") {
+TEST_CASE("make_message_id with value") {
     auto x = make_message_id(42);
-    REQUIRE(x.is_answered() == false);
-    REQUIRE(x.priority() == actor_zeta::mailbox::detail::normal_message_priority);
-    REQUIRE(x.is_high_message() == false);
-    REQUIRE(x.is_normal_message() == true);
+    REQUIRE(message_priority(x) == 1);  // normal priority
+    REQUIRE((x & 0x0FFFFFFFFFFFFFFF) == 42);
 }
 
-TEST_CASE("with_priority") {
-    auto x = make_message_id();
-    REQUIRE(x.priority() == actor_zeta::mailbox::detail::normal_message_priority);
-    for (auto category : {actor_zeta::mailbox::detail::high_message_priority,
-                          actor_zeta::mailbox::detail::normal_message_priority}) {
-        x = x.with_priority(category);
-        REQUIRE(x.priority() == category);
-        REQUIRE(x.is_answered() == false);
-    }
+TEST_CASE("make_message_id high priority") {
+    auto x = make_message_id<actor_zeta::mailbox::priority::high>(42);
+    REQUIRE(message_priority(x) == 0);  // high priority
+}
+
+TEST_CASE("make_message_id normal priority") {
+    auto x = make_message_id<actor_zeta::mailbox::priority::normal>(42);
+    REQUIRE(message_priority(x) == 1);  // normal priority
+}
+
+TEST_CASE("equality operator") {
+    message_id a = 100;
+    message_id b = 100;
+    message_id c = 200;
+
+    REQUIRE(a == b);
+    REQUIRE(a != c);
+}
+
+TEST_CASE("message_id is uint64_t") {
+    message_id x = 12345;
+    uint64_t value = x;
+    REQUIRE(value == 12345);
 }

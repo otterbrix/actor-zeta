@@ -102,7 +102,7 @@ namespace actor_zeta { namespace type_traits {
     template<class F, class... args>
     struct is_callable_with final {
         template<class U>
-        static auto sfinae(U*) -> decltype((std::declval<U&>()) (std::declval<args>()...), std::true_type());
+        static auto sfinae(U*) -> decltype((std::declval<U&>())(std::declval<args>()...), std::true_type());
 
         template<class U>
         static auto sfinae(...) -> std::false_type;

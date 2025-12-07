@@ -1,8 +1,6 @@
 #pragma once
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
-#include <actor-zeta/future.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <actor-zeta/config.hpp>
 
@@ -14,7 +12,7 @@ class coro_ping_pong_actor final : public actor_zeta::basic_actor<coro_ping_pong
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
 
 public:
-    explicit coro_ping_pong_actor(actor_zeta::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
+    explicit coro_ping_pong_actor(std::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* sched = nullptr)
         : base_type(resource)
         , partner_(nullptr)
         , scheduler_(sched) {

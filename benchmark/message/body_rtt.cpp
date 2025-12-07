@@ -5,8 +5,7 @@
 #include <memory>
 #include <tuple>
 
-#include <actor-zeta/config.hpp>
-#include <actor-zeta/core.hpp>
+#include <actor-zeta.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 
 #include "fixtures.hpp"

@@ -10,7 +10,6 @@ add_executable(
 target_link_libraries(
         tests_coroutine_threading
         PRIVATE
-        actor-zeta
         tooltestsuites
         Catch2::Catch2
 )
@@ -29,7 +28,6 @@ add_executable(
 target_link_libraries(
         tests_coroutine_simple
         PRIVATE
-        actor-zeta
         tooltestsuites
         Catch2::Catch2
 )

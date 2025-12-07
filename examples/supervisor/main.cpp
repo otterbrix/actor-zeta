@@ -1,14 +1,11 @@
-#include <actor-zeta.hpp>
-#include <actor-zeta/scheduler/scheduler.hpp>
-#include <actor-zeta/scheduler/sharing_scheduler.hpp>
-#include <actor-zeta/dispatch.hpp>
-
+#include <atomic>
+#include <chrono>
 #include <iostream>
 #include <string>
-#include <vector>
 #include <thread>
-#include <chrono>
-#include <atomic>
+#include <vector>
+
+#include <actor-zeta.hpp>
 
 // Simple worker actor that processes tasks
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
@@ -22,7 +19,7 @@ public:
         &worker_actor::get_status
     >;
 
-    explicit worker_actor(actor_zeta::pmr::memory_resource* ptr, std::string name)
+    explicit worker_actor(std::pmr::memory_resource* ptr, std::string name)
         : actor_zeta::basic_actor<worker_actor>(ptr)
         , name_(std::move(name)) {
     }
@@ -57,17 +54,17 @@ actor_zeta::unique_future<void> worker_actor::get_status() {
 }
 
 // Supervisor that manages worker actors with manual scheduling
-class supervisor_actor final : public actor_zeta::base::actor_mixin<supervisor_actor> {
+class supervisor_actor final : public actor_zeta::actor::actor_mixin<supervisor_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    supervisor_actor(actor_zeta::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* scheduler)
-        : actor_zeta::base::actor_mixin<supervisor_actor>()
+    supervisor_actor(std::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* scheduler)
+        : actor_zeta::actor::actor_mixin<supervisor_actor>()
         , resource_(ptr)
         , scheduler_(scheduler) {
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept { return resource_; }
+    std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
     actor_zeta::unique_future<void> create_worker(std::string name) {
@@ -146,7 +143,7 @@ public:
     // NEW API: Forward arguments to enqueue_sync_impl (message created in receiver's resource)
     template<typename R, typename... Args>
     unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -161,7 +158,7 @@ public:
 protected:
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> workers_;
     size_t next_worker_ = 0;
@@ -169,7 +166,7 @@ private:
 };
 
 int main() {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     // Create scheduler with 2 threads and throughput of 1000 messages per resume
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(

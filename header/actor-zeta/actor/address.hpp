@@ -2,13 +2,9 @@
 
 #include <cassert>
 
-#include "forwards.hpp"
 #include <type_traits>
 
-namespace actor_zeta { namespace base {
-    ///
-    /// @brief
-    ///
+namespace actor_zeta::actor {
 
     template<class Target>
     void* safe_cast_ptr(Target* ptr) {
@@ -26,14 +22,14 @@ namespace actor_zeta { namespace base {
         ~address_t() noexcept;
 
         template<class Target>
-        explicit address_t(Target*ptr):ptr_(safe_cast_ptr(ptr)) {}
+        explicit address_t(Target* ptr)
+            : ptr_(safe_cast_ptr(ptr)) {}
+
+        address_t(void* ptr);
 
         static auto empty_address() -> address_t;
 
-        inline void* operator->() const noexcept {
-            return ptr_;
-        }
-
+        void* get() const noexcept;
         operator bool() const noexcept;
         auto operator!() const noexcept -> bool;
         void swap(address_t& other);
@@ -49,4 +45,4 @@ namespace actor_zeta { namespace base {
     static_assert(std::is_copy_constructible<address_t>::value, "");
     static_assert(std::is_copy_assignable<address_t>::value, "");
 
-}} // namespace actor_zeta::base
+} // namespace actor_zeta::actor

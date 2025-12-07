@@ -21,15 +21,15 @@ constexpr size_t NUM_WORKERS = 4;
                                                                                              \
         std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler_;            \
         std::unique_ptr<Supervisor, actor_zeta::pmr::deleter_t> supervisor_;                \
-        actor_zeta::pmr::memory_resource* resource_;                                        \
+        std::pmr::memory_resource* resource_;                                        \
                                                                                              \
     public:                                                                                  \
         Fixture_##type##_##count()                                                          \
-            : supervisor_(nullptr, actor_zeta::pmr::deleter_t(actor_zeta::pmr::get_default_resource())) { \
+            : supervisor_(nullptr, actor_zeta::pmr::deleter_t(std::pmr::get_default_resource())) { \
         }                                                                                    \
                                                                                              \
         void SetUp(const benchmark::State&) override {                                      \
-            resource_ = actor_zeta::pmr::get_default_resource();                            \
+            resource_ =std::pmr::get_default_resource();                            \
             scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(NUM_WORKERS, 1000)); \
             scheduler_->start();                                                             \
             supervisor_ = actor_zeta::spawn<Supervisor>(resource_, scheduler_.get());       \

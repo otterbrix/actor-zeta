@@ -1,8 +1,8 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -11,7 +11,7 @@
 // Simple test actor for shutdown testing
 class shutdown_test_actor final : public actor_zeta::basic_actor<shutdown_test_actor> {
 public:
-    explicit shutdown_test_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit shutdown_test_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<shutdown_test_actor>(resource) {
     }
 
@@ -65,7 +65,7 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
     // - ASan will detect memory leaks
     // - Test completes without crashes = SUCCESS
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -139,7 +139,7 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
     // - All futures return correct results
     // - No memory leaks (ASan)
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -184,12 +184,132 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
 // Template for Future Tests
 // =============================================================================
 
-TEST_CASE("Shutdown Test 4.3: Resume during shutdown [TEMPLATE]") {
+TEST_CASE("Shutdown Test 4.3: Resume during shutdown") {
     // TEST OBJECTIVE:
-    // Verify that resume() during actor destruction is handled safely
+    // Verify that resume() during actor destruction is handled safely.
+    // This tests the race between:
+    // - Main thread: destroying actor (calls begin_shutdown())
+    // - Scheduler thread: calling resume() on the actor
     //
-    // IMPLEMENTATION STATUS: TEMPLATE ONLY
-    // TODO: Implement when Phase 1 is complete
+    // SCENARIO:
+    // 1. Create actor and send many messages
+    // 2. Start destroying actor while scheduler is still processing
+    // 3. Scheduler may call resume() during/after begin_shutdown()
+    //
+    // EXPECTED BEHAVIOR:
+    // - shutdown_guard_t prevents use-after-free of dispatch members
+    // - Actor state check prevents processing after shutdown
+    // - No crashes, no data races
+    //
+    // VERIFICATION:
+    // - ASan detects use-after-free
+    // - TSan detects data races
+    // - Test completes without crashes = SUCCESS
 
-    WARN("Test 4.3 not yet implemented - see TESTING.md Phase 3");
+    auto* resource =std::pmr::get_default_resource();
+
+    constexpr int NUM_ITERATIONS = 50;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
+        auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
+        scheduler->start();
+
+        {
+            auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
+
+            // Send burst of messages to create work backlog
+            constexpr int NUM_MESSAGES = 100;
+            std::vector<actor_zeta::unique_future<int>> futures;
+            futures.reserve(NUM_MESSAGES);
+
+            for (int i = 0; i < NUM_MESSAGES; ++i) {
+                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                                              &shutdown_test_actor::slow_task, i);
+
+                if (future.needs_scheduling()) {
+                    scheduler->enqueue(actor.get());
+                }
+
+                futures.push_back(std::move(future));
+            }
+
+            // Random delay before destruction to vary race timing
+            if (iter % 3 == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else if (iter % 3 == 1) {
+                std::this_thread::yield();
+            }
+            // else: immediate destruction
+
+            // Actor destroyed here while scheduler may be mid-resume()!
+            // shutdown_guard_t should protect against use-after-free
+        }
+
+        scheduler->stop();
+    }
+
+    // If we reach here without crashes, test passed!
+    REQUIRE(true);
+}
+
+TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
+    // TEST OBJECTIVE:
+    // Test actor lifecycle with sequential creation and destruction.
+    // Verifies that actors can be safely created and destroyed in cycles.
+    //
+    // SCENARIO:
+    // 1. Create actor, send message, wait for completion, destroy actor
+    // 2. Repeat sequentially with different timing patterns
+    //
+    // NOTE: Actor MUST NOT be destroyed while running (assertion in destructor).
+    // All patterns must wait for message processing to complete before destruction.
+    //
+    // EXPECTED BEHAVIOR:
+    // - All messages processed successfully
+    // - No memory leaks
+    // - No crashes
+
+    auto* resource =std::pmr::get_default_resource();
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    scheduler->start();
+
+    constexpr int NUM_CYCLES = 50;
+    std::atomic<int> completed_cycles{0};
+
+    for (int i = 0; i < NUM_CYCLES; ++i) {
+        // Create actor
+        auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
+
+        // Send message
+        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                                      &shutdown_test_actor::slow_task, i);
+
+        if (future.needs_scheduling()) {
+            scheduler->enqueue(actor.get());
+        }
+
+        // Vary timing BEFORE waiting for result (to test different scheduling scenarios)
+        switch (i % 4) {
+            case 0: // Immediate wait
+                break;
+            case 1: // Yield first
+                std::this_thread::yield();
+                break;
+            case 2: // Small sleep first
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+                break;
+            case 3: // No extra delay
+                break;
+        }
+
+        // Always wait for result before destroying actor
+        int result = std::move(future).get();
+        REQUIRE(result == i * 2);
+
+        // Actor destroyed here - safe because message was processed
+        completed_cycles.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    scheduler->stop();
+    REQUIRE(completed_cycles.load() == NUM_CYCLES);
 }

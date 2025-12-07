@@ -1,6 +1,5 @@
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/policy/work_sharing.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
@@ -23,7 +22,7 @@ class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Arg
     ping_pong_actor* partner_;
 
 public:
-    explicit ping_pong_actor(actor_zeta::pmr::memory_resource* res)
+    explicit ping_pong_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<ping_pong_actor<Args...>>(res)
         , partner_(nullptr) {
     }
@@ -71,14 +70,14 @@ class PingPongFixture_0 : public benchmark::Fixture {
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor1_;
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
 
 public:
-    PingPongFixture_0() : actor0_(nullptr, actor_zeta::pmr::deleter_t(actor_zeta::pmr::get_default_resource())),
-                          actor1_(nullptr, actor_zeta::pmr::deleter_t(actor_zeta::pmr::get_default_resource())) {}
+    PingPongFixture_0() : actor0_(nullptr, actor_zeta::pmr::deleter_t(std::pmr::get_default_resource())),
+                          actor1_(nullptr, actor_zeta::pmr::deleter_t(std::pmr::get_default_resource())) {}
 
     void SetUp(const benchmark::State&) override {
-        resource_ = actor_zeta::pmr::get_default_resource();
+        resource_ =std::pmr::get_default_resource();
 
         // Create scheduler with 1 worker thread
         scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(1, 1000));
@@ -122,14 +121,14 @@ class PingPongFixture_1 : public benchmark::Fixture {
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor0_;
     std::unique_ptr<Actor, actor_zeta::pmr::deleter_t> actor1_;
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
 
 public:
-    PingPongFixture_1() : actor0_(nullptr, actor_zeta::pmr::deleter_t(actor_zeta::pmr::get_default_resource())),
-                          actor1_(nullptr, actor_zeta::pmr::deleter_t(actor_zeta::pmr::get_default_resource())) {}
+    PingPongFixture_1() : actor0_(nullptr, actor_zeta::pmr::deleter_t(std::pmr::get_default_resource())),
+                          actor1_(nullptr, actor_zeta::pmr::deleter_t(std::pmr::get_default_resource())) {}
 
     void SetUp(const benchmark::State&) override {
-        resource_ = actor_zeta::pmr::get_default_resource();
+        resource_ =std::pmr::get_default_resource();
 
         // Create scheduler with 1 worker thread
         scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(1, 1000));

@@ -1,15 +1,15 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
-#include <thread>
 #include <atomic>
-#include <sstream>
-#include <vector>
-#include <mutex>
 #include <condition_variable>
+#include <mutex>
+#include <sstream>
+#include <thread>
+#include <vector>
 
 using namespace actor_zeta;
 
@@ -60,7 +60,7 @@ thread_logger g_log;
 /// @brief Worker актор - обрабатывает запросы
 class worker_actor final : public basic_actor<worker_actor> {
 public:
-    explicit worker_actor(pmr::memory_resource* resource, const std::string& name)
+    explicit worker_actor(std::pmr::memory_resource* resource, const std::string& name)
         : basic_actor<worker_actor>(resource)
         , name_(name)
         , compute_count_(0) {
@@ -112,36 +112,25 @@ private:
 /// Использует только address_t для связи с worker
 class client_actor final : public basic_actor<client_actor> {
 public:
-    explicit client_actor(pmr::memory_resource* resource, address_t worker_address, const std::string& name)
+    explicit client_actor(std::pmr::memory_resource* resource, address_t worker_address, const std::string& name)
         : basic_actor<client_actor>(resource)
         , worker_address_(worker_address)
         , name_(name)
         , final_result_(0) {
     }
 
-    /// @brief Пользователь вызывает для poll pending корутин
-    /// @return true если есть pending корутины
-    /// Благодаря chaining в dispatch(), результат автоматически
-    /// пробрасывается в caller's future когда корутина завершается.
-    /// Нам нужно только resume'ить корутину когда awaited future готов.
+    /// @brief Clean up completed pending futures
+    /// @return true if there are still pending coroutines
+    /// With auto-resume in set_value(), coroutines resume automatically
+    /// when awaited future becomes ready. We just clean up completed ones.
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            // Проверяем готова ли awaited future
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] awaiting ready, resuming coroutine", name_);
-
-                // Resume корутину - она продолжит выполнение
-                it->resume();
-
-                // Когда корутина завершается, chaining автоматически
-                // форвардит результат в caller's future
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] coroutine completed, result auto-forwarded", name_);
-                    it = pending_.erase(it);
-                    continue;
-                }
+            if (it->available()) {
+                g_log.log("[%::poll_pending] coroutine completed", name_);
+                it = pending_.erase(it);
+            } else {
+                ++it;
             }
-            ++it;
         }
         return !pending_.empty();
     }
@@ -243,7 +232,7 @@ private:
 // ============================================================================
 
 TEST_CASE("single-thread: worker only") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
 
     g_log.log("\n========== TEST: single-thread: worker only ==========");
@@ -264,7 +253,7 @@ TEST_CASE("single-thread: worker only") {
 
 
 TEST_CASE("single-thread: client-worker") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
     auto client = spawn<client_actor>(resource, worker->address(), "Client");
 
@@ -312,7 +301,7 @@ TEST_CASE("single-thread: client-worker") {
 // ============================================================================
 
 TEST_CASE("multi-thread: client resumes worker in same thread") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
     auto client = spawn<client_actor>(resource, worker->address(), "Client");
 
@@ -377,7 +366,7 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
 
 
 TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     // Each client has its OWN worker (no shared state, no race condition)
     auto worker1 = spawn<worker_actor>(resource, "Worker1");
     auto worker2 = spawn<worker_actor>(resource, "Worker2");
@@ -457,7 +446,7 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
 
 
 TEST_CASE("multi-thread: verify coroutine thread affinity") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
     auto client = spawn<client_actor>(resource, worker->address(), "Client");
 
@@ -539,7 +528,7 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
 
 
 TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
-    auto* resource = pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: multi-thread: many iterations ==========");
 

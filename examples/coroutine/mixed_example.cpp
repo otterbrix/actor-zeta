@@ -1,10 +1,9 @@
-#include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
-#include <actor-zeta/scheduler/sharing_scheduler.hpp>
-#include <iostream>
 #include <chrono>
+#include <iostream>
 #include <thread>
 #include <vector>
+
+#include <actor-zeta.hpp>
 
 // Forward declaration
 class calculator_actor;
@@ -13,7 +12,7 @@ class calculator_actor;
 /// Demonstrates unified interface - caller doesn't need to know which is which
 class calculator_actor final : public actor_zeta::basic_actor<calculator_actor> {
 public:
-    explicit calculator_actor(actor_zeta::pmr::memory_resource* ptr)
+    explicit calculator_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<calculator_actor>(ptr) {
         std::cout << "[Calculator " << id() << "] Created\n";
     }
@@ -90,18 +89,16 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    /// @brief Poll and resume pending coroutines
+    /// @brief Clean up completed pending futures
     /// @return true if there are still pending coroutines
+    /// With auto-resume in set_value(), coroutines resume automatically
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->awaiting_ready()) {
-                it->resume();
-                if (it->available()) {
-                    it = pending_.erase(it);
-                    continue;
-                }
+            if (it->available()) {
+                it = pending_.erase(it);
+            } else {
+                ++it;
             }
-            ++it;
         }
         return !pending_.empty();
     }
@@ -114,7 +111,7 @@ int main() {
     std::cout << "=== Mixed Sync/Async Actor Example ===\n\n";
 
     // Create PMR resource
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     // Create calculator actor
     auto calculator = actor_zeta::spawn<calculator_actor>(resource);

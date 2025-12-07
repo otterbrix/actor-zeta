@@ -17,11 +17,10 @@
 ///   - No callback needed!
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 #include "common_types.hpp"
-#include "test_logger.hpp"
 #include "manager_dispatcher.hpp"
+#include "test_logger.hpp"
 
 #include <vector>
 #include <string>
@@ -38,7 +37,7 @@ using namespace actor_zeta;
 class client_t final : public basic_actor<client_t> {
 public:
     explicit client_t(
-            pmr::memory_resource* mr,
+            std::pmr::memory_resource* mr,
             address_t dispatcher,
             const std::string& name)
         : basic_actor<client_t>(mr)
@@ -138,18 +137,16 @@ public:
 
     bool has_pending() const { return !pending_.empty(); }
 
+    /// @brief Clean up completed pending futures
+    /// With auto-resume in set_value(), coroutines resume automatically
     void poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->awaiting_ready()) {
-                g_log.log("[%::poll_pending] awaiting ready, resuming coroutine", name_);
-                it->resume();
-                if (it->available()) {
-                    g_log.log("[%::poll_pending] coroutine completed", name_);
-                    it = pending_.erase(it);
-                    continue;
-                }
+            if (it->available()) {
+                g_log.log("[%::poll_pending] coroutine completed", name_);
+                it = pending_.erase(it);
+            } else {
+                ++it;
             }
-            ++it;
         }
     }
 

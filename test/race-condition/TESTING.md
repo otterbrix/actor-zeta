@@ -114,7 +114,9 @@ This document describes the strategy for testing race conditions in actor-zeta's
 **Coverage:**
 - ✅ Test 1.1: set_result vs cancel
 - ✅ Test 1.2: is_ready during transition
-- ⚠️ Test 1.3: Multiple state observers
+- ✅ Test 1.3: Multiple state observers
+- ✅ Test 1.4: State transition ordering
+- ✅ Test 1.5: Happens-before across state transitions
 
 ---
 
@@ -127,8 +129,8 @@ This document describes the strategy for testing race conditions in actor-zeta's
 
 **Coverage:**
 - ✅ Test 2.1: Concurrent actor + future release
-- ✅ Test 2.2: Stress test with 1000 futures
-- ⚠️ Test 2.3: Refcount underflow detection
+- ✅ Test 2.2: Stress test with 1000 concurrent futures
+- ✅ Test 2.3: Refcount correctness under various destruction patterns
 
 ---
 
@@ -156,7 +158,8 @@ This document describes the strategy for testing race conditions in actor-zeta's
 **Coverage:**
 - ✅ Test 4.1: Destroy with pending futures
 - ✅ Test 4.2: Graceful shutdown
-- ⚠️ Test 4.3: Resume during shutdown
+- ✅ Test 4.3: Resume during shutdown
+- ✅ Test 4.4: Rapid create-destroy cycles
 
 ---
 
@@ -306,14 +309,25 @@ TEST_CASE("Category X: Specific race scenario") {
    - Messages: 1000 orphaned messages
    - Status: PASSING
 
-### ⚠️ Coverage Gaps
+### ✅ Newly Implemented Tests (2025-12)
+
+**State Transitions:**
+- Test 1.4: State transition memory ordering verification
+- Test 1.5: Happens-before relationship across transitions
+
+**Refcount Management:**
+- Test 2.2: 1000 concurrent futures stress test (4 threads × 250 futures)
+- Test 2.3: Refcount correctness under various destruction patterns
+
+**Actor Shutdown:**
+- Test 4.3: Resume during shutdown race detection
+- Test 4.4: Rapid create-destroy cycles stress test
+
+### ⚠️ Remaining Coverage Gaps
 
 **Not yet tested:**
-- Refcount double-release scenarios
-- Actor destruction with live futures (explicit test)
-- State transition races (set_result vs cancel)
-- Mailbox close during enqueue
-- Concurrent state observations
+- Test 3.3: Future stored across threads
+- Test 5.3: Concurrent pop_front in mailbox
 
 ---
 

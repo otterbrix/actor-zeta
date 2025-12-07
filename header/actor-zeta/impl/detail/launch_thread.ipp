@@ -14,7 +14,7 @@ namespace actor_zeta { namespace detail {
 
 }} // namespace actor_zeta::detail
 
-#else  // __APPLE__
+#else // __APPLE__
 
 #include <sys/prctl.h>
 namespace actor_zeta { namespace detail {

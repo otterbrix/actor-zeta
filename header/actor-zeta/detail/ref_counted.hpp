@@ -1,8 +1,8 @@
 #pragma once
 
 #include <atomic>
-#include <cstddef>
 #include <cassert>
+#include <cstddef>
 
 namespace actor_zeta {
     ///

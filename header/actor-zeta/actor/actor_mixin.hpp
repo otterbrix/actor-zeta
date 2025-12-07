@@ -1,12 +1,12 @@
 #pragma once
 
-#include <actor-zeta/base/address.hpp>
-#include <actor-zeta/detail/memory_resource.hpp>
-#include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/future.hpp>
-#include <actor-zeta/make_message.hpp>
+#include <memory_resource>
 
-namespace actor_zeta { namespace base {
+#include <actor-zeta/actor/address.hpp>
+#include <actor-zeta/detail/future.hpp>
+#include <actor-zeta/mailbox/make_message.hpp>
+
+namespace actor_zeta::actor {
 
     /// @brief Actor mixin - common functionality for all actor types
     /// Provides: id_t, address(), placement operators, enqueue_sync_impl()
@@ -76,7 +76,7 @@ namespace actor_zeta { namespace base {
 
         static void operator delete(void*, void*, placement_tag) noexcept {}
 
-        static void operator delete(void* ptr) noexcept { (void)ptr; }
+        static void operator delete(void* ptr) noexcept { (void) ptr; }
 
         static void* operator new(size_t, void* ptr) = delete;
         static void* operator new(size_t) = delete;
@@ -100,43 +100,32 @@ namespace actor_zeta { namespace base {
 
         /// @brief Get polymorphic allocator for type T
         template<class T>
-        pmr::polymorphic_allocator<T> allocator() const noexcept {
+        std::pmr::polymorphic_allocator<T> allocator() const noexcept {
             return {static_cast<const Derived*>(this)->resource()};
         }
 
         /// @brief Sync enqueue for supervisors - calls behavior synchronously, returns ready future
         template<typename R, typename BehaviorFunc, typename... Args>
         unique_future<R> enqueue_sync_impl(
-            base::address_t sender,
+            actor::address_t sender,
             mailbox::message_id cmd,
             BehaviorFunc&& behavior_func,
-            Args&&... args
-        ) {
+            Args&&... args) {
             auto* derived = static_cast<Derived*>(this);
             auto* res = derived->resource();
 
-            // Create message in receiver's resource (avoid cross-arena migration)
-            auto msg = detail::make_message(
+            // Create message + promise in one call (cleaner API)
+            auto [msg, future] = detail::make_message<R>(
                 res,
                 std::move(sender),
                 cmd,
-                std::forward<Args>(args)...
-            );
-
-            // Allocate future_state<R> for result with refcount=2 (future + supervisor code)
-            void* mem = res->allocate(sizeof(detail::future_state<R>), alignof(detail::future_state<R>));
-            auto* slot = new (mem) detail::future_state<R>(res);
-            msg->set_result_slot(slot);
+                std::forward<Args>(args)...);
 
             // Call behavior function with message pointer (synchronous execution)
             behavior_func(msg.get());
 
             // Slot is now ready (behavior already executed)
-            // Return async future (already in ready state, no waiting needed)
-            // Use adopt_ref to take ownership of initial ref (ref_count=1 from constructor)
-            // Message's intrusive_ptr adds ref_count=2, ~message decrements to 1
-            // adopt_ref means unique_future takes initial ref without incrementing
-            return unique_future<R>{adopt_ref, slot, false};  // needs_scheduling=false (sync execution, no mailbox)
+            return std::move(future);
         }
 
     protected:
@@ -144,4 +133,4 @@ namespace actor_zeta { namespace base {
         ~actor_mixin() = default;
     };
 
-}} // namespace actor_zeta::base
+} // namespace actor_zeta::actor

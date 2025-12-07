@@ -10,11 +10,11 @@
 
 #include "actor-zeta/detail/memory.hpp"
 #include "test/tooltestsuites/scheduler_test.hpp"
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
 #include <actor-zeta/spawn.hpp>
-#include <actor-zeta/dispatch.hpp>
 
-using actor_zeta::pmr::memory_resource;
+using std::pmr::memory_resource;
 class dummy_supervisor;
 class storage_t;
 
@@ -26,7 +26,7 @@ public:
         executor_->start();
     }
 
-    actor_zeta::pmr::memory_resource* resource() const noexcept {
+    std::pmr::memory_resource* resource() const noexcept {
         return resource_;
     }
 
@@ -44,7 +44,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    void enqueue_impl(actor_zeta::message_ptr msg) {
+    void enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
         auto tmp = std::move(msg);
         behavior(msg.get());
     }
@@ -54,7 +54,7 @@ public:
     >;
 
 private:
-    actor_zeta::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::list<std::unique_ptr<storage_t, actor_zeta::pmr::deleter_t>> storage_;
     std::set<int64_t> ids_;
@@ -62,7 +62,7 @@ private:
 
 class storage_t final : public actor_zeta::basic_actor<storage_t> {
 public:
-    explicit storage_t(actor_zeta::pmr::memory_resource* resource_ptr, dummy_supervisor* )
+    explicit storage_t(std::pmr::memory_resource* resource_ptr, dummy_supervisor* )
         : actor_zeta::basic_actor<storage_t>(resource_ptr) {
     }
 
@@ -85,7 +85,7 @@ actor_zeta::unique_future<void> dummy_supervisor::create() {
 }
 
 TEST_CASE("actor id match") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto supervisor = std::unique_ptr<dummy_supervisor>(new dummy_supervisor(resource));
     for (auto i = 0; i < 1000; ++i) { //todo: 10000000
         supervisor->create();

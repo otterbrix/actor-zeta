@@ -1,13 +1,13 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
-    explicit test_actor(actor_zeta::pmr::memory_resource* ptr)
+    explicit test_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_actor>(ptr) {
     }
 
@@ -52,7 +52,7 @@ TEST_CASE("resume_info - basic structure") {
 }
 
 TEST_CASE("resume_info - actor returns correct message count") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
     SECTION("No messages - returns 0") {
@@ -105,7 +105,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
 }
 
 TEST_CASE("resume_info - backward compatibility with switch") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
     auto fut = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);

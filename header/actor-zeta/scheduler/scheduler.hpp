@@ -10,8 +10,8 @@
 #include <vector>
 
 #include <actor-zeta/detail/ref_counted.hpp>
-#include <actor-zeta/scheduler/worker.hpp>
 #include <actor-zeta/scheduler/job_ptr.hpp>
+#include <actor-zeta/scheduler/worker.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
@@ -56,7 +56,6 @@ namespace actor_zeta { namespace scheduler {
             for (auto& w : workers_) {
                 w->start();
             }
-
         }
 
         void stop() {

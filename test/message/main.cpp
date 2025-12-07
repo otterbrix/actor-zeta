@@ -1,7 +1,7 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
-#include "classes.hpp"
+
 
 #include <string>
 #include <deque>
@@ -13,10 +13,14 @@
 #include <tuple>       // piecewise_construct
 #include <type_traits>
 
-using actor_zeta::base::address_t;
+
+#include <actor-zeta/mailbox/make_message.hpp>
+
+using actor_zeta::actor::address_t;
 using actor_zeta::mailbox::message;
-using actor_zeta::mailbox::message_id;
+using actor_zeta::mailbox::message_ptr;
 using actor_zeta::detail::rtt;
+using actor_zeta::mailbox::make_message_id;
 
 constexpr static auto zero  = actor_zeta::mailbox::make_message_id(0);
 constexpr static auto one   = actor_zeta::mailbox::make_message_id(1);
@@ -25,30 +29,37 @@ constexpr static auto three = actor_zeta::mailbox::make_message_id(3);
 
 namespace {
 
+// Helper to create default result_slot for tests
+inline actor_zeta::intrusive_ptr<actor_zeta::detail::future_state_base>
+make_result_slot(std::pmr::memory_resource* res) {
+    actor_zeta::promise<void> p(res);
+    return p.internal_state_base();
+}
+
 template<class Seq>
-void check_seq_push_back(Seq& v, actor_zeta::pmr::memory_resource* res) {
-    v.emplace_back(res, address_t::empty_address(), one);
-    v.emplace_back(res, address_t::empty_address(), two);
-    v.emplace_back(res, address_t::empty_address(), three);
+void check_seq_push_back(Seq& v, std::pmr::memory_resource* res) {
+    v.emplace_back(res, address_t::empty_address(), one, make_result_slot(res));
+    v.emplace_back(res, address_t::empty_address(), two, make_result_slot(res));
+    v.emplace_back(res, address_t::empty_address(), three, make_result_slot(res));
     REQUIRE(v.size() == 3);
     v.clear();
 }
 
 template<class Seq>
-void check_seq_insert_at_end(Seq& v, actor_zeta::pmr::memory_resource* res) {
-    v.emplace(v.end(), res, address_t::empty_address(), one);
-    v.emplace(v.end(), res, address_t::empty_address(), two);
-    v.emplace(v.end(), res, address_t::empty_address(), three);
+void check_seq_insert_at_end(Seq& v, std::pmr::memory_resource* res) {
+    v.emplace(v.end(), res, address_t::empty_address(), one, make_result_slot(res));
+    v.emplace(v.end(), res, address_t::empty_address(), two, make_result_slot(res));
+    v.emplace(v.end(), res, address_t::empty_address(), three, make_result_slot(res));
     REQUIRE(v.size() == 3);
     v.clear();
 }
 
 // For queue<message>
 inline void check_queue_push(std::queue<message>& q,
-                             actor_zeta::pmr::memory_resource* res) {
-    q.emplace(res, address_t::empty_address(), one);
-    q.emplace(res, address_t::empty_address(), two);
-    q.emplace(res, address_t::empty_address(), three);
+                             std::pmr::memory_resource* res) {
+    q.emplace(res, address_t::empty_address(), one, make_result_slot(res));
+    q.emplace(res, address_t::empty_address(), two, make_result_slot(res));
+    q.emplace(res, address_t::empty_address(), three, make_result_slot(res));
     REQUIRE(q.size() == 3);
     while (!q.empty()) q.pop();
 }
@@ -56,46 +67,46 @@ inline void check_queue_push(std::queue<message>& q,
 // --- For map<size_t, message> ---
 
 inline void check_map_basic(std::map<size_t, message>& m,
-                            actor_zeta::pmr::memory_resource* res) {
+                            std::pmr::memory_resource* res) {
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(0ul),
-              std::forward_as_tuple(res, address_t::empty_address(), one));
+              std::forward_as_tuple(res, address_t::empty_address(), one, make_result_slot(res)));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(1ul),
-              std::forward_as_tuple(res, address_t::empty_address(), two));
+              std::forward_as_tuple(res, address_t::empty_address(), two, make_result_slot(res)));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(2ul),
-              std::forward_as_tuple(res, address_t::empty_address(), three));
+              std::forward_as_tuple(res, address_t::empty_address(), three, make_result_slot(res)));
     REQUIRE(m.size() == 3);
     m.clear();
 }
 
 inline void check_map_emplace(std::map<size_t, message>& m,
-                              actor_zeta::pmr::memory_resource* res) {
+                              std::pmr::memory_resource* res) {
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(0ul),
-              std::forward_as_tuple(res, address_t::empty_address(), one));
+              std::forward_as_tuple(res, address_t::empty_address(), one, make_result_slot(res)));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(1ul),
-              std::forward_as_tuple(res, address_t::empty_address(), two));
+              std::forward_as_tuple(res, address_t::empty_address(), two, make_result_slot(res)));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(2ul),
-              std::forward_as_tuple(res, address_t::empty_address(), three));
+              std::forward_as_tuple(res, address_t::empty_address(), three, make_result_slot(res)));
     REQUIRE(m.size() == 3);
     m.clear();
 }
 
 inline void check_map_zero_id(std::map<size_t, message>& m,
-                              actor_zeta::pmr::memory_resource* res) {
+                              std::pmr::memory_resource* res) {
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(0ul),
-              std::forward_as_tuple(res, address_t::empty_address(), zero));
+              std::forward_as_tuple(res, address_t::empty_address(), zero, make_result_slot(res)));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(1ul),
-              std::forward_as_tuple(res, address_t::empty_address(), zero));
+              std::forward_as_tuple(res, address_t::empty_address(), zero, make_result_slot(res)));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(2ul),
-              std::forward_as_tuple(res, address_t::empty_address(), zero));
+              std::forward_as_tuple(res, address_t::empty_address(), zero, make_result_slot(res)));
     REQUIRE(m.size() == 3);
     m.clear();
 }
@@ -103,7 +114,7 @@ inline void check_map_zero_id(std::map<size_t, message>& m,
 } // namespace
 
 TEST_CASE("message (no move/copy of message/rtt)") {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
 
     SECTION("vector of messages") {
         std::vector<message> v;
@@ -137,19 +148,20 @@ TEST_CASE("message (no move/copy of message/rtt)") {
 
     SECTION("simple") {
         // 1) simple message via make_message
-        auto msg = actor_zeta::detail::make_message(resource, address_t::empty_address(), one);
+        auto [msg, future] = actor_zeta::detail::make_message(resource, address_t::empty_address(), one);
         REQUIRE( static_cast<bool>(msg) ); // message_ptr has operator bool
         REQUIRE( msg->command() == actor_zeta::mailbox::make_message_id(1) );
+        (void)future; // unused in this test
 
         // 2) separate payload - use specialized rtt move constructor
         rtt body(resource, int(1));
-        message msg2(resource, address_t::empty_address(), one, std::move(body));
+        message msg2(resource, address_t::empty_address(), one, std::move(body), make_result_slot(resource));
         REQUIRE(msg2.body().get<int>(0) == 1);
     }
 
     SECTION("swap messages") {
-        message msg1(resource, address_t::empty_address(), one);
-        message msg2(resource, address_t::empty_address(), two);
+        message msg1(resource, address_t::empty_address(), one, make_result_slot(resource));
+        message msg2(resource, address_t::empty_address(), two, make_result_slot(resource));
 
         msg1.swap(msg2);
 
@@ -158,7 +170,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("allocator-extended move constructor") {
-        message msg1(resource, address_t::empty_address(), three);
+        message msg1(resource, address_t::empty_address(), three, make_result_slot(resource));
         REQUIRE( msg1.command() == actor_zeta::mailbox::make_message_id(3) );
 
         // Use allocator-extended move constructor (PMR migration)
@@ -167,16 +179,17 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("message with multiple payload values") {
-        auto msg = actor_zeta::detail::make_message(resource, address_t::empty_address(), one,
+        auto [msg, future2] = actor_zeta::detail::make_message(resource, address_t::empty_address(), one,
                                            int(42), std::string("test"), double(3.14));
         REQUIRE( msg->body().get<int>(0) == 42 );
         REQUIRE( msg->body().get<std::string>(1) == "test" );
         REQUIRE( msg->body().get<double>(2) == 3.14 );
+        (void)future2;
     }
 
     SECTION("sender access") {
         auto addr = address_t::empty_address();
-        message msg(resource, addr, one);
+        message msg(resource, addr, one, make_result_slot(resource));
 
         REQUIRE( msg.sender() == addr );
 
@@ -186,7 +199,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("zero message id") {
-        message msg(resource, address_t::empty_address(), zero);
+        message msg(resource, address_t::empty_address(), zero, make_result_slot(resource));
         REQUIRE( msg.command() == actor_zeta::mailbox::make_message_id(0) );
     }
 
@@ -195,7 +208,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     // which is impossible without runtime type information
     SECTION("rtt same-arena migration") {
         // Create rtt in arena
-        auto* arena = actor_zeta::pmr::get_default_resource();
+        auto* arena =std::pmr::get_default_resource();
         rtt rtt1(arena, int(42), std::string("test"), double(3.14));
         REQUIRE( rtt1.get<int>(0) == 42 );
         REQUIRE( rtt1.get<std::string>(1) == "test" );

@@ -1,16 +1,16 @@
 #pragma once
 
-#include <actor-zeta/detail/memory_resource.hpp>
-#include <actor-zeta/detail/rtt.hpp>
-#include <actor-zeta/detail/coroutine.hpp>
-#include <actor-zeta/detail/intrusive_ptr.hpp>
-#include <actor-zeta/config.hpp>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <memory_resource>
 #include <thread>
 #include <type_traits>
+
+#include <actor-zeta/config.hpp>
+#include <actor-zeta/detail/coroutine.hpp>
+#include <actor-zeta/detail/intrusive_ptr.hpp>
 
 namespace actor_zeta { namespace detail {
 
@@ -27,22 +27,23 @@ namespace actor_zeta { namespace detail {
     ///   - Error states >= error
     /// This allows single-comparison checks: `state >= ready` instead of multiple ==
     enum class future_state_enum : uint8_t {
-        invalid = 0,           // Moved-from or uninitialized
-        pending = 1,           // Awaiting result (initial state)
-        setting = 2,           // set_result() in progress (transient)
-        consuming = 3,         // take_result() in progress (transient)
+        invalid = 0,   // Moved-from or uninitialized
+        pending = 1,   // Awaiting result (initial state)
+        setting = 2,   // set_result() in progress (transient)
+        consuming = 3, // take_result() in progress (transient)
         // --- Terminal states (>= ready) ---
-        ready = 4,             // Result available (success)
-        consumed = 5,          // get() called, result moved out
+        ready = 4,    // Result available (success)
+        consumed = 5, // get() called, result moved out
         // --- Error states (>= error) ---
-        error = 6,             // Error occurred (broken promise, mailbox closed, etc.)
-        cancelled = 7,         // Explicitly cancelled
+        error = 6,     // Error occurred (broken promise, mailbox closed, etc.)
+        cancelled = 7, // Explicitly cancelled
     };
 
     /// @brief Base class for future state (type-erased part)
+    /// Coroutine handles stored here (not type-dependent) to avoid virtual dispatch
     class future_state_base {
     public:
-        explicit future_state_base(pmr::memory_resource* res) noexcept
+        explicit future_state_base(std::pmr::memory_resource* res) noexcept
             : resource_(res)
             , state_(future_state_enum::pending)
             // Initial refcount = 1:
@@ -54,6 +55,9 @@ namespace actor_zeta { namespace detail {
             //   Orphaned:  future destroyed → ref 2→1, message destroyed → ref 1→0 → destroy
             //   No future: message destroyed → ref 1→0 → destroy
             , refcount_(1)
+            , owning_coro_handle_()
+            , resume_coro_handle_()
+            , owns_coroutine_(false)
 #ifndef NDEBUG
             , magic_(kMagicAlive)
             , generation_(next_generation())
@@ -65,6 +69,12 @@ namespace actor_zeta { namespace detail {
         future_state_base& operator=(const future_state_base&) = delete;
 
         virtual ~future_state_base() noexcept {
+            // Destroy coroutine if we own it (runs after derived destructor)
+            // CRITICAL: Must call destroy() regardless of done() status!
+            // A done coroutine (at final_suspend) still needs destroy() to free frame
+            if (owns_coroutine_ && owning_coro_handle_) {
+                owning_coro_handle_.destroy();
+            }
 #ifndef NDEBUG
             assert(is_alive() && "Double delete detected!");
             magic_.store(kMagicDead, std::memory_order_release);
@@ -87,7 +97,8 @@ namespace actor_zeta { namespace detail {
         [[nodiscard]] bool try_add_ref() noexcept {
             int old_count = refcount_.load(std::memory_order_relaxed);
             do {
-                if (old_count == 0) return false;
+                if (old_count == 0)
+                    return false;
             } while (!refcount_.compare_exchange_weak(
                 old_count, old_count + 1,
                 std::memory_order_acquire,
@@ -156,7 +167,7 @@ namespace actor_zeta { namespace detail {
         /// @return true if transition successful, false if current state != expected
         bool transition(future_state_enum expected, future_state_enum desired) noexcept {
             return state_.compare_exchange_strong(expected, desired,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+                                                  std::memory_order_acq_rel, std::memory_order_acquire);
         }
 
         /// @brief Force state change (for internal use, bypasses validation)
@@ -165,30 +176,53 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Get memory resource
-        [[nodiscard]] pmr::memory_resource* memory_resource() const noexcept {
+        [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept {
             return resource_;
         }
 
-        /// @brief Resume stored coroutine (if any)
-        /// @note Called by user code when awaited future is ready
-        /// @note Virtual with `final` override for devirtualization
-        virtual void resume_coroutine() noexcept = 0;
+        // =====================================================================
+        // Coroutine methods - NON-VIRTUAL (handles stored in base class)
+        // =====================================================================
 
-        /// @brief Check if coroutine is stored
-        /// @return true if coroutine_handle is valid
-        [[nodiscard]] virtual bool has_coroutine() const noexcept = 0;
+        /// @brief Resume stored coroutine (if any)
+        /// @note For coroutine's own state: resumes owning_coro_handle_ (set by promise)
+        /// @note For awaited state: resumes resume_coro_handle_ (set by awaiter)
+        void resume_coroutine() noexcept {
+            // If we own a coroutine (from promise), resume it
+            if (owns_coroutine_ && owning_coro_handle_ && !owning_coro_handle_.done()) {
+                owning_coro_handle_.resume();
+                return;
+            }
+            // Otherwise, resume the awaiting coroutine (from awaiter)
+            if (resume_coro_handle_ && !resume_coro_handle_.done()) {
+                resume_coro_handle_.resume();
+            }
+        }
+
+        /// @brief Check if coroutine is stored for resumption
+        [[nodiscard]] bool has_coroutine() const noexcept {
+            return resume_coro_handle_.operator bool();
+        }
 
         /// @brief Check if stored coroutine is done
-        /// @return true if coroutine exists and is done
-        [[nodiscard]] virtual bool coroutine_done() const noexcept = 0;
+        [[nodiscard]] bool coroutine_done() const noexcept {
+            if (owns_coroutine_ && owning_coro_handle_) {
+                return owning_coro_handle_.done();
+            }
+            return resume_coro_handle_ && resume_coro_handle_.done();
+        }
 
-        /// @brief Store coroutine handle for resumption
-        /// @param h The coroutine handle to store
-        /// @param owns If true, this state owns the coroutine and will destroy it in destructor
-        ///             Set to true only from coroutine promise (get_return_object)
-        ///             Set to false (default) from awaiter::await_suspend
-        /// @note Virtual to allow storage in derived class
-        virtual void set_coroutine(std::coroutine_handle<> h, bool owns = false) noexcept = 0;
+        /// @brief Store coroutine handle for resumption (non-owning, from awaiter)
+        void set_coroutine(std::coroutine_handle<> handle) noexcept {
+            resume_coro_handle_ = handle;
+        }
+
+        /// @brief Store coroutine handle with ownership (from coroutine promise)
+        /// @note This state will destroy the coroutine in destructor
+        void set_coroutine_owning(std::coroutine_handle<> handle) noexcept {
+            owning_coro_handle_ = handle;
+            owns_coroutine_ = true;
+        }
 
         /// @brief Set void forward target (type-erased for void chaining)
         /// @param target The future_state_base to forward void readiness to
@@ -200,7 +234,7 @@ namespace actor_zeta { namespace detail {
         /// @param target The future_state that this coroutine is waiting for
         /// @note Called from awaiter::await_suspend() to enable manual polling
         void set_awaiting_on(future_state_base* target) noexcept {
-            awaiting_on_ = target;  // intrusive_ptr assignment calls add_ref()
+            awaiting_on_ = target; // intrusive_ptr assignment calls add_ref()
         }
 
         /// @brief Get the future this coroutine is awaiting on
@@ -216,6 +250,16 @@ namespace actor_zeta { namespace detail {
             awaiting_on_ = nullptr;
         }
 
+        /// @brief Atomically take continuation handle for symmetric transfer
+        /// @return The stored continuation handle, or empty handle if none
+        /// @note Clears the stored handle after taking (single-shot)
+        /// @note Used by final_suspend to resume awaiting coroutine directly
+        [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
+            auto h = resume_coro_handle_;
+            resume_coro_handle_ = {};
+            return h;
+        }
+
 #ifndef NDEBUG
         [[nodiscard]] uint64_t generation() const noexcept { return generation_; }
 #endif
@@ -224,15 +268,20 @@ namespace actor_zeta { namespace detail {
         /// @brief Virtual destruction - derived class implements actual deallocation
         virtual void destroy() noexcept = 0;
 
-        pmr::memory_resource* resource_;
+        std::pmr::memory_resource* resource_;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
-        intrusive_ptr<future_state_base> awaiting_on_;  // Future this coroutine is waiting on
+        intrusive_ptr<future_state_base> awaiting_on_; // Future this coroutine is waiting on
+
+        // Coroutine handles - stored in base class (not type-dependent)
+        coroutine_handle<void> owning_coro_handle_; // Coroutine that this state owns (from promise)
+        coroutine_handle<void> resume_coro_handle_; // Coroutine to resume when ready (from awaiter)
+        bool owns_coroutine_;                       // true: we own owning_coro_handle_ and must destroy it
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
         static constexpr uint32_t kMagicDead = 0xDEADC0DE;
-        mutable std::atomic<uint32_t> magic_;  // Atomic to prevent TSan warnings
+        mutable std::atomic<uint32_t> magic_; // Atomic to prevent TSan warnings
         uint64_t generation_;
 
         static uint64_t next_generation() {
@@ -253,11 +302,12 @@ namespace actor_zeta { namespace detail {
     struct result_storage {
         // Union for lazy initialization (handles non-trivial T correctly)
         union storage_t {
-            char dummy_;  // For default state (no value)
+            char dummy_; // For default state (no value)
             T value_;
 
             // Default: initialize dummy (no T constructed yet)
-            storage_t() noexcept : dummy_() {}
+            storage_t() noexcept
+                : dummy_() {}
 
             // Destructor is trivial - manual destruction via result_storage
             ~storage_t() {}
@@ -272,13 +322,14 @@ namespace actor_zeta { namespace detail {
 
         result_storage() noexcept = default;
 
-        explicit result_storage(pmr::memory_resource*) noexcept
+        explicit result_storage(std::pmr::memory_resource*) noexcept
             : storage_()
             , has_value_(false)
 #ifndef NDEBUG
             , was_moved_from_(false)
 #endif
-        {}
+        {
+        }
 
         ~result_storage() noexcept {
             if (has_value_) {
@@ -373,7 +424,7 @@ namespace actor_zeta { namespace detail {
 
             // Trivial Move Optimization: skip destructor for trivial types
             if constexpr (is_trivially_move_constructible_and_destructible_v<T>) {
-                return storage_.value_;  // Trivial copy, no destructor needed
+                return storage_.value_; // Trivial copy, no destructor needed
             } else {
                 T result = std::move(storage_.value_);
                 storage_.value_.~T();
@@ -411,7 +462,7 @@ namespace actor_zeta { namespace detail {
     /// @brief Void specialization - no storage needed
     template<>
     struct result_storage<void> {
-        explicit result_storage(pmr::memory_resource*) noexcept {}
+        explicit result_storage(std::pmr::memory_resource*) noexcept {}
 
         // Void storage is trivially copyable/movable (empty struct)
         result_storage() noexcept = default;
@@ -430,13 +481,10 @@ namespace actor_zeta { namespace detail {
         static constexpr bool has_result = !std::is_void_v<T>;
 
     public:
-        explicit future_state(pmr::memory_resource* res) noexcept
+        explicit future_state(std::pmr::memory_resource* res) noexcept
             : future_state_base(res)
             , storage_(res)
-            , owning_coro_handle_()
-            , resume_coro_handle_()
-            , forward_target_(nullptr)
-        {}
+            , forward_target_(nullptr) {}
 
         ~future_state() noexcept override {
             // Release forward target reference if set
@@ -454,8 +502,7 @@ namespace actor_zeta { namespace detail {
                     constexpr int fast_spin_limit = 10;
 
                     // Fast spin first (no syscall)
-                    while ((s == future_state_enum::setting || s == future_state_enum::consuming)
-                           && spin_count < fast_spin_limit) {
+                    while ((s == future_state_enum::setting || s == future_state_enum::consuming) && spin_count < fast_spin_limit) {
                         ++spin_count;
                         s = state_.load(std::memory_order_acquire);
                     }
@@ -467,14 +514,7 @@ namespace actor_zeta { namespace detail {
                     }
                 }
             }
-
-            // Only destroy coroutine if we OWN it (coroutine state from promise)
-            // Awaited states (from await_suspend) don't own the coroutine
-            // CRITICAL: Must call destroy() regardless of done() status!
-            // A done coroutine (at final_suspend) still needs destroy() to free frame
-            if (owns_coroutine_ && owning_coro_handle_) {
-                owning_coro_handle_.destroy();
-            }
+            // Coroutine destruction handled in ~future_state_base()
         }
 
         /// @brief Set typed forward target for result chaining (NO RTT!)
@@ -503,6 +543,14 @@ namespace actor_zeta { namespace detail {
             // Check if producer already completed while we were setting up
             // If state is ready, the producer stored value locally (didn't see our target)
             // We must forward the value now to complete the chain
+            //
+            // THREAD-SAFETY: This is safe because:
+            // 1. CAS on forward_target_ succeeded → we are the only forwarder
+            // 2. State is already ready/consumed → producer finished and won't touch storage_
+            // 3. take_value() uses state transition (ready→consuming→consumed) to prevent
+            //    concurrent access, but here state is already ready and we just forward
+            // 4. If state==consumed, another thread already took the value via take_value()
+            //    so storage_.has_value() will be false
             auto s = state_.load(std::memory_order_acquire);
             if (s == future_state_enum::ready || s == future_state_enum::consumed) {
                 // Producer finished - forward result now
@@ -536,8 +584,8 @@ namespace actor_zeta { namespace detail {
 #endif
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_acquire)) {
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
                 return;
             }
 
@@ -555,6 +603,18 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
+            // Auto-resume continuation when value is set
+            // BUT: If this state owns a coroutine (set by coroutine promise), DON'T resume here!
+            // Let final_suspend() do symmetric transfer instead. Otherwise:
+            // 1. set_value() resumes continuation
+            // 2. Continuation calls get() and destroys this state
+            // 3. We return to set_value() but state is destroyed
+            // 4. Coroutine runs final_suspend() on destroyed state → crash
+            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
+                auto cont = resume_coro_handle_;
+                resume_coro_handle_ = {}; // Clear before resume (single-shot)
+                cont.resume();
+            }
         }
 
         /// @brief Get value reference (only for non-void) - returns T&
@@ -563,8 +623,7 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: get_value() on deleted state!");
             auto s = state_.load(std::memory_order_relaxed);
-            assert((s == future_state_enum::ready || s == future_state_enum::consumed)
-                   && "get_value() called before set_value()!");
+            assert((s == future_state_enum::ready || s == future_state_enum::consumed) && "get_value() called before set_value()!");
 #endif
             return storage_.get();
         }
@@ -575,8 +634,7 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: get_value() on deleted state!");
             auto s = state_.load(std::memory_order_relaxed);
-            assert((s == future_state_enum::ready || s == future_state_enum::consumed)
-                   && "get_value() called before set_value()!");
+            assert((s == future_state_enum::ready || s == future_state_enum::consumed) && "get_value() called before set_value()!");
 #endif
             return storage_.get();
         }
@@ -587,7 +645,7 @@ namespace actor_zeta { namespace detail {
             auto expected = future_state_enum::ready;
             bool transitioned = transition(expected, future_state_enum::consuming);
             assert(transitioned && "take_value() called on non-ready state!");
-            (void)transitioned;
+            (void) transitioned;
 
             U result = storage_.take();
             state_.store(future_state_enum::consumed, std::memory_order_release);
@@ -604,8 +662,8 @@ namespace actor_zeta { namespace detail {
             // Use transient 'setting' state to match set_value() pattern
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_acquire)) {
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
                 return;
             }
 
@@ -623,59 +681,21 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
-        }
-
-        /// @brief Resume stored coroutine (final - enables devirtualization)
-        /// @note For coroutine's own state: resumes owning_coro_handle_ (set by promise)
-        /// @note For awaited state: resumes resume_coro_handle_ (set by awaiter)
-        void resume_coroutine() noexcept final {
-            // If we own a coroutine (from promise), resume it
-            // This is used when poll_pending() resumes a coroutine via its own state
-            if (owns_coroutine_ && owning_coro_handle_ && !owning_coro_handle_.done()) {
-                owning_coro_handle_.resume();
-                return;
-            }
-            // Otherwise, resume the awaiting coroutine (from awaiter)
-            // This is used when a state becomes ready and needs to wake its awaiter
-            if (resume_coro_handle_ && !resume_coro_handle_.done()) {
-                resume_coro_handle_.resume();
+            // Auto-resume continuation when ready (void version)
+            // Same logic as set_value: don't resume if we own a coroutine
+            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
+                auto cont = resume_coro_handle_;
+                resume_coro_handle_ = {}; // Clear before resume (single-shot)
+                cont.resume();
             }
         }
 
-        /// @brief Check if coroutine is stored for resumption (final - enables devirtualization)
-        [[nodiscard]] bool has_coroutine() const noexcept final {
-            return resume_coro_handle_.operator bool();
-        }
-
-        /// @brief Check if stored coroutine is done (final - enables devirtualization)
-        /// @note Checks owning coroutine if set, otherwise resume coroutine
-        [[nodiscard]] bool coroutine_done() const noexcept final {
-            if (owns_coroutine_ && owning_coro_handle_) {
-                return owning_coro_handle_.done();
-            }
-            return resume_coro_handle_ && resume_coro_handle_.done();
-        }
-
-        /// @brief Store coroutine handle (called from await_suspend or coroutine promise)
-        /// @param handle The coroutine handle to store
-        /// @param owns If true, this state owns the coroutine (from promise)
-        ///             If false (default), this is just for resumption (from awaiter)
-        /// @note When owns=true (promise), handle is stored as owning_coro_handle_
-        ///       When owns=false (awaiter), handle is stored as resume_coro_handle_
-        ///       This allows lambda-coroutines to be properly cleaned up even when awaited
-        void set_coroutine(std::coroutine_handle<> handle, bool owns = false) noexcept override {
-            if (owns) {
-                // From promise: this coroutine owns this state, store for cleanup
-                owning_coro_handle_ = handle;
-                owns_coroutine_ = true;
-            } else {
-                // From awaiter: this handle should be resumed when state becomes ready
-                resume_coro_handle_ = handle;
-            }
-        }
+        // Coroutine methods inherited from future_state_base (non-virtual)
 
         bool set_forward_target_void(future_state_base* target) noexcept override {
             if constexpr (std::is_void_v<T>) {
+                // RTTI disabled: static_cast is safe here because caller guarantees
+                // target is future_state<void>* when T is void
                 return set_forward_target(static_cast<future_state<void>*>(target));
             } else {
                 // For non-void: typed forwarding already happened via setup_result_chaining<T>
@@ -693,10 +713,8 @@ namespace actor_zeta { namespace detail {
 
     private:
         [[no_unique_address]] result_storage<T> storage_;
-        coroutine_handle<void> owning_coro_handle_;  // Coroutine that this state owns (from promise)
-        coroutine_handle<void> resume_coro_handle_;  // Coroutine to resume when ready (from awaiter)
-        bool owns_coroutine_ = false;  // true: we own owning_coro_handle_ and must destroy it
-        std::atomic<future_state<T>*> forward_target_;  // TYPED forward target
+        std::atomic<future_state<T>*> forward_target_; // TYPED forward target
+        // Coroutine handles inherited from future_state_base (protected)
     };
 
     // intrusive_ptr support for future_state_base

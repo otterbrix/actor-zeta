@@ -1,12 +1,12 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
-    explicit test_actor(actor_zeta::pmr::memory_resource* ptr)
+    explicit test_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<test_actor>(ptr)
         , call_count1_(0)
         , call_count2_(0)
@@ -71,9 +71,9 @@ TEST_CASE("dispatch_traits - compile-time msg_id generation") {
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
 
     // message_id has default priority flag, so check that ActionId in lower bits is correct
-    REQUIRE((id1.integer_value() & 0xFFFFFFFF) == 0);
-    REQUIRE((id2.integer_value() & 0xFFFFFFFF) == 1);
-    REQUIRE((id3.integer_value() & 0xFFFFFFFF) == 2);
+    REQUIRE((id1 & 0xFFFFFFFF) == 0);
+    REQUIRE((id2 & 0xFFFFFFFF) == 1);
+    REQUIRE((id3 & 0xFFFFFFFF) == 2);
 }
 
 TEST_CASE("dispatch_traits - unique message IDs") {
@@ -93,9 +93,9 @@ TEST_CASE("dispatch_traits - sequential indexing") {
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
 
     // Extract ActionId from lower bits
-    constexpr uint64_t action1 = id1.integer_value() & 0xFFFFFFFF;
-    constexpr uint64_t action2 = id2.integer_value() & 0xFFFFFFFF;
-    constexpr uint64_t action3 = id3.integer_value() & 0xFFFFFFFF;
+    constexpr uint64_t action1 = id1 & 0xFFFFFFFF;
+    constexpr uint64_t action2 = id2 & 0xFFFFFFFF;
+    constexpr uint64_t action3 = id3 & 0xFFFFFFFF;
 
     REQUIRE(action1 == 0);
     REQUIRE(action2 == 1);
@@ -108,7 +108,7 @@ TEST_CASE("dispatch_traits - simple one-line syntax") {
     // This test verifies that the new syntax compiles
     // using dispatch_traits = actor_zeta::dispatch_traits<&Actor::method1, ...>;
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
     REQUIRE(actor != nullptr);

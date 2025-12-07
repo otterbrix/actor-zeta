@@ -9,7 +9,7 @@
 
 namespace actor_zeta { namespace detail {
 
-     void set_thread_name(const char* name);
+    void set_thread_name(const char* name);
 
     template<class F>
     std::thread launch_thread(const char* thread_name, F fun) {

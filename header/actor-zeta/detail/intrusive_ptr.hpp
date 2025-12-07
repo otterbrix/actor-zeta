@@ -1,14 +1,11 @@
 #pragma once
 
-//C++ 11 intrusive_ptr
-//frindle api for boost
-
-#include <utility>
 #include <cassert>
+#include <utility>
 
 #include <actor-zeta/detail/ref_counted.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/detail/memory_resource.hpp>
+#include <memory_resource>
 
 namespace actor_zeta {
     ///
@@ -213,7 +210,7 @@ namespace actor_zeta {
     }
 
     /// @brief PMR-aware version of make_counted for types requiring custom allocation
-    /// @tparam T Type to create (must have constructor taking pmr::memory_resource*)
+    /// @tparam T Type to create (must have constructor taking std::pmr::memory_resource*)
     /// @tparam Args Additional constructor arguments
     /// @param res Memory resource for allocation
     /// @param args Arguments forwarded to T's constructor (after res)
@@ -230,10 +227,10 @@ namespace actor_zeta {
     ///   - Deallocation handled by T::destroy() virtual method
     namespace pmr {
         template<class T, class... Args>
-        intrusive_ptr<T> make_counted(memory_resource* res, Args&&... args) {
+        intrusive_ptr<T> make_counted(std::pmr::memory_resource* res, Args&&... args) {
             void* mem = res->allocate(sizeof(T), alignof(T));
             T* ptr = new (mem) T(res, std::forward<Args>(args)...);
-            return intrusive_ptr<T>(ptr, false);  // adopt_ref - don't add_ref
+            return intrusive_ptr<T>(ptr, false); // adopt_ref - don't add_ref
         }
     } // namespace pmr
 

@@ -1,18 +1,18 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
-#include <chrono>
 
 // Test actor that can be cancelled during processing
 class state_test_actor final : public actor_zeta::basic_actor<state_test_actor> {
 public:
-    explicit state_test_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit state_test_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<state_test_actor>(resource) {
     }
 
@@ -66,7 +66,7 @@ TEST_CASE("State Test 1.1: set_result vs cancel race") {
     // - TSan will detect data races on state transitions
     // - Test completes without crashes = SUCCESS
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -123,7 +123,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
     // - TSan will detect data races
     // - Test verifies monotonic transition (false → true, never true → false)
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -204,7 +204,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
     // - TSan will detect data races
     // - All observer threads complete successfully
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
@@ -273,12 +273,141 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
 // Template for Future Tests
 // =============================================================================
 
-TEST_CASE("State Test 1.4: State transition ordering [TEMPLATE]") {
+TEST_CASE("State Test 1.4: State transition ordering") {
     // TEST OBJECTIVE:
-    // Verify memory ordering of state transitions is correct
+    // Verify that memory ordering guarantees are maintained during state transitions.
+    // Specifically: when is_ready() returns true, the result value MUST be visible.
     //
-    // IMPLEMENTATION STATUS: TEMPLATE ONLY
-    // TODO: Implement when Phase 1 is complete
+    // SCENARIO:
+    // 1. Producer thread: writes data, then sets ready state
+    // 2. Consumer thread: waits for ready, then reads data
+    // 3. Memory ordering must ensure consumer sees producer's data
+    //
+    // EXPECTED BEHAVIOR:
+    // - acquire/release semantics guarantee visibility
+    // - Consumer NEVER sees stale/uninitialized data after is_ready() == true
+    //
+    // VERIFICATION:
+    // - TSan detects ordering violations
+    // - Value mismatch detection in test
 
-    WARN("Test 1.4 not yet implemented - see TESTING.md Phase 2");
+    auto* resource =std::pmr::get_default_resource();
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    scheduler->start();
+
+    auto actor = actor_zeta::spawn<state_test_actor>(resource);
+
+    constexpr int NUM_ITERATIONS = 500;
+    std::atomic<int> ordering_violations{0};
+    std::atomic<int> successful_reads{0};
+
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+        // Use unique value to detect stale reads
+        int expected_value = i + 1;  // fast_task returns value + 1
+
+        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                                      &state_test_actor::fast_task, i);
+
+        if (future.needs_scheduling()) {
+            scheduler->enqueue(actor.get());
+        }
+
+        // Consumer thread: poll and read
+        std::thread consumer([&future, expected_value, &ordering_violations, &successful_reads]() {
+            // Spin until ready
+            while (!future.available()) {
+                // Small delay to avoid pure spinning
+                std::this_thread::yield();
+            }
+
+            // CRITICAL: At this point, is_ready() returned true.
+            // Memory ordering MUST guarantee that the result is visible.
+
+            // Read the value
+            int actual_value = std::move(future).get();
+
+            // Verify ordering: value must match expected
+            // If memory ordering is broken, we might see:
+            // - 0 (uninitialized)
+            // - Previous iteration's value
+            // - Garbage
+            if (actual_value != expected_value) {
+                ordering_violations.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                successful_reads.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+
+        consumer.join();
+    }
+
+    scheduler->stop();
+
+    // Verification: No ordering violations
+    INFO("Successful reads: " << successful_reads.load());
+    INFO("Ordering violations: " << ordering_violations.load());
+    REQUIRE(ordering_violations.load() == 0);
+    REQUIRE(successful_reads.load() == NUM_ITERATIONS);
+}
+
+TEST_CASE("State Test 1.5: Happens-before across state transitions") {
+    // TEST OBJECTIVE:
+    // Verify happens-before relationship: all writes before set_result()
+    // are visible to all reads after is_ready() returns true.
+    //
+    // SCENARIO:
+    // - Producer: write auxiliary data, then set result
+    // - Consumer: observe ready, then read auxiliary data
+    // - Auxiliary data must be visible (happens-before)
+    //
+    // This tests that the state transition acts as a synchronization point.
+
+    auto* resource =std::pmr::get_default_resource();
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    scheduler->start();
+
+    auto actor = actor_zeta::spawn<state_test_actor>(resource);
+
+    constexpr int NUM_ITERATIONS = 300;
+    std::atomic<int> visibility_failures{0};
+
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                                      &state_test_actor::compute, i);
+
+        if (future.needs_scheduling()) {
+            scheduler->enqueue(actor.get());
+        }
+
+        // Consumer observes ready state
+        std::atomic<bool> consumer_done{false};
+        std::thread consumer([&]() {
+            // Wait for ready with timeout
+            auto start = std::chrono::steady_clock::now();
+            while (!future.available()) {
+                if (std::chrono::steady_clock::now() - start > std::chrono::seconds(2)) {
+                    // Timeout - something wrong
+                    visibility_failures.fetch_add(1, std::memory_order_relaxed);
+                    consumer_done.store(true, std::memory_order_release);
+                    return;
+                }
+                std::this_thread::yield();
+            }
+
+            // Read and verify
+            int result = std::move(future).get();
+            if (result != i * 2) {  // compute returns value * 2
+                visibility_failures.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            consumer_done.store(true, std::memory_order_release);
+        });
+
+        consumer.join();
+    }
+
+    scheduler->stop();
+
+    // Verification
+    REQUIRE(visibility_failures.load() == 0);
 }

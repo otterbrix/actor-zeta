@@ -1,18 +1,18 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
+#include <random>
 #include <thread>
 #include <vector>
-#include <random>
 
 // Stress test actor - processes messages as fast as possible
 class stress_actor final : public actor_zeta::basic_actor<stress_actor> {
 public:
-    explicit stress_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit stress_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<stress_actor>(resource)
         , processed_count_(0) {
     }
@@ -51,7 +51,7 @@ TEST_CASE("Race condition stress test - future destruction timing") {
     // ASan makes code ~3x slower, increasing race window
     constexpr int NUM_THREADS = 4;  // Was 8
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);  // Was 4 threads
     scheduler->start();
 
@@ -165,7 +165,7 @@ TEST_CASE("Race condition stress test - future destruction timing") {
 TEST_CASE("Race condition stress test - concurrent future destruction") {
     // This test specifically targets the window between set_error() and has_active_future() check
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 100);
     scheduler->start();
 
@@ -218,7 +218,7 @@ TEST_CASE("Race condition stress test - concurrent future destruction") {
 TEST_CASE("Memory leak detection - orphaned messages") {
     // Test that orphaned messages (future destroyed before processing) are properly cleaned up
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     // Use 2 threads for faster processing on slow CI servers
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();

@@ -13,15 +13,15 @@
         using Supervisor = simple_supervisor<Actor>;                                        \
                                                                                              \
         std::unique_ptr<Supervisor, actor_zeta::pmr::deleter_t> supervisor_;                \
-        actor_zeta::pmr::memory_resource* resource_;                                        \
+        std::pmr::memory_resource* resource_;                                        \
                                                                                              \
     public:                                                                                  \
         Fixture_##type##_##count()                                                          \
-            : supervisor_(nullptr, actor_zeta::pmr::deleter_t(actor_zeta::pmr::get_default_resource())) { \
+            : supervisor_(nullptr, actor_zeta::pmr::deleter_t(std::pmr::get_default_resource())) { \
         }                                                                                    \
                                                                                              \
         void SetUp(const benchmark::State&) override {                                      \
-            resource_ = actor_zeta::pmr::get_default_resource();                            \
+            resource_ =std::pmr::get_default_resource();                            \
             supervisor_ = actor_zeta::spawn<Supervisor>(resource_);                         \
             actor_zeta::send(supervisor_.get(), actor_zeta::address_t::empty_address(), &Supervisor::prepare); \
         }                                                                                    \

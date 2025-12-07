@@ -7,9 +7,8 @@ message(STATUS "PROJECT_NAME = ${PROJECT_NAME}")
 add_executable(${PROJECT_NAME} main.cpp)
 
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC actor-zeta
-    PUBLIC tooltestsuites
-    PUBLIC Catch2::Catch2
+    PRIVATE tooltestsuites
+    PRIVATE Catch2::Catch2
 )
 
 include(CTest)

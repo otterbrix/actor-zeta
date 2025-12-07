@@ -1,8 +1,8 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -11,7 +11,7 @@
 // Test actor for intrusive_ptr stress testing (via messages/futures)
 class refcount_stress_actor final : public actor_zeta::basic_actor<refcount_stress_actor> {
 public:
-    explicit refcount_stress_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit refcount_stress_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<refcount_stress_actor>(resource)
         , value_{0} {
     }
@@ -102,7 +102,7 @@ TEST_CASE("Refcount Stress 1: Concurrent future creation/destruction") {
     // - TSan will detect data races on rc_ atomic
     // - ASan will detect double-free if refcount is wrong
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
     scheduler->start();
 
@@ -155,7 +155,7 @@ TEST_CASE("Refcount Stress 2: Future move and copy operations") {
     // - Assert in future.get() will catch invalid operations
     // - TSan will detect data races on future internal state
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
 
@@ -202,7 +202,7 @@ TEST_CASE("Refcount Stress 3: Concurrent message enqueue and future get") {
     // - TSan catches data races
     // - ASan catches use-after-free
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
 
@@ -274,7 +274,7 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
     // - TSan detects data races
     // - ASan detects memory errors
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
     scheduler->start();
 
@@ -373,7 +373,7 @@ TEST_CASE("Refcount Stress 5: Actor destruction with pending messages") {
     // - ASan catches memory leaks if messages not cleaned up
     // - TSan catches races during destruction
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
 

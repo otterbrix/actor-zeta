@@ -1,8 +1,8 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <thread>
@@ -33,7 +33,7 @@
 
 class good_shutdown_actor final : public actor_zeta::basic_actor<good_shutdown_actor> {
 public:
-    explicit good_shutdown_actor(actor_zeta::pmr::memory_resource* resource)
+    explicit good_shutdown_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<good_shutdown_actor>(resource)
         , counter_(0) {
     }
@@ -63,7 +63,7 @@ public:
 
     template<typename R, typename... Args>
     actor_zeta::unique_future<R> enqueue_impl(
-        actor_zeta::base::address_t sender,
+        actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
@@ -93,7 +93,7 @@ TEST_CASE("Aggressive Shutdown Test: Automatic shutdown_guard protection") {
     // - NO data races detected
     // - All operations synchronized correctly
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
 
@@ -141,7 +141,7 @@ TEST_CASE("Stress Test: Concurrent actor creation/destruction") {
     // - No races with proper begin_shutdown() usage
     // - No crashes or memory leaks
 
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
     scheduler->start();
 
