@@ -180,7 +180,6 @@ namespace actor_zeta { namespace detail {
 #endif
         }
 
-
         rtt(std::allocator_arg_t, std::pmr::memory_resource* resource, rtt&& other) noexcept
             : memory_resource_([](std::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
             , capacity_(0)
@@ -189,7 +188,6 @@ namespace actor_zeta { namespace detail {
             , data_(nullptr)
             , objects_(nullptr)
             , objects_idx_(0) {
-
             // Only same-arena move is supported for type-erased container
             // Cross-arena migration would require copying non-trivial types which is not possible
             // without knowing their actual types at runtime

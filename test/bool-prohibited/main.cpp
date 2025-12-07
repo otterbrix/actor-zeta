@@ -1,8 +1,8 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 // Good actor - uses void (fire-and-forget) and other types (request-response)
 class good_actor final : public actor_zeta::basic_actor<good_actor> {

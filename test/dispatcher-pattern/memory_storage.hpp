@@ -10,7 +10,6 @@
 /// - Behavior dispatch using switch + msg_id<Actor, &Actor::method>
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 #include "common_types.hpp"
 #include "test_logger.hpp"

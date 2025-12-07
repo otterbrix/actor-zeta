@@ -1,36 +1,26 @@
 #pragma once
 
+#include <chrono>
+#include <thread>
+
 #include <actor-zeta/actor/actor_mixin.hpp>
-#include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/config.hpp>
+#include <actor-zeta/detail/future.hpp>
 #include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/future.hpp>
-#include <actor-zeta/mailbox/default_mailbox.hpp>
-#include <actor-zeta/make_message.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
-
-#include <actor-zeta/mailbox/mailbox.hpp>
-#include <actor-zeta/mailbox/default_mailbox.hpp>
-
-#include <thread>
-#include <chrono>
 
 namespace actor_zeta { namespace actor {
 
-    using default_mailbox = mailbox::mailbox_t<mailbox::default_mailbox_impl>;
-
     enum class actor_state : uint8_t {
-        idle                         = 0b000,
-        scheduled                    = 0b001,
-        running                      = 0b010,
-        running_scheduled            = 0b011,
-        idle_destroying              = 0b100,
-        scheduled_destroying         = 0b101,
-        running_destroying           = 0b110,
+        idle = 0b000,
+        scheduled = 0b001,
+        running = 0b010,
+        running_scheduled = 0b011,
+        idle_destroying = 0b100,
+        scheduled_destroying = 0b101,
+        running_destroying = 0b110,
         running_scheduled_destroying = 0b111
     };
 
@@ -72,9 +62,12 @@ namespace actor_zeta { namespace actor {
 
     constexpr actor_state make_state(bool scheduled, bool running, bool destroying) noexcept {
         uint8_t bits = 0;
-        if (scheduled) bits |= 0b001;
-        if (running) bits |= 0b010;
-        if (destroying) bits |= 0b100;
+        if (scheduled)
+            bits |= 0b001;
+        if (running)
+            bits |= 0b010;
+        if (destroying)
+            bits |= 0b100;
         return static_cast<actor_state>(bits);
     }
 
@@ -90,28 +83,19 @@ namespace actor_zeta { namespace actor {
             if (attempt < 10) {
                 std::this_thread::yield();
             } else {
-                auto sleep_us = std::min(1 << (attempt - 10), 1000);  // Cap at 1ms
+                auto sleep_us = std::min(1 << (attempt - 10), 1000); // Cap at 1ms
                 std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
             }
         }
     }
 
-    // Primary template declaration
-    template<class Actor, class MailBox = default_mailbox>
-    class cooperative_actor;
-
-    // Alias for common usage
-    template<class Actor>
-    using basic_actor = cooperative_actor<Actor, default_mailbox>;
-
-    // Full specialization
     template<class Actor, class MailBox>
     class cooperative_actor
         : public actor_mixin<Actor> {
     private:
         static constexpr bool check_dispatch_traits_exists() {
             using dispatch_traits_check = typename Actor::dispatch_traits;
-            (void)sizeof(dispatch_traits_check);
+            (void) sizeof(dispatch_traits_check);
             return true;
         }
 
@@ -120,7 +104,6 @@ namespace actor_zeta { namespace actor {
         using typename actor_mixin<Actor>::placement_tag;
         using actor_mixin<Actor>::placement;
 
-        using mailbox_t = MailBox;
         using unique_actor = std::unique_ptr<cooperative_actor<Actor, MailBox>, pmr::deleter_t>;
 
         template<typename T>
@@ -134,21 +117,19 @@ namespace actor_zeta { namespace actor {
         unique_future<R> enqueue_impl(
             actor::address_t sender,
             mailbox::message_id cmd,
-            Args&&... args
-        ) {
+            Args&&... args) {
             // Create message + promise in one call (cleaner API)
-            auto [msg, future] = detail::make_message_with_result<R>(
+            auto [msg, future] = detail::make_message<R>(
                 this->resource(),
                 std::move(sender),
                 cmd,
-                std::forward<Args>(args)...
-            );
+                std::forward<Args>(args)...);
 
-            // Save result_slot before msg is moved
-            auto result_slot = msg->result_slot();
+            // Save result_promise before msg is moved (for error handling)
+            auto result_promise = msg->template get_result_promise<R>();
 
             if (is_destroying(state_.load(std::memory_order_acquire))) {
-                result_slot->set_state(detail::future_state_enum::error);
+                result_promise.internal_state_base()->set_state(detail::future_state_enum::error);
                 return std::move(future);
             }
 
@@ -206,7 +187,7 @@ namespace actor_zeta { namespace actor {
                     break;
 
                 case detail::enqueue_result::queue_closed:
-                    result_slot->set_state(detail::future_state_enum::error);
+                    result_promise.internal_state_base()->set_state(detail::future_state_enum::error);
                     needs_sched = false;
                     break;
 
@@ -400,7 +381,7 @@ namespace actor_zeta { namespace actor {
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
                         auto behavior_future = self()->behavior(guard.get());
                         // behavior_future not tracked - user must store pending coroutines manually
-                        (void)behavior_future;
+                        (void) behavior_future;
                     }
 
                     ++handled;
@@ -442,7 +423,7 @@ namespace actor_zeta { namespace actor {
             return resource_;
         }
 
-        cooperative_actor()= delete;
+        cooperative_actor() = delete;
 
         ~cooperative_actor() {
 #ifndef NDEBUG
@@ -476,7 +457,7 @@ namespace actor_zeta { namespace actor {
     protected:
         explicit cooperative_actor(std::pmr::memory_resource* in_resource)
             : actor_mixin<Actor>()
-            , shutdown_guard_(this)       // Initialize FIRST (destroyed LAST!)
+            , shutdown_guard_(this) // Initialize FIRST (destroyed LAST!)
             , resource_(check_ptr(in_resource))
             , current_message_(nullptr)
             , mailbox_()
@@ -485,7 +466,7 @@ namespace actor_zeta { namespace actor {
 #endif
         {
             static_assert(check_dispatch_traits_exists(),
-                "Actor must define nested 'struct dispatch_traits { using methods = type_list<...>; }'");
+                          "Actor must define nested 'struct dispatch_traits { using methods = type_list<...>; }'");
             mailbox().try_block();
         }
 
@@ -538,10 +519,10 @@ namespace actor_zeta { namespace actor {
                 auto elapsed = std::chrono::steady_clock::now() - start_time;
                 if (elapsed > timeout) {
 #ifndef NDEBUG
-                    (void)context;
+                    (void) context;
                     assert(false && "wait_for_resume_to_complete: timeout!");
 #else
-                    (void)context;
+                    (void) context;
                     std::terminate();
 #endif
                 }
@@ -560,7 +541,7 @@ namespace actor_zeta { namespace actor {
             return static_cast<Actor*>(this);
         }
 
-        mailbox_t& mailbox() noexcept {
+        MailBox& mailbox() noexcept {
             return mailbox_;
         }
 
@@ -568,16 +549,15 @@ namespace actor_zeta { namespace actor {
 
         std::pmr::memory_resource* resource_;
         mailbox::message* current_message_;
-        mailbox_t mailbox_;
+        MailBox mailbox_;
         std::atomic<actor_state> state_{actor_state::idle};
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
-        static constexpr uint32_t kMagicDead = 0xDEADC0DE;  // Not used (TSAN race)
+        static constexpr uint32_t kMagicDead = 0xDEADC0DE; // Not used (TSAN race)
 
         uint32_t magic_;
 #endif
     };
 
-}}
-
+}} // namespace actor_zeta::actor

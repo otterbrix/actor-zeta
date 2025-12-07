@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace actor_zeta { namespace detail {
 
     enum class enqueue_result : uint8_t {

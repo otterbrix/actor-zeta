@@ -1,27 +1,23 @@
 #pragma once
 
 #include <cassert>
-#include <new>
 #include <chrono>
+#include <memory_resource>
+#include <new>
 #include <thread>
 #include <type_traits>
 #include <utility>
-#include <memory_resource>
 
 #include <actor-zeta/config.hpp>
+#include <actor-zeta/detail/coro_frame_header.hpp>
+#include <actor-zeta/detail/coroutine.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
-#include <actor-zeta/detail/rtt.hpp>
-#include <actor-zeta/detail/coroutine.hpp>
-#include <actor-zeta/detail/coro_frame_header.hpp>
 
 namespace actor_zeta {
 
     template<typename T>
     class unique_future;
-
-    // internal_construct_tag is defined in mailbox/message.hpp to avoid ODR violation
-    // It's a simple empty struct used as a tag for internal constructors
 
     /// @brief Unified promise<T> - works for both void and non-void types
     /// Uses SFINAE to provide appropriate set_value() overloads
@@ -50,7 +46,7 @@ namespace actor_zeta {
         /// @brief Internal constructor - wraps existing state (adds refcount)
         /// @note Used by message::get_result_promise<T>() to create promise view
         /// @note Convention: don't use internal_construct_tag in user code
-        explicit promise(internal_construct_tag, state_type* existing_state, std::pmr::memory_resource* res) noexcept
+        explicit promise(type_traits::internal_construct_tag, state_type* existing_state, std::pmr::memory_resource* res) noexcept
             : state_(existing_state)
             , resource_(res) {
             if (state_) {
@@ -174,8 +170,8 @@ namespace actor_zeta {
         /// @warning The typed result is DISCARDED - this is intentional for behavior() pattern
         template<typename U, std::enable_if_t<is_void_type && !std::is_void_v<U>, int> = 0>
         unique_future(unique_future<U>&& other) noexcept
-            : state_()  // Default init first
-            , resource_(other.resource())  // Get resource while other.state_ still valid
+            : state_()                    // Default init first
+            , resource_(other.resource()) // Get resource while other.state_ still valid
             , needs_scheduling_(other.needs_scheduling()) {
             // Release state AFTER getting resource (other.state_ becomes nullptr)
             state_ = intrusive_ptr<state_type>(
@@ -276,7 +272,8 @@ namespace actor_zeta {
         /// @note Uses set_forward_target which handles ready states internally
         template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
         void forward_to(promise<T>& target) {
-            if (!state_) return;
+            if (!state_)
+                return;
             auto* target_state = static_cast<detail::future_state<T>*>(target.internal_state_base());
             state_->set_forward_target(target_state);
         }
@@ -285,7 +282,8 @@ namespace actor_zeta {
         /// @note Always sets up forwarding chain (handles both ready and pending)
         template<typename U = T, std::enable_if_t<std::is_void_v<U>, int> = 0>
         void forward_to(promise<void>& target) {
-            if (!state_) return;
+            if (!state_)
+                return;
             auto* target_state = static_cast<detail::future_state<void>*>(target.internal_state_base());
             state_->set_forward_target_void(target_state);
         }
@@ -366,7 +364,7 @@ namespace actor_zeta {
                 state_ = new (mem) coroutine_state_type(resource_);
 
                 auto handle = std::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
-                state_->set_coroutine_owning(handle);  // This state owns the coroutine
+                state_->set_coroutine_owning(handle); // This state owns the coroutine
 
                 // For void: coroutine_state_type* (future_state<void>*) → state_type* (future_state_base*)
                 // This is legal: derived* → base*
@@ -389,12 +387,12 @@ namespace actor_zeta {
                     /// @return Continuation handle if someone is waiting, else noop
                     std::coroutine_handle<> await_suspend(
                         std::coroutine_handle<promise_type> /*h*/
-                    ) noexcept {
+                        ) noexcept {
                         // If there's a waiting coroutine, resume it directly
                         if (auto cont = state_->take_continuation()) {
-                            return cont;  // Symmetric transfer!
+                            return cont; // Symmetric transfer!
                         }
-                        return std::noop_coroutine();  // No waiter - stay suspended
+                        return std::noop_coroutine(); // No waiter - stay suspended
                     }
 
                     void await_resume() noexcept {}
@@ -413,7 +411,9 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
-            promise_type_base() noexcept : resource_(nullptr), state_(nullptr) {}
+            promise_type_base() noexcept
+                : resource_(nullptr)
+                , state_(nullptr) {}
 
             template<typename First, typename... Args>
             promise_type_base(First&& first, Args&&... args) noexcept
@@ -467,7 +467,8 @@ namespace actor_zeta {
             template<typename First, typename... Rest>
             static std::pmr::memory_resource* extract_resource_from_args(First&& first, Rest&&... rest) noexcept {
                 auto res = extract_resource_impl(std::forward<First>(first));
-                if (res != nullptr) return res;
+                if (res != nullptr)
+                    return res;
                 if constexpr (sizeof...(Rest) > 0) {
                     return extract_resource_from_args(std::forward<Rest>(rest)...);
                 }
@@ -475,7 +476,7 @@ namespace actor_zeta {
             }
 
             std::pmr::memory_resource* resource_;
-            coroutine_state_type* state_;  // Use concrete type for coroutine operations
+            coroutine_state_type* state_; // Use concrete type for coroutine operations
         };
 
         // Non-void: has return_value
@@ -559,7 +560,8 @@ namespace actor_zeta {
                 if (state_->is_cancelled()) {
                     state_ = nullptr;
                     assert(false && "get() on cancelled future!");
-                    if constexpr (!is_void_type) std::terminate();
+                    if constexpr (!is_void_type)
+                        std::terminate();
                     return true;
                 }
                 return false;
@@ -571,13 +573,15 @@ namespace actor_zeta {
 
             // Fast spin phase (no syscall)
             while (!state_->is_ready() && spin_count < fast_spin_limit) {
-                if (check_cancelled()) return;
+                if (check_cancelled())
+                    return;
                 ++spin_count;
             }
 
             // Yield phase
             while (!state_->is_ready() && spin_count < yield_limit) {
-                if (check_cancelled()) return;
+                if (check_cancelled())
+                    return;
                 std::this_thread::yield();
                 ++spin_count;
             }
@@ -586,12 +590,13 @@ namespace actor_zeta {
             // Wait until truly ready (not just state changed)
             // Must handle transient states: pending → setting → ready
             while (!state_->is_ready()) {
-                if (check_cancelled()) return;
+                if (check_cancelled())
+                    return;
                 auto current = state_->state();
                 // Wait on pending OR setting states (both are transient)
                 if (current == detail::future_state_enum::pending ||
                     current == detail::future_state_enum::setting) {
-                    state_->wait(current);  // Returns when state changes
+                    state_->wait(current); // Returns when state changes
                 }
             }
 #else
@@ -600,9 +605,11 @@ namespace actor_zeta {
             constexpr auto max_backoff = std::chrono::microseconds(100);
 
             while (!state_->is_ready()) {
-                if (check_cancelled()) return;
+                if (check_cancelled())
+                    return;
                 std::this_thread::sleep_for(backoff);
-                if (backoff < max_backoff) backoff *= 2;
+                if (backoff < max_backoff)
+                    backoff *= 2;
             }
 #endif
         }
@@ -651,4 +658,4 @@ namespace actor_zeta {
         return unique_future<T>(*this);
     }
 
-}
+} // namespace actor_zeta

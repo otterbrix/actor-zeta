@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cassert>
+#include <memory>
+
 #include "forward_iterator.hpp"
 
 namespace actor_zeta { namespace detail {

@@ -1,14 +1,11 @@
-#include <actor-zeta.hpp>
-#include <actor-zeta/scheduler/scheduler.hpp>
-#include <actor-zeta/scheduler/sharing_scheduler.hpp>
-#include <actor-zeta/dispatch.hpp>
-
+#include <atomic>
+#include <chrono>
 #include <iostream>
 #include <string>
-#include <vector>
 #include <thread>
-#include <chrono>
-#include <atomic>
+#include <vector>
+
+#include <actor-zeta.hpp>
 
 // Simple worker actor that processes tasks
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {

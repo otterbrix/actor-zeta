@@ -6,6 +6,8 @@
 
 namespace actor_zeta { namespace type_traits {
 
+    struct internal_construct_tag {};
+
     using std::decay_t;
     using std::enable_if_t;
     using std::index_sequence;

@@ -13,6 +13,8 @@ namespace actor_zeta { namespace actor {
         : ptr_(nullptr) {
     }
 
+    address_t::address_t(void* ptr)
+        : ptr_([](void* ptr) {assert(ptr!=nullptr);return ptr; }(ptr)) {}
 
     bool address_t::operator!() const noexcept {
         return !(static_cast<bool>(ptr_));
@@ -20,6 +22,10 @@ namespace actor_zeta { namespace actor {
 
     address_t::operator bool() const noexcept {
         return static_cast<bool>(ptr_);
+    }
+
+    void* address_t::get() const noexcept {
+        return ptr_;
     }
 
     address_t::address_t(address_t&& other) noexcept {
@@ -62,7 +68,7 @@ namespace actor_zeta { namespace actor {
     }
 
     bool address_t::operator==(const address_t& rhs) noexcept {
-        return  ptr_ == rhs.ptr_;
+        return ptr_ == rhs.ptr_;
     }
 
-}} // namespace actor_zeta::base
+}} // namespace actor_zeta::actor

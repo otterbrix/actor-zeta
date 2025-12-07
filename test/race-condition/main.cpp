@@ -1,13 +1,13 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
+#include <random>
 #include <thread>
 #include <vector>
-#include <random>
 
 // Stress test actor - processes messages as fast as possible
 class stress_actor final : public actor_zeta::basic_actor<stress_actor> {

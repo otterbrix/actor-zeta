@@ -10,9 +10,9 @@
 
 #include "actor-zeta/detail/memory.hpp"
 #include "test/tooltestsuites/scheduler_test.hpp"
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
 #include <actor-zeta/spawn.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 using std::pmr::memory_resource;
 class dummy_supervisor;
@@ -44,7 +44,7 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    void enqueue_impl(actor_zeta::message_ptr msg) {
+    void enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
         auto tmp = std::move(msg);
         behavior(msg.get());
     }

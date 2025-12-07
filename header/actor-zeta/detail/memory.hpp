@@ -10,10 +10,14 @@ namespace actor_zeta { namespace pmr {
     struct has_placement_check {
     private:
         typedef char one;
-        typedef struct { char arr[2]; } two;
+        typedef struct {
+            char arr[2];
+        } two;
 
-        template<typename U> static one test(decltype(U::placement)*);
-        template<typename U> static two test(...);
+        template<typename U>
+        static one test(decltype(U::placement)*);
+        template<typename U>
+        static two test(...);
 
     public:
         enum { value = sizeof(test<T>(nullptr)) == sizeof(one) };

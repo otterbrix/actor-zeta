@@ -1,11 +1,11 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/detail/future.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/future.hpp>
-#include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta/config.hpp>
-#include <actor-zeta/dispatch.hpp>
+#include <actor-zeta/detail/future_state.hpp>
 
 // ============================================================================
 // Test 1: promise_type exists and can be used for co_return

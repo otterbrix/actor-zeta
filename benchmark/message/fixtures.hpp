@@ -1,7 +1,5 @@
 #pragma once
 
-#include <actor-zeta/core.hpp>
-
 #include <iostream>
 #include <list>
 #include <map>

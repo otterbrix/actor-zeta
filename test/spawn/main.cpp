@@ -8,8 +8,8 @@
 #include <set>
 #include <string>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <test/tooltestsuites/scheduler_test.hpp>
 
 class dummy_supervisor;
@@ -17,14 +17,6 @@ class dummy_supervisor;
 static std::atomic_int actor_counter{0};
 static std::atomic_int supervisor_counter{0};
 static std::atomic_int supervisor_sub_counter{0};
-
-constexpr static auto update_id = actor_zeta::make_message_id(0);
-constexpr static auto find_id = actor_zeta::make_message_id(1);
-constexpr static auto remove_id = actor_zeta::make_message_id(2);
-
-constexpr static auto create_actor_id = actor_zeta::make_message_id(0);
-constexpr static auto create_supervisor_id = actor_zeta::make_message_id(1);
-constexpr static auto create_supervisor_custom_resource_id = actor_zeta::make_message_id(2);
 
 class dummy_supervisor;
 
@@ -34,27 +26,30 @@ public:
 
     ~storage_t() = default;
 
+    void update() {}
+    void find() {}
+    void remove() {}
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &storage_t::update,
+        &storage_t::find,
+        &storage_t::remove
+    >;
+
     actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
-            case update_id: {
+            case actor_zeta::msg_id<storage_t, &storage_t::update>: {
                 return actor_zeta::dispatch(this, &storage_t::update, msg);
             }
-            case find_id: {
+            case actor_zeta::msg_id<storage_t, &storage_t::find>: {
                 return actor_zeta::dispatch(this, &storage_t::find, msg);
             }
-            case remove_id: {
+            case actor_zeta::msg_id<storage_t, &storage_t::remove>: {
                 return actor_zeta::dispatch(this, &storage_t::remove, msg);
             }
         }
         return actor_zeta::make_ready_future_void(resource());
     }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<>;
-
-private:
-    void update() {}
-    void find() {}
-    void remove() {}
 };
 
 class dummy_supervisor_sub final : public actor_zeta::actor::actor_mixin<dummy_supervisor_sub> {

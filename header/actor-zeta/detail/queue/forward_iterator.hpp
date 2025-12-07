@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <iterator>
 #include <type_traits>
 
 namespace actor_zeta { namespace detail {

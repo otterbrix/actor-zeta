@@ -1,6 +1,5 @@
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <cstdint>
 
 using namespace actor_zeta;
@@ -9,7 +8,7 @@ using namespace actor_zeta;
 // OLD STYLE: Switch-based dispatch
 // =====================================================================
 
-class old_style_actor : public base::basic_actor<old_style_actor> {
+class old_style_actor : public basic_actor<old_style_actor> {
 public:
     // Declare methods first (needed by dispatch_traits)
     unique_future<void> method1(int x) {
@@ -42,7 +41,7 @@ public:
     >;
 
     explicit old_style_actor(std::pmr::memory_resource* resource)
-        : base::basic_actor<old_style_actor>(resource)
+        : basic_actor<old_style_actor>(resource)
         , counter_(0) {}
 
     unique_future<void> behavior(mailbox::message* msg) {
@@ -122,7 +121,7 @@ BENCHMARK(BM_OldStyleDispatch)->DenseRange(0, 4)->Unit(benchmark::kNanosecond);
 // Benchmark: Direct method call vs dispatch()
 // =====================================================================
 
-class coroutine_actor : public base::basic_actor<coroutine_actor> {
+class coroutine_actor : public basic_actor<coroutine_actor> {
 public:
     // Coroutine methods (no make_ready_future needed)
     unique_future<int> compute(int x) {
@@ -149,7 +148,7 @@ public:
     >;
 
     explicit coroutine_actor(std::pmr::memory_resource* resource)
-        : base::basic_actor<coroutine_actor>(resource) {}
+        : basic_actor<coroutine_actor>(resource) {}
 
     unique_future<void> behavior(mailbox::message* msg) {
         auto cmd = msg->command();
@@ -187,7 +186,7 @@ static void BM_Dispatch_0Args(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
 
     // Create message once, reuse
-    auto msg = detail::make_message(
+    auto [msg, future_unused] = detail::make_message(
         resource,
         actor->address(),
         msg_id<coroutine_actor, &coroutine_actor::noop>
@@ -202,68 +201,53 @@ static void BM_Dispatch_0Args(benchmark::State& state) {
 }
 BENCHMARK(BM_Dispatch_0Args)->Unit(benchmark::kNanosecond);
 
-// dispatch() with 1 arg
-static void BM_Dispatch_1Arg(benchmark::State& state) {
+// Full cycle with 1 arg (send + resume + get)
+static void BM_FullCycle_1Arg(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
-        auto msg = detail::make_message(
-            resource,
-            actor->address(),
-            msg_id<coroutine_actor, &coroutine_actor::compute>,
-            42
-        );
-        auto future = dispatch(actor.get(), &coroutine_actor::compute, msg.get());
-        int result = std::move(future).get();
+        auto f = send(actor.get(), actor->address(), &coroutine_actor::compute, 42);
+        while (!f.available()) { actor->resume(1); }
+        int result = std::move(f).get();
         benchmark::DoNotOptimize(result);
     }
 
     state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK(BM_Dispatch_1Arg)->Unit(benchmark::kNanosecond);
+BENCHMARK(BM_FullCycle_1Arg)->Unit(benchmark::kNanosecond);
 
-// dispatch() with 2 args
-static void BM_Dispatch_2Args(benchmark::State& state) {
+// Full cycle with 2 args (send + resume + get)
+static void BM_FullCycle_2Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
-        auto msg = detail::make_message(
-            resource,
-            actor->address(),
-            msg_id<coroutine_actor, &coroutine_actor::sum>,
-            10, 20
-        );
-        auto future = dispatch(actor.get(), &coroutine_actor::sum, msg.get());
-        int result = std::move(future).get();
+        auto f = send(actor.get(), actor->address(), &coroutine_actor::sum, 10, 20);
+        while (!f.available()) { actor->resume(1); }
+        int result = std::move(f).get();
         benchmark::DoNotOptimize(result);
     }
 
     state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK(BM_Dispatch_2Args)->Unit(benchmark::kNanosecond);
+BENCHMARK(BM_FullCycle_2Args)->Unit(benchmark::kNanosecond);
 
-// dispatch() with 3 args
-static void BM_Dispatch_3Args(benchmark::State& state) {
+// Full cycle with 3 args (send + resume + get)
+static void BM_FullCycle_3Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
-        auto msg = detail::make_message(
-            resource,
-            actor->address(),
-            msg_id<coroutine_actor, &coroutine_actor::sum3>,
-            10, 20, 30
-        );
-        auto future = dispatch(actor.get(), &coroutine_actor::sum3, msg.get());
-        int result = std::move(future).get();
+        auto f = send(actor.get(), actor->address(), &coroutine_actor::sum3, 10, 20, 30);
+        while (!f.available()) { actor->resume(1); }
+        int result = std::move(f).get();
         benchmark::DoNotOptimize(result);
     }
 
     state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK(BM_Dispatch_3Args)->Unit(benchmark::kNanosecond);
+BENCHMARK(BM_FullCycle_3Args)->Unit(benchmark::kNanosecond);
 
 // Full send/dispatch/resume cycle for comparison
 static void BM_FullCycle_Coroutine(benchmark::State& state) {

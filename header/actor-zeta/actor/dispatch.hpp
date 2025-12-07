@@ -2,32 +2,27 @@
 
 #include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
+#include <actor-zeta/detail/future.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/future.hpp>
+#include <actor-zeta/mailbox/make_message.hpp>
 #include <actor-zeta/mailbox/message.hpp>
-#include <actor-zeta/make_message.hpp> // for is_valid_rtt_type_v
 
 namespace actor_zeta {
 
-namespace detail {
+    namespace detail {
 
-    /// @brief Set up result chaining from method_future to msg's result promise
-    /// @note Uses forward_to(promise&) - clean API without exposing detail::
-    template<typename T>
-    inline void setup_result_chaining_inline(
-        unique_future<T>& method_future,
-        mailbox::message* msg
-    ) noexcept {
-        if (!msg->has_result_slot()) {
-            return;
+        /// @brief Set up result chaining from method_future to msg's result promise
+        /// @note Uses forward_to(promise&) - clean API without exposing detail::
+        template<typename T>
+        inline void setup_result_chaining_inline(
+            unique_future<T>& method_future,
+            mailbox::message* msg) noexcept {
+            auto result_promise = msg->get_result_promise<T>();
+            method_future.forward_to(result_promise);
         }
 
-        auto result_promise = msg->get_result_promise<T>();
-        method_future.forward_to(result_promise);
-    }
-
-} // namespace detail
+    } // namespace detail
 
     // =========================================================================
     // Compile-time validation helpers for dispatch()
@@ -100,14 +95,12 @@ namespace detail {
         static_assert(
             dispatch_validation::validate_args_list_v<args_type_list>,
             "dispatch(): method argument types must be valid for RTT storage "
-            "(move/copy constructible, not abstract)"
-        );
+            "(move/copy constructible, not abstract)");
 
         static_assert(
             dispatch_validation::no_non_const_refs_v<args_type_list>,
             "dispatch(): non-const lvalue reference parameters (T&) are not allowed. "
-            "Use value (T), const reference (const T&), or rvalue reference (T&&)"
-        );
+            "Use value (T), const reference (const T&), or rvalue reference (T&&)");
 
         // =====================================================================
         // RUNTIME VALIDATION

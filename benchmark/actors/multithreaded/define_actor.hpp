@@ -1,7 +1,6 @@
 #pragma once
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 // Simple ping-pong actor for multithreaded benchmark

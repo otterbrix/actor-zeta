@@ -1,10 +1,7 @@
 #pragma once
 
-//C++ 11 intrusive_ptr
-//frindle api for boost
-
-#include <utility>
 #include <cassert>
+#include <utility>
 
 #include <actor-zeta/detail/ref_counted.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
@@ -233,7 +230,7 @@ namespace actor_zeta {
         intrusive_ptr<T> make_counted(std::pmr::memory_resource* res, Args&&... args) {
             void* mem = res->allocate(sizeof(T), alignof(T));
             T* ptr = new (mem) T(res, std::forward<Args>(args)...);
-            return intrusive_ptr<T>(ptr, false);  // adopt_ref - don't add_ref
+            return intrusive_ptr<T>(ptr, false); // adopt_ref - don't add_ref
         }
     } // namespace pmr
 

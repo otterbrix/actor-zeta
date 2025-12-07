@@ -1,8 +1,8 @@
 #pragma once
 
-#include <memory_resource>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 
 namespace actor_zeta::detail {
 
@@ -11,7 +11,7 @@ namespace actor_zeta::detail {
     /// Layout: [header][padding][coroutine_frame]
     struct coro_frame_header {
         std::pmr::memory_resource* resource;
-        std::size_t frame_size;  // Store frame size for unsized delete
+        std::size_t frame_size; // Store frame size for unsized delete
 
         /// @brief Size of header with alignment padding
         /// Ensures coroutine frame starts at max_align_t boundary

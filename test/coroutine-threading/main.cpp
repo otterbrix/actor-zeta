@@ -1,15 +1,15 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
-#include <thread>
 #include <atomic>
-#include <sstream>
-#include <vector>
-#include <mutex>
 #include <condition_variable>
+#include <mutex>
+#include <sstream>
+#include <thread>
+#include <vector>
 
 using namespace actor_zeta;
 

@@ -17,11 +17,10 @@
 ///   - No callback needed!
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 #include "common_types.hpp"
-#include "test_logger.hpp"
 #include "manager_dispatcher.hpp"
+#include "test_logger.hpp"
 
 #include <vector>
 #include <string>

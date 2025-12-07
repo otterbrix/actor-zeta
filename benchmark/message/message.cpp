@@ -6,8 +6,7 @@
 #include <string>
 #include <vector>
 
-#include <actor-zeta/config.hpp>
-#include <actor-zeta/make_message.hpp>
+#include <actor-zeta.hpp>
 
 #include "fixtures.hpp"
 #include "register_benchmark.hpp"
@@ -25,9 +24,9 @@ namespace benchmark_messages {
         (benchmark::State& state) {
             auto* resource =std::pmr::get_default_resource();
             while (state.KeepRunning()) {
-                auto message = actor_zeta::detail::make_message(
+                auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::base::address_t::empty_address(),
+                    actor_zeta::actor::address_t::empty_address(),
                     name_);
                 auto tmp = sizeof(*message);
                 if (static_cast<int64_t>(tmp) > static_cast<int64_t>(benchmark_messages::message_sz))
@@ -39,9 +38,9 @@ namespace benchmark_messages {
         (benchmark::State& state) {
             auto* resource =std::pmr::get_default_resource();
             while (state.KeepRunning()) {
-                auto message = actor_zeta::detail::make_message(
+                auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::base::address_t::empty_address(),
+                    actor_zeta::actor::address_t::empty_address(),
                     name_);
                 auto tmp = sizeof(*message);
                 if (static_cast<int64_t>(tmp) > static_cast<int64_t>(benchmark_messages::message_sz))
@@ -64,9 +63,9 @@ namespace benchmark_messages {
             template<typename... Args>
             auto message_arg_tmpl(uint64_t name_, Args&&... args) -> void {
                 auto* resource =std::pmr::get_default_resource();
-                auto message = actor_zeta::detail::make_message(
+                auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::base::address_t::empty_address(),
+                    actor_zeta::actor::address_t::empty_address(),
                     name_,
                     std::forward<Args>(args)...);
                 auto tmp = sizeof(*message);
@@ -86,9 +85,9 @@ namespace benchmark_messages {
             template<typename... Args>
             auto message_arg_tmpl(uint64_t name_, Args&&... args) -> void {
                 auto* resource =std::pmr::get_default_resource();
-                auto message = actor_zeta::detail::make_message(
+                auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::base::address_t::empty_address(),
+                    actor_zeta::actor::address_t::empty_address(),
                     name_,
                     std::forward<Args>(args)...);
                 auto tmp = sizeof(*message);

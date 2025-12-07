@@ -1,10 +1,9 @@
-#include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
-#include <actor-zeta/scheduler/sharing_scheduler.hpp>
-#include <iostream>
 #include <chrono>
+#include <iostream>
 #include <thread>
 #include <vector>
+
+#include <actor-zeta.hpp>
 
 // Forward declaration
 class calculator_actor;

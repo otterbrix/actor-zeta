@@ -1,13 +1,13 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
-#include <chrono>
 
 // Test actor that can be cancelled during processing
 class state_test_actor final : public actor_zeta::basic_actor<state_test_actor> {

@@ -1,5 +1,3 @@
-#include "actor-zeta/scheduler/scheduler.hpp"
-
 #include <cassert>
 
 #include <chrono>
@@ -11,8 +9,6 @@
 #include <thread>
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
-#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 
 std::atomic_int count_collection_part{0};
 std::atomic_int count_collection{0};
@@ -100,7 +96,7 @@ class collection_t final : public actor_zeta::actor::actor_mixin<collection_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    collection_t(std::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler*)
+    collection_t(std::pmr::memory_resource* resource, actor_zeta::sharing_scheduler*)
         : actor_zeta::actor::actor_mixin<collection_t>()
         , resource_(resource) {
         ++count_collection;

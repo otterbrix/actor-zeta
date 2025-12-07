@@ -1,12 +1,12 @@
 #pragma once
 
-#include <actor-zeta/actor/address.hpp>
-#include <actor-zeta/detail/future_state.hpp>
 #include <memory_resource>
-#include <actor-zeta/future.hpp>
-#include <actor-zeta/make_message.hpp>
 
-namespace actor_zeta { namespace actor {
+#include <actor-zeta/actor/address.hpp>
+#include <actor-zeta/detail/future.hpp>
+#include <actor-zeta/mailbox/make_message.hpp>
+
+namespace actor_zeta::actor {
 
     /// @brief Actor mixin - common functionality for all actor types
     /// Provides: id_t, address(), placement operators, enqueue_sync_impl()
@@ -76,7 +76,7 @@ namespace actor_zeta { namespace actor {
 
         static void operator delete(void*, void*, placement_tag) noexcept {}
 
-        static void operator delete(void* ptr) noexcept { (void)ptr; }
+        static void operator delete(void* ptr) noexcept { (void) ptr; }
 
         static void* operator new(size_t, void* ptr) = delete;
         static void* operator new(size_t) = delete;
@@ -110,18 +110,16 @@ namespace actor_zeta { namespace actor {
             actor::address_t sender,
             mailbox::message_id cmd,
             BehaviorFunc&& behavior_func,
-            Args&&... args
-        ) {
+            Args&&... args) {
             auto* derived = static_cast<Derived*>(this);
             auto* res = derived->resource();
 
             // Create message + promise in one call (cleaner API)
-            auto [msg, future] = detail::make_message_with_result<R>(
+            auto [msg, future] = detail::make_message<R>(
                 res,
                 std::move(sender),
                 cmd,
-                std::forward<Args>(args)...
-            );
+                std::forward<Args>(args)...);
 
             // Call behavior function with message pointer (synchronous execution)
             behavior_func(msg.get());
@@ -135,4 +133,4 @@ namespace actor_zeta { namespace actor {
         ~actor_mixin() = default;
     };
 
-}} // namespace actor_zeta::base
+} // namespace actor_zeta::actor

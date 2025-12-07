@@ -1,8 +1,6 @@
 #pragma once
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
-#include <actor-zeta/future.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <actor-zeta/config.hpp>
 

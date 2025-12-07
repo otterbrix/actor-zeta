@@ -9,8 +9,8 @@
 #include <string>
 
 #include "test/tooltestsuites/scheduler_test.hpp"
+#include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 using std::pmr::memory_resource;
 class dummy_supervisor;

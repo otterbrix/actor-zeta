@@ -1,7 +1,6 @@
 #pragma once
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 // Simple ping-pong actor for synchronous benchmark
 template<typename... Args>

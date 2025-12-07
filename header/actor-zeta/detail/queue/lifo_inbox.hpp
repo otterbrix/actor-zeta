@@ -1,6 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cassert>
+#include <memory>
+
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
 
 namespace actor_zeta { namespace detail {

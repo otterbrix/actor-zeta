@@ -1,11 +1,11 @@
 #pragma once
 
-#include <type_traits>
-#include <cstddef>
 #include <cassert>
+#include <cstddef>
+#include <type_traits>
 
-#include "resumable.hpp"
 #include "forwards.hpp"
+#include "resumable.hpp"
 #include <actor-zeta/detail/queue/singly_linked.hpp>
 
 namespace actor_zeta { namespace scheduler {
@@ -23,10 +23,8 @@ namespace actor_zeta { namespace scheduler {
         struct has_resume_method {
         private:
             template<class U>
-            static auto test(int) -> decltype(
-                std::declval<U*>()->resume(std::declval<size_t>()),
-                std::true_type{}
-            );
+            static auto test(int) -> decltype(std::declval<U*>()->resume(std::declval<size_t>()),
+                                              std::true_type{});
 
             template<class>
             static std::false_type test(...);
@@ -49,13 +47,16 @@ namespace actor_zeta { namespace scheduler {
         resume_info (*resume_fn)(void*, size_t);
 
         /// @brief Default constructor - creates null job_ptr
-        job_ptr() noexcept : ptr(nullptr), resume_fn(nullptr) {}
+        job_ptr() noexcept
+            : ptr(nullptr)
+            , resume_fn(nullptr) {}
 
         /// @brief Construct from raw pointer and function
         /// @param p Pointer to resumable object (must not be null for non-default construction)
         /// @param fn Resume function pointer (must not be null)
         job_ptr(void* p, resume_info (*fn)(void*, size_t)) noexcept
-            : ptr(p), resume_fn(fn) {
+            : ptr(p)
+            , resume_fn(fn) {
             assert((p != nullptr || fn == nullptr) && "Non-null function requires non-null pointer");
             assert((fn != nullptr || p == nullptr) && "Non-null pointer requires non-null function");
         }

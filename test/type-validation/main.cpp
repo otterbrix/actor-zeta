@@ -11,12 +11,12 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
+#include <actor-zeta/mailbox/make_message.hpp>
 #include <actor-zeta.hpp>
-#include <actor-zeta/make_message.hpp>
 
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 
 using namespace actor_zeta;
 

@@ -2,55 +2,55 @@
 
 namespace actor_zeta {
 
-// ════════════════════════════════════════════════════════════════════════════
-// COROUTINES REQUIREMENT: Project REQUIRES C++20 coroutines support
-// ════════════════════════════════════════════════════════════════════════════
-//
-// This library REQUIRES either:
-// 1. Standard C++20 coroutines: <coroutine> with __cpp_impl_coroutine
-// 2. Experimental coroutines: <experimental/coroutine> (GCC 9, Clang 8-13)
-//
-// WHY REQUIRED:
-// - behavior_t customization relies on coroutines for async handling
-// - Future/promise system needs coroutine support
-// - Removing conditional compilation simplifies code complexity
-//
-// MINIMUM VERSIONS:
-// - GCC 10+ (full <coroutine> support)
-// - Clang 14+ (full <coroutine> support)
-// - Clang 8-13 (experimental coroutines via <experimental/coroutine>)
-// - MSVC 2019 16.8+ (full <coroutine> support)
-//
-// BUILD ERROR: If coroutines not available, build will fail with static_assert
-// ════════════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════════════
+    // COROUTINES REQUIREMENT: Project REQUIRES C++20 coroutines support
+    // ════════════════════════════════════════════════════════════════════════════
+    //
+    // This library REQUIRES either:
+    // 1. Standard C++20 coroutines: <coroutine> with __cpp_impl_coroutine
+    // 2. Experimental coroutines: <experimental/coroutine> (GCC 9, Clang 8-13)
+    //
+    // WHY REQUIRED:
+    // - behavior_t customization relies on coroutines for async handling
+    // - Future/promise system needs coroutine support
+    // - Removing conditional compilation simplifies code complexity
+    //
+    // MINIMUM VERSIONS:
+    // - GCC 10+ (full <coroutine> support)
+    // - Clang 14+ (full <coroutine> support)
+    // - Clang 8-13 (experimental coroutines via <experimental/coroutine>)
+    // - MSVC 2019 16.8+ (full <coroutine> support)
+    //
+    // BUILD ERROR: If coroutines not available, build will fail with static_assert
+    // ════════════════════════════════════════════════════════════════════════════
 
 #if defined(__has_include)
-    // Try standard C++20 <coroutine> first
-    #if __has_include(<coroutine>) && defined(__cpp_impl_coroutine)
-        #define HAVE_COROUTINES 1
-        #define HAVE_EXPERIMENTAL_COROUTINES 0
-    // Fallback to experimental coroutines (GCC 9, Clang 8-13)
-    #elif __has_include(<experimental/coroutine>)
-        #define HAVE_COROUTINES 1
-        #define HAVE_EXPERIMENTAL_COROUTINES 1
-    #else
-        // No coroutine support detected - will trigger static_assert below
-        #define HAVE_COROUTINES 0
-        #define HAVE_EXPERIMENTAL_COROUTINES 0
-    #endif
+// Try standard C++20 <coroutine> first
+#if __has_include(<coroutine>) && defined(__cpp_impl_coroutine)
+#define HAVE_COROUTINES 1
+#define HAVE_EXPERIMENTAL_COROUTINES 0
+// Fallback to experimental coroutines (GCC 9, Clang 8-13)
+#elif __has_include(<experimental/coroutine>)
+#define HAVE_COROUTINES 1
+#define HAVE_EXPERIMENTAL_COROUTINES 1
 #else
-    // Compiler doesn't support __has_include - assume no coroutines
-    #define HAVE_COROUTINES 0
-    #define HAVE_EXPERIMENTAL_COROUTINES 0
+// No coroutine support detected - will trigger static_assert below
+#define HAVE_COROUTINES 0
+#define HAVE_EXPERIMENTAL_COROUTINES 0
+#endif
+#else
+// Compiler doesn't support __has_include - assume no coroutines
+#define HAVE_COROUTINES 0
+#define HAVE_EXPERIMENTAL_COROUTINES 0
 #endif
 
-// ════════════════════════════════════════════════════════════════════════════
-// COMPILE-TIME REQUIREMENT CHECK
-// ════════════════════════════════════════════════════════════════════════════
-//
-// Static assert fires if coroutines not available
-// This ensures project cannot be built without coroutine support
-// ════════════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════════════
+    // COMPILE-TIME REQUIREMENT CHECK
+    // ════════════════════════════════════════════════════════════════════════════
+    //
+    // Static assert fires if coroutines not available
+    // This ensures project cannot be built without coroutine support
+    // ════════════════════════════════════════════════════════════════════════════
 
 #if !HAVE_COROUTINES
     // Trigger compile error with helpful message
@@ -82,9 +82,8 @@ namespace actor_zeta {
             "  - Add -std=c++20 (or -std=c++2a for older compilers)\n"
             "  - For experimental coroutines: add -fcoroutines-ts (Clang/GCC)\n"
             "\n"
-            "════════════════════════════════════════════════════════════════════════════\n"
-        );
-    }
+            "════════════════════════════════════════════════════════════════════════════\n");
+    } // namespace actor_zeta_config_check
 #endif
 
 // C++20 Atomic Wait/Notify feature detection

@@ -1,6 +1,5 @@
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/policy/work_sharing.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>

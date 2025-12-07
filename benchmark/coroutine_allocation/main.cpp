@@ -14,7 +14,6 @@
 
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 #include <memory_resource>
 #include <vector>
 

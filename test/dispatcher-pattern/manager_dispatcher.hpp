@@ -18,11 +18,10 @@
 /// - dispatch(self, &method, msg): Unpack args and call method
 
 #include <actor-zeta.hpp>
-#include <actor-zeta/dispatch.hpp>
 
 #include "common_types.hpp"
-#include "test_logger.hpp"
 #include "memory_storage.hpp"
+#include "test_logger.hpp"
 
 #include <vector>
 #include <unordered_map>

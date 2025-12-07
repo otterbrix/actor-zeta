@@ -1,16 +1,16 @@
 #pragma once
 
-#include <memory_resource>
-#include <actor-zeta/detail/rtt.hpp>
-#include <actor-zeta/detail/coroutine.hpp>
-#include <actor-zeta/detail/intrusive_ptr.hpp>
-#include <actor-zeta/config.hpp>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <memory_resource>
 #include <thread>
 #include <type_traits>
+
+#include <actor-zeta/config.hpp>
+#include <actor-zeta/detail/coroutine.hpp>
+#include <actor-zeta/detail/intrusive_ptr.hpp>
 
 namespace actor_zeta { namespace detail {
 
@@ -27,16 +27,16 @@ namespace actor_zeta { namespace detail {
     ///   - Error states >= error
     /// This allows single-comparison checks: `state >= ready` instead of multiple ==
     enum class future_state_enum : uint8_t {
-        invalid = 0,           // Moved-from or uninitialized
-        pending = 1,           // Awaiting result (initial state)
-        setting = 2,           // set_result() in progress (transient)
-        consuming = 3,         // take_result() in progress (transient)
+        invalid = 0,   // Moved-from or uninitialized
+        pending = 1,   // Awaiting result (initial state)
+        setting = 2,   // set_result() in progress (transient)
+        consuming = 3, // take_result() in progress (transient)
         // --- Terminal states (>= ready) ---
-        ready = 4,             // Result available (success)
-        consumed = 5,          // get() called, result moved out
+        ready = 4,    // Result available (success)
+        consumed = 5, // get() called, result moved out
         // --- Error states (>= error) ---
-        error = 6,             // Error occurred (broken promise, mailbox closed, etc.)
-        cancelled = 7,         // Explicitly cancelled
+        error = 6,     // Error occurred (broken promise, mailbox closed, etc.)
+        cancelled = 7, // Explicitly cancelled
     };
 
     /// @brief Base class for future state (type-erased part)
@@ -97,7 +97,8 @@ namespace actor_zeta { namespace detail {
         [[nodiscard]] bool try_add_ref() noexcept {
             int old_count = refcount_.load(std::memory_order_relaxed);
             do {
-                if (old_count == 0) return false;
+                if (old_count == 0)
+                    return false;
             } while (!refcount_.compare_exchange_weak(
                 old_count, old_count + 1,
                 std::memory_order_acquire,
@@ -166,7 +167,7 @@ namespace actor_zeta { namespace detail {
         /// @return true if transition successful, false if current state != expected
         bool transition(future_state_enum expected, future_state_enum desired) noexcept {
             return state_.compare_exchange_strong(expected, desired,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+                                                  std::memory_order_acq_rel, std::memory_order_acquire);
         }
 
         /// @brief Force state change (for internal use, bypasses validation)
@@ -233,7 +234,7 @@ namespace actor_zeta { namespace detail {
         /// @param target The future_state that this coroutine is waiting for
         /// @note Called from awaiter::await_suspend() to enable manual polling
         void set_awaiting_on(future_state_base* target) noexcept {
-            awaiting_on_ = target;  // intrusive_ptr assignment calls add_ref()
+            awaiting_on_ = target; // intrusive_ptr assignment calls add_ref()
         }
 
         /// @brief Get the future this coroutine is awaiting on
@@ -270,17 +271,17 @@ namespace actor_zeta { namespace detail {
         std::pmr::memory_resource* resource_;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
-        intrusive_ptr<future_state_base> awaiting_on_;  // Future this coroutine is waiting on
+        intrusive_ptr<future_state_base> awaiting_on_; // Future this coroutine is waiting on
 
         // Coroutine handles - stored in base class (not type-dependent)
-        coroutine_handle<void> owning_coro_handle_;   // Coroutine that this state owns (from promise)
-        coroutine_handle<void> resume_coro_handle_;   // Coroutine to resume when ready (from awaiter)
-        bool owns_coroutine_;                          // true: we own owning_coro_handle_ and must destroy it
+        coroutine_handle<void> owning_coro_handle_; // Coroutine that this state owns (from promise)
+        coroutine_handle<void> resume_coro_handle_; // Coroutine to resume when ready (from awaiter)
+        bool owns_coroutine_;                       // true: we own owning_coro_handle_ and must destroy it
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
         static constexpr uint32_t kMagicDead = 0xDEADC0DE;
-        mutable std::atomic<uint32_t> magic_;  // Atomic to prevent TSan warnings
+        mutable std::atomic<uint32_t> magic_; // Atomic to prevent TSan warnings
         uint64_t generation_;
 
         static uint64_t next_generation() {
@@ -301,11 +302,12 @@ namespace actor_zeta { namespace detail {
     struct result_storage {
         // Union for lazy initialization (handles non-trivial T correctly)
         union storage_t {
-            char dummy_;  // For default state (no value)
+            char dummy_; // For default state (no value)
             T value_;
 
             // Default: initialize dummy (no T constructed yet)
-            storage_t() noexcept : dummy_() {}
+            storage_t() noexcept
+                : dummy_() {}
 
             // Destructor is trivial - manual destruction via result_storage
             ~storage_t() {}
@@ -326,7 +328,8 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
             , was_moved_from_(false)
 #endif
-        {}
+        {
+        }
 
         ~result_storage() noexcept {
             if (has_value_) {
@@ -421,7 +424,7 @@ namespace actor_zeta { namespace detail {
 
             // Trivial Move Optimization: skip destructor for trivial types
             if constexpr (is_trivially_move_constructible_and_destructible_v<T>) {
-                return storage_.value_;  // Trivial copy, no destructor needed
+                return storage_.value_; // Trivial copy, no destructor needed
             } else {
                 T result = std::move(storage_.value_);
                 storage_.value_.~T();
@@ -481,8 +484,7 @@ namespace actor_zeta { namespace detail {
         explicit future_state(std::pmr::memory_resource* res) noexcept
             : future_state_base(res)
             , storage_(res)
-            , forward_target_(nullptr)
-        {}
+            , forward_target_(nullptr) {}
 
         ~future_state() noexcept override {
             // Release forward target reference if set
@@ -500,8 +502,7 @@ namespace actor_zeta { namespace detail {
                     constexpr int fast_spin_limit = 10;
 
                     // Fast spin first (no syscall)
-                    while ((s == future_state_enum::setting || s == future_state_enum::consuming)
-                           && spin_count < fast_spin_limit) {
+                    while ((s == future_state_enum::setting || s == future_state_enum::consuming) && spin_count < fast_spin_limit) {
                         ++spin_count;
                         s = state_.load(std::memory_order_acquire);
                     }
@@ -583,8 +584,8 @@ namespace actor_zeta { namespace detail {
 #endif
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_acquire)) {
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
                 return;
             }
 
@@ -611,7 +612,7 @@ namespace actor_zeta { namespace detail {
             // 4. Coroutine runs final_suspend() on destroyed state → crash
             if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
                 auto cont = resume_coro_handle_;
-                resume_coro_handle_ = {};  // Clear before resume (single-shot)
+                resume_coro_handle_ = {}; // Clear before resume (single-shot)
                 cont.resume();
             }
         }
@@ -622,8 +623,7 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: get_value() on deleted state!");
             auto s = state_.load(std::memory_order_relaxed);
-            assert((s == future_state_enum::ready || s == future_state_enum::consumed)
-                   && "get_value() called before set_value()!");
+            assert((s == future_state_enum::ready || s == future_state_enum::consumed) && "get_value() called before set_value()!");
 #endif
             return storage_.get();
         }
@@ -634,8 +634,7 @@ namespace actor_zeta { namespace detail {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: get_value() on deleted state!");
             auto s = state_.load(std::memory_order_relaxed);
-            assert((s == future_state_enum::ready || s == future_state_enum::consumed)
-                   && "get_value() called before set_value()!");
+            assert((s == future_state_enum::ready || s == future_state_enum::consumed) && "get_value() called before set_value()!");
 #endif
             return storage_.get();
         }
@@ -646,7 +645,7 @@ namespace actor_zeta { namespace detail {
             auto expected = future_state_enum::ready;
             bool transitioned = transition(expected, future_state_enum::consuming);
             assert(transitioned && "take_value() called on non-ready state!");
-            (void)transitioned;
+            (void) transitioned;
 
             U result = storage_.take();
             state_.store(future_state_enum::consumed, std::memory_order_release);
@@ -663,8 +662,8 @@ namespace actor_zeta { namespace detail {
             // Use transient 'setting' state to match set_value() pattern
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_acquire)) {
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
                 return;
             }
 
@@ -686,7 +685,7 @@ namespace actor_zeta { namespace detail {
             // Same logic as set_value: don't resume if we own a coroutine
             if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
                 auto cont = resume_coro_handle_;
-                resume_coro_handle_ = {};  // Clear before resume (single-shot)
+                resume_coro_handle_ = {}; // Clear before resume (single-shot)
                 cont.resume();
             }
         }
@@ -714,7 +713,7 @@ namespace actor_zeta { namespace detail {
 
     private:
         [[no_unique_address]] result_storage<T> storage_;
-        std::atomic<future_state<T>*> forward_target_;  // TYPED forward target
+        std::atomic<future_state<T>*> forward_target_; // TYPED forward target
         // Coroutine handles inherited from future_state_base (protected)
     };
 
