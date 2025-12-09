@@ -77,15 +77,26 @@ namespace actor_zeta { namespace actor {
         return ptr;
     }
 
-    /// @brief Exponential backoff: spin → yield → sleep (1μs-1ms cap)
+    /// @brief Maximum CAS retry attempts before declaring livelock
+    inline constexpr int kMaxCasAttempts = 1000;
+
+    /// @brief Exponential backoff for CAS loops
+    /// @param attempt Current retry attempt (0-based)
+    /// @note Phase 1 (0-3):   Pure spin (fast path, ~10-40 CPU cycles)
+    /// @note Phase 2 (4-9):   yield() - let other threads run
+    /// @note Phase 3 (10+):   sleep(2^(attempt-10) us), capped at 1ms
     inline void exponential_backoff(int attempt) noexcept {
-        if (attempt >= 4) {
-            if (attempt < 10) {
-                std::this_thread::yield();
-            } else {
-                auto sleep_us = std::min(1 << (attempt - 10), 1000); // Cap at 1ms
-                std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-            }
+        constexpr int kSpinPhaseEnd = 4;
+        constexpr int kYieldPhaseEnd = 10;
+        constexpr int kMaxSleepMicroseconds = 1000;
+
+        if (attempt < kSpinPhaseEnd) {
+            // Pure spin - fastest for short contention
+        } else if (attempt < kYieldPhaseEnd) {
+            std::this_thread::yield();
+        } else {
+            auto sleep_us = std::min(1 << (attempt - kYieldPhaseEnd), kMaxSleepMicroseconds);
+            std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
         }
     }
 
@@ -129,7 +140,7 @@ namespace actor_zeta { namespace actor {
             auto result_promise = msg->template get_result_promise<R>();
 
             if (is_destroying(state_.load(std::memory_order_acquire))) {
-                result_promise.internal_state_base()->set_state(detail::future_state_enum::error);
+                result_promise.error(std::make_error_code(std::errc::operation_canceled));
                 return std::move(future);
             }
 
@@ -142,16 +153,15 @@ namespace actor_zeta { namespace actor {
                     actor_state desired;
 
                     int cas_attempts = 0;
-                    constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
                         exponential_backoff(cas_attempts);
                         ++cas_attempts;
 
 #ifndef NDEBUG
-                        assert(cas_attempts < MAX_CAS_ATTEMPTS && "enqueue_impl: CAS loop - possible livelock!");
+                        assert(cas_attempts < kMaxCasAttempts && "enqueue_impl: CAS loop - possible livelock!");
 #else
-                        if (cas_attempts >= MAX_CAS_ATTEMPTS) {
+                        if (cas_attempts >= kMaxCasAttempts) {
                             std::terminate();
                         }
 #endif
@@ -187,7 +197,7 @@ namespace actor_zeta { namespace actor {
                     break;
 
                 case detail::enqueue_result::queue_closed:
-                    result_promise.internal_state_base()->set_state(detail::future_state_enum::error);
+                    result_promise.error(std::make_error_code(std::errc::broken_pipe));
                     needs_sched = false;
                     break;
 
@@ -215,16 +225,15 @@ namespace actor_zeta { namespace actor {
                     actor_state desired;
 
                     int cas_attempts = 0;
-                    constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
                         exponential_backoff(cas_attempts);
                         ++cas_attempts;
 
 #ifndef NDEBUG
-                        assert(cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard: CAS loop - possible livelock!");
+                        assert(cas_attempts < kMaxCasAttempts && "resume_guard: CAS loop - possible livelock!");
 #else
-                        if (cas_attempts >= MAX_CAS_ATTEMPTS) {
+                        if (cas_attempts >= kMaxCasAttempts) {
                             std::terminate();
                         }
 #endif
@@ -268,16 +277,15 @@ namespace actor_zeta { namespace actor {
                     actor_state desired;
 
                     int cas_attempts = 0;
-                    constexpr int MAX_CAS_ATTEMPTS = 1000;
 
                     while (true) {
                         exponential_backoff(cas_attempts);
                         ++cas_attempts;
 
 #ifndef NDEBUG
-                        assert(cas_attempts < MAX_CAS_ATTEMPTS && "resume_guard destructor: CAS loop!");
+                        assert(cas_attempts < kMaxCasAttempts && "resume_guard destructor: CAS loop!");
 #else
-                        if (cas_attempts >= MAX_CAS_ATTEMPTS) {
+                        if (cas_attempts >= kMaxCasAttempts) {
                             std::terminate();
                         }
 #endif
@@ -552,7 +560,6 @@ namespace actor_zeta { namespace actor {
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
-        static constexpr uint32_t kMagicDead = 0xDEADC0DE; // Not used (TSAN race)
 
         uint32_t magic_;
 #endif

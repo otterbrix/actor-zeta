@@ -188,9 +188,9 @@ namespace actor_zeta {
 
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
-                // Cancel current if pending
-                if (state_ && !state_->is_ready()) {
-                    state_->set_state(detail::future_state_enum::cancelled);
+                // Cancel current only if still pending (don't overwrite error/cancelled/ready)
+                if (state_ && state_->is_pending()) {
+                    state_->cancelled();
                 }
 
                 state_ = std::move(other.state_);
@@ -271,7 +271,7 @@ namespace actor_zeta {
 
         void cancel() noexcept {
             if (state_) {
-                state_->set_state(detail::future_state_enum::cancelled);
+                state_->cancelled();
             }
         }
 
@@ -509,6 +509,7 @@ namespace actor_zeta {
             void return_value(unique_future<U>&& ready_future) noexcept {
                 assert(this->state_ && "return_value() with null state");
                 assert(ready_future.valid() && "return_value() with invalid future");
+                assert(ready_future.available() && "return_value() requires READY future - use co_await first!");
                 U val = std::move(ready_future).get();
                 this->state_->set_value(std::move(val));
             }
@@ -567,63 +568,25 @@ namespace actor_zeta {
 
     private:
         void wait_for_ready() {
-            // Helper to check cancellation and handle error
-            auto check_cancelled = [this]() -> bool {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;
-                    assert(false && "get() on cancelled future!");
-                    if constexpr (!is_void_type)
-                        std::terminate();
-                    return true;
-                }
-                return false;
+            // Helper to handle failed state (error or cancelled) - consistent for all types
+            auto handle_failed = [this]() {
+                state_ = nullptr;
+                assert(false && "get() on failed/cancelled future!");
+                std::terminate();
             };
 
-            int spin_count = 0;
-            constexpr int fast_spin_limit = 10;
-            constexpr int yield_limit = 100;
-
-            // Fast spin phase (no syscall)
-            while (!state_->is_ready() && spin_count < fast_spin_limit) {
-                if (check_cancelled())
-                    return;
-                ++spin_count;
+            // Check failure before waiting
+            if (state_->is_failed()) {
+                handle_failed();
             }
 
-            // Yield phase
-            while (!state_->is_ready() && spin_count < yield_limit) {
-                if (check_cancelled())
-                    return;
-                std::this_thread::yield();
-                ++spin_count;
-            }
+            // Use centralized wait logic in future_state_base
+            state_->wait_until_ready();
 
-#if HAVE_ATOMIC_WAIT
-            // Wait until truly ready (not just state changed)
-            // Must handle transient states: pending → setting → ready
-            while (!state_->is_ready()) {
-                if (check_cancelled())
-                    return;
-                auto current = state_->state();
-                // Wait on pending OR setting states (both are transient)
-                if (current == detail::future_state_enum::pending ||
-                    current == detail::future_state_enum::setting) {
-                    state_->wait(current); // Returns when state changes
-                }
+            // Check failure after waiting (state may have changed during wait)
+            if (state_->is_failed()) {
+                handle_failed();
             }
-#else
-            // Backoff phase
-            auto backoff = std::chrono::microseconds(1);
-            constexpr auto max_backoff = std::chrono::microseconds(100);
-
-            while (!state_->is_ready()) {
-                if (check_cancelled())
-                    return;
-                std::this_thread::sleep_for(backoff);
-                if (backoff < max_backoff)
-                    backoff *= 2;
-            }
-#endif
         }
 
         // Member variables - simplified after removing inline storage

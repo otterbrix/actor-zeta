@@ -119,11 +119,6 @@ namespace actor_zeta { namespace detail {
             }
         }
 
-        /// @brief Get current state (atomic read)
-        [[nodiscard]] future_state_enum state() const noexcept {
-            return state_.load(std::memory_order_acquire);
-        }
-
         [[nodiscard]] bool is_available() const noexcept {
             return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
         }
@@ -142,18 +137,21 @@ namespace actor_zeta { namespace detail {
             return state_.load(std::memory_order_acquire) == future_state_enum::error;
         }
 
-        /// @brief Set error state with error code
+        /// @brief Set error state with error code (only from pending state)
         /// @param ec The error code describing the failure
-        void error(std::error_code ec) noexcept {
-            error_code_ = ec;
+        /// @return true if successfully transitioned to error, false if already terminal
+        bool error(std::error_code ec) noexcept {
             auto expected = future_state_enum::pending;
             if (state_.compare_exchange_strong(expected, future_state_enum::error,
                                                std::memory_order_acq_rel,
                                                std::memory_order_acquire)) {
+                error_code_ = ec; // Write AFTER successful CAS (no race)
 #if HAVE_ATOMIC_WAIT
                 state_.notify_one();
 #endif
+                return true;
             }
+            return false;
         }
 
         /// @brief Get stored error code
@@ -162,18 +160,53 @@ namespace actor_zeta { namespace detail {
             return error_code_;
         }
 
+        /// @brief Wait until state becomes terminal (ready, consumed, error, or cancelled)
+        /// Uses atomic_wait (C++20) or spin-yield-backoff fallback
+        /// @note Returns when is_available() == true (state >= ready)
+        void wait_until_ready() const noexcept {
 #if HAVE_ATOMIC_WAIT
-        /// @brief Wait for state to change from expected value
-        /// @param expected The expected current state
-        /// C++20 only: Efficient blocking wait using futex/ulock_wait
-        void wait(future_state_enum expected) const noexcept {
-            state_.wait(expected, std::memory_order_acquire);
-        }
+            while (!is_available()) {
+                auto current = state_.load(std::memory_order_acquire);
+                if (current == future_state_enum::pending ||
+                    current == future_state_enum::setting) {
+                    state_.wait(current, std::memory_order_acquire);
+                }
+            }
+#else
+            // Fallback: spin-yield-backoff
+            int spin_count = 0;
+            constexpr int yield_limit = 100;
+            while (!is_available()) {
+                if (spin_count < yield_limit) {
+                    std::this_thread::yield();
+                    ++spin_count;
+                } else {
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+            }
 #endif
+        }
 
         /// @brief Check if cancelled
         [[nodiscard]] bool is_cancelled() const noexcept {
             return state_.load(std::memory_order_acquire) == future_state_enum::cancelled;
+        }
+
+        /// @brief Set cancelled state (only from pending state)
+        /// @return true if successfully transitioned to cancelled, false if already terminal
+        /// @note Uses CAS to ensure atomic transition - consistent with error()
+        bool cancelled() noexcept {
+            auto expected = future_state_enum::pending;
+            if (state_.compare_exchange_strong(expected, future_state_enum::cancelled,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire)) {
+                error_code_ = std::make_error_code(std::errc::operation_canceled);
+#if HAVE_ATOMIC_WAIT
+                state_.notify_one();
+#endif
+                return true;
+            }
+            return false;
         }
 
         /// @brief Check if consumed (result already taken)
@@ -194,11 +227,6 @@ namespace actor_zeta { namespace detail {
         bool transition(future_state_enum expected, future_state_enum desired) noexcept {
             return state_.compare_exchange_strong(expected, desired,
                                                   std::memory_order_acq_rel, std::memory_order_acquire);
-        }
-
-        /// @brief Force state change (for internal use, bypasses validation)
-        void set_state(future_state_enum new_state) noexcept {
-            state_.store(new_state, std::memory_order_release);
         }
 
         /// @brief Get memory resource
@@ -286,6 +314,19 @@ namespace actor_zeta { namespace detail {
             return h;
         }
 
+    protected:
+        /// @brief Try to resume awaiting continuation if conditions are met
+        /// @note Extracted common pattern from set_value() and set_ready()
+        /// @note Skips resume if we own a coroutine (let final_suspend do symmetric transfer)
+        void try_resume_continuation() noexcept {
+            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
+                auto cont = resume_coro_handle_;
+                resume_coro_handle_ = {}; // Clear before resume (single-shot)
+                cont.resume();
+            }
+        }
+
+    public:
 #ifndef NDEBUG
         [[nodiscard]] uint64_t generation() const noexcept { return generation_; }
 #endif
@@ -632,18 +673,8 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
-            // Auto-resume continuation when value is set
-            // BUT: If this state owns a coroutine (set by coroutine promise), DON'T resume here!
-            // Let final_suspend() do symmetric transfer instead. Otherwise:
-            // 1. set_value() resumes continuation
-            // 2. Continuation calls get() and destroys this state
-            // 3. We return to set_value() but state is destroyed
-            // 4. Coroutine runs final_suspend() on destroyed state → crash
-            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
-                auto cont = resume_coro_handle_;
-                resume_coro_handle_ = {}; // Clear before resume (single-shot)
-                cont.resume();
-            }
+            // Resume awaiting coroutine (if conditions are met)
+            try_resume_continuation();
         }
 
         /// @brief Get value reference (only for non-void) - returns T&
@@ -710,13 +741,8 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
-            // Auto-resume continuation when ready (void version)
-            // Same logic as set_value: don't resume if we own a coroutine
-            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
-                auto cont = resume_coro_handle_;
-                resume_coro_handle_ = {}; // Clear before resume (single-shot)
-                cont.resume();
-            }
+            // Resume awaiting coroutine (if conditions are met)
+            try_resume_continuation();
         }
 
         // Coroutine methods inherited from future_state_base (non-virtual)
