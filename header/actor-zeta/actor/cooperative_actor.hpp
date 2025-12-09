@@ -379,9 +379,7 @@ namespace actor_zeta { namespace actor {
                     message_guard guard(this, std::move(msg));
 
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
-                        auto behavior_future = self()->behavior(guard.get());
-                        // behavior_future not tracked - user must store pending coroutines manually
-                        (void) behavior_future;
+                        self()->behavior(guard.get());
                     }
 
                     ++handled;

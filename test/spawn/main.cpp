@@ -36,19 +36,18 @@ public:
         &storage_t::remove
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::msg_id<storage_t, &storage_t::update>: {
-                return actor_zeta::dispatch(this, &storage_t::update, msg);
-            }
-            case actor_zeta::msg_id<storage_t, &storage_t::find>: {
-                return actor_zeta::dispatch(this, &storage_t::find, msg);
-            }
-            case actor_zeta::msg_id<storage_t, &storage_t::remove>: {
-                return actor_zeta::dispatch(this, &storage_t::remove, msg);
-            }
+            case actor_zeta::msg_id<storage_t, &storage_t::update>:
+                actor_zeta::dispatch(this, &storage_t::update, msg);
+                break;
+            case actor_zeta::msg_id<storage_t, &storage_t::find>:
+                actor_zeta::dispatch(this, &storage_t::find, msg);
+                break;
+            case actor_zeta::msg_id<storage_t, &storage_t::remove>:
+                actor_zeta::dispatch(this, &storage_t::remove, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 };
 
@@ -80,9 +79,8 @@ public:
         return executor_.get();
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message*) {
+    void behavior(actor_zeta::mailbox::message*) {
         // Empty behavior
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     /// @brief Override enqueue_impl для supervisor - используем helper
@@ -143,15 +141,14 @@ public:
         return actor_zeta::make_ready_future_void(resource_);
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_actor>) {
-            return actor_zeta::dispatch(this, &dummy_supervisor::create_actor, msg);
+            dispatch(this, &dummy_supervisor::create_actor, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor>) {
-            return actor_zeta::dispatch(this, &dummy_supervisor::create_supervisor, msg);
+            dispatch(this, &dummy_supervisor::create_supervisor, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor_custom_resource>) {
-            return actor_zeta::dispatch(this, &dummy_supervisor::create_supervisor_custom_resource, msg);
+            dispatch(this, &dummy_supervisor::create_supervisor_custom_resource, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

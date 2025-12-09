@@ -44,7 +44,8 @@ public:
         : basic_actor<old_style_actor>(resource)
         , counter_(0) {}
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
+
         auto cmd = msg->command();
         if (cmd == msg_id<old_style_actor, &old_style_actor::method1>) {
             dispatch(this, &old_style_actor::method1, msg);
@@ -58,6 +59,8 @@ public:
             dispatch(this, &old_style_actor::method5, msg);
         }
         return make_ready_future_void(resource());
+
+
     }
 
     int counter() const { return counter_; }
@@ -150,7 +153,8 @@ public:
     explicit coroutine_actor(std::pmr::memory_resource* resource)
         : basic_actor<coroutine_actor>(resource) {}
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
+
         auto cmd = msg->command();
         if (cmd == msg_id<coroutine_actor, &coroutine_actor::compute>) {
             dispatch(this, &coroutine_actor::compute, msg);
@@ -162,6 +166,8 @@ public:
             dispatch(this, &coroutine_actor::sum3, msg);
         }
         co_return;
+
+
     }
 };
 

@@ -81,19 +81,19 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
         last_behavior_thread_ = tid;
 
         switch (msg->command()) {
             case msg_id<worker_actor, &worker_actor::compute>:
-                return dispatch(this, &worker_actor::compute, msg);
+                dispatch(this, &worker_actor::compute, msg);
+                break;
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
         }
-        return make_ready_future_void(resource());
     }
 
     const std::string& last_behavior_thread() const { return last_behavior_thread_; }
@@ -183,7 +183,7 @@ public:
         &client_actor::get_result
     >;
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
         last_behavior_thread_ = tid;
@@ -199,16 +199,15 @@ public:
                     g_log.log("[%::behavior] process() suspended, storing pending", name_);
                     pending_.push_back(std::move(future));
                 }
-                // Возвращаем ready void future (мы обработали сообщение)
-                return make_ready_future_void(resource());
+                break;
             }
             case msg_id<client_actor, &client_actor::get_result>:
-                return dispatch(this, &client_actor::get_result, msg);
+                dispatch(this, &client_actor::get_result, msg);
+                break;
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
         }
-        return make_ready_future_void(resource());
     }
 
     const std::string& last_behavior_thread() const { return last_behavior_thread_; }

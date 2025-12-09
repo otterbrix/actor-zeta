@@ -24,14 +24,15 @@ public:
         , name_(std::move(name)) {
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<worker_actor, &worker_actor::process_task>:
-                return actor_zeta::dispatch(this, &worker_actor::process_task, msg);
+                actor_zeta::dispatch(this, &worker_actor::process_task, msg);
+                break;
             case actor_zeta::msg_id<worker_actor, &worker_actor::get_status>:
-                return actor_zeta::dispatch(this, &worker_actor::get_status, msg);
+                actor_zeta::dispatch(this, &worker_actor::get_status, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     std::string name() const { return name_; }
@@ -117,18 +118,17 @@ public:
         return actor_zeta::make_ready_future_void(resource_);
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::create_worker>) {
-            return actor_zeta::dispatch(this, &supervisor_actor::create_worker, msg);
+            actor_zeta::dispatch(this, &supervisor_actor::create_worker, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::assign_task>) {
-            return actor_zeta::dispatch(this, &supervisor_actor::assign_task, msg);
+            actor_zeta::dispatch(this, &supervisor_actor::assign_task, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::stop_workers>) {
-            return actor_zeta::dispatch(this, &supervisor_actor::stop_workers, msg);
+            actor_zeta::dispatch(this, &supervisor_actor::stop_workers, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::check_status>) {
-            return actor_zeta::dispatch(this, &supervisor_actor::check_status, msg);
+            actor_zeta::dispatch(this, &supervisor_actor::check_status, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     size_t worker_count() const { return workers_.size(); }

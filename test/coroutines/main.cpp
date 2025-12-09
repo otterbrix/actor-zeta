@@ -64,18 +64,21 @@ public:
         &coroutine_test_actor::coro_storage
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_int>:
-                return dispatch(this, &coroutine_test_actor::coro_int, msg);
+                dispatch(this, &coroutine_test_actor::coro_int, msg);
+                break;
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_string>:
-                return dispatch(this, &coroutine_test_actor::coro_string, msg);
+                dispatch(this, &coroutine_test_actor::coro_string, msg);
+                break;
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_void>:
-                return dispatch(this, &coroutine_test_actor::coro_void, msg);
+                dispatch(this, &coroutine_test_actor::coro_void, msg);
+                break;
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_storage>:
-                return dispatch(this, &coroutine_test_actor::coro_storage, msg);
+                dispatch(this, &coroutine_test_actor::coro_storage, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 };
 
@@ -382,14 +385,15 @@ public:
         &future_test_actor::async_multiply
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<future_test_actor, &future_test_actor::sync_add>:
-                return dispatch(this, &future_test_actor::sync_add, msg);
+                dispatch(this, &future_test_actor::sync_add, msg);
+                break;
             case actor_zeta::msg_id<future_test_actor, &future_test_actor::async_multiply>:
-                return dispatch(this, &future_test_actor::async_multiply, msg);
+                dispatch(this, &future_test_actor::async_multiply, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 };
 

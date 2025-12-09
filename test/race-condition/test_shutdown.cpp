@@ -29,12 +29,11 @@ public:
         return actor_zeta::make_ready_future<int>(resource(), value * 2);
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<shutdown_test_actor, &shutdown_test_actor::slow_task>) {
-            return dispatch(this, &shutdown_test_actor::slow_task, msg);
+            dispatch(this, &shutdown_test_actor::slow_task, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

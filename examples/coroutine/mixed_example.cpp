@@ -65,14 +65,14 @@ public:
         &calculator_actor::square
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::msg_id<calculator_actor, &calculator_actor::add>: {
-                return actor_zeta::dispatch(this, &calculator_actor::add, msg);
-            }
-            case actor_zeta::msg_id<calculator_actor, &calculator_actor::multiply>: {
-                return actor_zeta::dispatch(this, &calculator_actor::multiply, msg);
-            }
+            case actor_zeta::msg_id<calculator_actor, &calculator_actor::add>:
+                actor_zeta::dispatch(this, &calculator_actor::add, msg);
+                break;
+            case actor_zeta::msg_id<calculator_actor, &calculator_actor::multiply>:
+                actor_zeta::dispatch(this, &calculator_actor::multiply, msg);
+                break;
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::square>: {
                 // CRITICAL: Store pending coroutine!
                 // If destroyed immediately, coroutine is destroyed → use-after-free
@@ -80,13 +80,12 @@ public:
                 if (!future.available()) {
                     pending_.push_back(std::move(future));
                 }
-                return actor_zeta::make_ready_future_void(resource());
+                break;
             }
             default:
                 std::cerr << "[Calculator] Unknown message\n";
                 break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     /// @brief Clean up completed pending futures

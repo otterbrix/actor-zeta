@@ -68,22 +68,21 @@ public:
         &collection_part_t::find
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>: {
-                return actor_zeta::dispatch(this, &collection_part_t::insert, msg);
-            }
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>: {
-                return actor_zeta::dispatch(this, &collection_part_t::update, msg);
-            }
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>: {
-                return actor_zeta::dispatch(this, &collection_part_t::remove, msg);
-            }
-            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>: {
-                return actor_zeta::dispatch(this, &collection_part_t::find, msg);
-            }
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
+                actor_zeta::dispatch(this, &collection_part_t::insert, msg);
+                break;
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
+                actor_zeta::dispatch(this, &collection_part_t::update, msg);
+                break;
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
+                actor_zeta::dispatch(this, &collection_part_t::remove, msg);
+                break;
+            case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>:
+                actor_zeta::dispatch(this, &collection_part_t::find, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
@@ -133,7 +132,7 @@ public:
         // Check if we have any child actors
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
-            return actor_zeta::make_error_future<R>(resource_);
+            return actor_zeta::make_error_future<R>(resource_, std::make_error_code(std::errc::no_child_process));
         }
 
         // Balancer logic: forward to child actor using round-robin

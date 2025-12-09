@@ -16,11 +16,10 @@ public:
         return actor_zeta::make_ready_future_void(resource());
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
-            return actor_zeta::dispatch(this, &test_actor::test, msg);
+            dispatch(this, &test_actor::test, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     size_t processed_count() const { return processed_count_; }

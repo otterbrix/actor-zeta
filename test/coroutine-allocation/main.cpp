@@ -158,8 +158,8 @@ public:
         co_return static_cast<int>(s.length()) + c;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message*) {
-        co_return;
+    void behavior(actor_zeta::mailbox::message*) {
+        // Empty behavior - actor methods are called directly in tests
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

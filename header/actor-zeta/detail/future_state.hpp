@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory_resource>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 
@@ -134,6 +135,31 @@ namespace actor_zeta { namespace detail {
 
         [[nodiscard]] bool is_failed() const noexcept {
             return state_.load(std::memory_order_acquire) >= future_state_enum::error;
+        }
+
+        /// @brief Check if state is error (not cancelled)
+        [[nodiscard]] bool is_error() const noexcept {
+            return state_.load(std::memory_order_acquire) == future_state_enum::error;
+        }
+
+        /// @brief Set error state with error code
+        /// @param ec The error code describing the failure
+        void error(std::error_code ec) noexcept {
+            error_code_ = ec;
+            auto expected = future_state_enum::pending;
+            if (state_.compare_exchange_strong(expected, future_state_enum::error,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire)) {
+#if HAVE_ATOMIC_WAIT
+                state_.notify_one();
+#endif
+            }
+        }
+
+        /// @brief Get stored error code
+        /// @return Error code (valid when is_failed() == true)
+        [[nodiscard]] std::error_code error() const noexcept {
+            return error_code_;
         }
 
 #if HAVE_ATOMIC_WAIT
@@ -277,6 +303,9 @@ namespace actor_zeta { namespace detail {
         coroutine_handle<void> owning_coro_handle_; // Coroutine that this state owns (from promise)
         coroutine_handle<void> resume_coro_handle_; // Coroutine to resume when ready (from awaiter)
         bool owns_coroutine_;                       // true: we own owning_coro_handle_ and must destroy it
+
+        // Error code - valid when state >= error
+        std::error_code error_code_;
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;

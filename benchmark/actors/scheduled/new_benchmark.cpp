@@ -50,7 +50,8 @@ public:
         &ping_pong_actor::pong
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
+
         switch (msg->command()) {
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>:
                 actor_zeta::dispatch(this, &ping_pong_actor::ping, msg);
@@ -60,6 +61,8 @@ public:
                 break;
         }
         return actor_zeta::make_ready_future_void(this->resource());
+
+
     }
 };
 

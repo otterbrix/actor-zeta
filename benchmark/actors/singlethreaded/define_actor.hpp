@@ -42,7 +42,8 @@ public:
         return actor_zeta::make_ready_future_void(this->resource());
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
+
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::start>) {
             actor_zeta::dispatch(this, &ping_pong_actor::start, msg);
@@ -52,6 +53,8 @@ public:
             actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
         }
         return actor_zeta::make_ready_future_void(this->resource());
+
+
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

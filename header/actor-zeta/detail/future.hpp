@@ -103,6 +103,13 @@ namespace actor_zeta {
             state_->set_ready();
         }
 
+        /// @brief Set error state with error code
+        /// @param ec The error code describing the failure
+        void error(std::error_code ec) {
+            assert(state_ && "error() on moved-from promise");
+            state_->error(ec);
+        }
+
         /// @brief Check if promise has valid state
         [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
@@ -228,6 +235,11 @@ namespace actor_zeta {
         /// @brief Check if future failed (error or cancelled)
         [[nodiscard]] bool failed() const noexcept {
             return state_ && state_->is_failed();
+        }
+
+        /// @brief Get error code (valid when failed() == true)
+        [[nodiscard]] std::error_code error() const noexcept {
+            return state_ ? state_->error() : std::error_code{};
         }
 
         /// @brief Check if future has valid state
@@ -644,10 +656,12 @@ namespace actor_zeta {
     }
 
     /// @brief Create error future via promise
+    /// @param resource Memory resource for allocation
+    /// @param ec Error code describing the failure
     template<typename T>
-    unique_future<T> make_error_future(std::pmr::memory_resource* resource) {
+    unique_future<T> make_error_future(std::pmr::memory_resource* resource, std::error_code ec) {
         promise<T> p(resource);
-        p.internal_state_base()->set_state(detail::future_state_enum::error);
+        p.error(ec);
         return p.get_future();
     }
 

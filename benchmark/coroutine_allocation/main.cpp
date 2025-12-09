@@ -52,8 +52,11 @@ public:
 
     int call_count() const { return call_count_; }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message*) {
+    void behavior(actor_zeta::mailbox::message*) {
+
         co_return;
+
+
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

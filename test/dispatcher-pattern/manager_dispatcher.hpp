@@ -644,7 +644,7 @@ public:
     // behavior() - message dispatch with pending coroutine management
     // =========================================================================
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
@@ -766,8 +766,6 @@ public:
 
         // Process pending coroutines after each message
         poll_pending();
-
-        return make_ready_future_void(resource());
     }
 
     // =========================================================================

@@ -36,12 +36,11 @@ public:
 
     actor_zeta::unique_future<void> create();
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create>) {
-            return dispatch(this, &dummy_supervisor::create, msg);
+            dispatch(this, &dummy_supervisor::create, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     void enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
@@ -66,8 +65,7 @@ public:
         : actor_zeta::basic_actor<storage_t>(resource_ptr) {
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message*) {
-        return actor_zeta::make_ready_future_void(resource());
+    void behavior(actor_zeta::mailbox::message*) {
     }
 
     ~storage_t() = default;

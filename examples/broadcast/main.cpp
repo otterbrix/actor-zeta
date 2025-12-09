@@ -23,21 +23,19 @@ public:
         : actor_zeta::basic_actor<worker_t>(ptr) {
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         std::cerr << "[Worker " << id() << "] behavior() called, cmd=" << cmd << std::endl;
 
         switch (cmd) {
-            case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>: {
-                auto result = actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
+            case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>:
+                actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
                 std::cerr << "[Worker " << id() << "] After handler" << std::endl;
-                return result;
-            }
-            case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>: {
-                return actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
-            }
+                break;
+            case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>:
+                actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
@@ -85,12 +83,11 @@ public:
         return actor_zeta::make_ready_future_void(resource_);
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>) {
-            return actor_zeta::dispatch(this, &supervisor_lite::create, msg);
+            actor_zeta::dispatch(this, &supervisor_lite::create, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

@@ -39,13 +39,12 @@ public:
         destructor_counter++;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_storage>) {
-            return dispatch(this, &dummy_supervisor::create_storage, msg);
+            dispatch(this, &dummy_supervisor::create_storage, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_test_handlers>) {
-            return dispatch(this, &dummy_supervisor::create_test_handlers, msg);
+            dispatch(this, &dummy_supervisor::create_test_handlers, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
@@ -122,20 +121,19 @@ public:
         constructor_counter++;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<storage_t, &storage_t::init>) {
-            return dispatch(this, &storage_t::init, msg);
+            dispatch(this, &storage_t::init, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::search>) {
-            return dispatch(this, &storage_t::search, msg);
+            dispatch(this, &storage_t::search, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::add>) {
-            return dispatch(this, &storage_t::add, msg);
+            dispatch(this, &storage_t::add, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::delete_table>) {
-            return dispatch(this, &storage_t::delete_table, msg);
+            dispatch(this, &storage_t::delete_table, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::create_table>) {
-            return dispatch(this, &storage_t::create_table, msg);
+            dispatch(this, &storage_t::create_table, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~storage_t() {
@@ -221,22 +219,21 @@ public:
     }
 
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_0>) {
-            return dispatch(this, &test_handlers::ptr_0, msg);
+            dispatch(this, &test_handlers::ptr_0, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_1>) {
-            return dispatch(this, &test_handlers::ptr_1, msg);
+            dispatch(this, &test_handlers::ptr_1, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_2>) {
-            return dispatch(this, &test_handlers::ptr_2, msg);
+            dispatch(this, &test_handlers::ptr_2, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_3>) {
-            return dispatch(this, &test_handlers::ptr_3, msg);
+            dispatch(this, &test_handlers::ptr_3, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_4>) {
-            return dispatch(this, &test_handlers::ptr_4, msg);
+            dispatch(this, &test_handlers::ptr_4, msg);
         } else {
             TRACE("+++");
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~test_handlers() = default;

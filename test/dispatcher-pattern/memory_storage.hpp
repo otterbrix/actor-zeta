@@ -120,7 +120,7 @@ public:
     // =========================================================================
 
     /// @brief Main message handler
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
@@ -141,7 +141,6 @@ public:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
         }
-        return make_ready_future_void(resource());
     }
 
     const std::string& name() const { return name_; }

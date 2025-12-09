@@ -25,14 +25,13 @@ public:
         return actor_zeta::make_ready_future<int>(resource(), value_.load(std::memory_order_relaxed));
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<refcount_stress_actor, &refcount_stress_actor::increment>) {
-            return dispatch(this, &refcount_stress_actor::increment, msg);
+            dispatch(this, &refcount_stress_actor::increment, msg);
         } else if (cmd == actor_zeta::msg_id<refcount_stress_actor, &refcount_stress_actor::get_value>) {
-            return dispatch(this, &refcount_stress_actor::get_value, msg);
+            dispatch(this, &refcount_stress_actor::get_value, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

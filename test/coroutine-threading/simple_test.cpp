@@ -22,14 +22,14 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         switch (msg->command()) {
             case msg_id<worker_actor, &worker_actor::compute>:
-                return dispatch(this, &worker_actor::compute, msg);
+                dispatch(this, &worker_actor::compute, msg);
+                break;
             default:
                 break;
         }
-        return make_ready_future_void(resource());
     }
 
     ~worker_actor() = default;
@@ -72,24 +72,24 @@ public:
         &client_actor::get_result
     >;
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         switch (msg->command()) {
             case msg_id<client_actor, &client_actor::process>: {
                 // CRITICAL: Must store pending coroutine future!
-                // If we just return dispatch() result, it gets destroyed immediately,
+                // If we just call dispatch() without storing, future gets destroyed immediately,
                 // which destroys the coroutine and causes refcount underflow.
                 auto future = dispatch(this, &client_actor::process, msg);
                 if (!future.available()) {
                     pending_.push_back(std::move(future));
                 }
-                return make_ready_future_void(resource());
+                break;
             }
             case msg_id<client_actor, &client_actor::get_result>:
-                return dispatch(this, &client_actor::get_result, msg);
+                dispatch(this, &client_actor::get_result, msg);
+                break;
             default:
                 break;
         }
-        return make_ready_future_void(resource());
     }
 
     /// @brief Clean up completed pending futures

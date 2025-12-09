@@ -33,18 +33,17 @@ public:
         return actor_zeta::make_ready_future<std::string>(resource(), std::string("good_actor"));
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<good_actor, &good_actor::ping>) {
-            return dispatch(this, &good_actor::ping, msg);
+            dispatch(this, &good_actor::ping, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::calculate>) {
-            return dispatch(this, &good_actor::calculate, msg);
+            dispatch(this, &good_actor::calculate, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::check_status>) {
-            return dispatch(this, &good_actor::check_status, msg);
+            dispatch(this, &good_actor::check_status, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::get_name>) {
-            return dispatch(this, &good_actor::get_name, msg);
+            dispatch(this, &good_actor::get_name, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
