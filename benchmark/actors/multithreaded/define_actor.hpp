@@ -67,9 +67,6 @@ public:
         } else if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::pong>) {
             actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
         }
-        return actor_zeta::make_ready_future_void(this->resource());
-
-
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

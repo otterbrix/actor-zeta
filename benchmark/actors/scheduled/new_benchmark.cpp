@@ -60,9 +60,6 @@ public:
                 actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
                 break;
         }
-        return actor_zeta::make_ready_future_void(this->resource());
-
-
     }
 };
 

@@ -45,7 +45,6 @@ public:
         , counter_(0) {}
 
     void behavior(mailbox::message* msg) {
-
         auto cmd = msg->command();
         if (cmd == msg_id<old_style_actor, &old_style_actor::method1>) {
             dispatch(this, &old_style_actor::method1, msg);
@@ -58,9 +57,6 @@ public:
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method5>) {
             dispatch(this, &old_style_actor::method5, msg);
         }
-        return make_ready_future_void(resource());
-
-
     }
 
     int counter() const { return counter_; }
@@ -154,7 +150,6 @@ public:
         : basic_actor<coroutine_actor>(resource) {}
 
     void behavior(mailbox::message* msg) {
-
         auto cmd = msg->command();
         if (cmd == msg_id<coroutine_actor, &coroutine_actor::compute>) {
             dispatch(this, &coroutine_actor::compute, msg);
@@ -165,9 +160,6 @@ public:
         } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::sum3>) {
             dispatch(this, &coroutine_actor::sum3, msg);
         }
-        co_return;
-
-
     }
 };
 
