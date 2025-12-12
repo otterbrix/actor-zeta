@@ -13,22 +13,22 @@ public:
         , call_count3_(0) {
     }
 
-    // Method definitions inside the class
+    // All methods must be coroutines (use co_return)
     actor_zeta::unique_future<void> method1(int value) {
         ++call_count1_;
         last_value1_ = value;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> method2(std::string text) {
         ++call_count2_;
         last_value2_ = text;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> method3() {
         ++call_count3_;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     // New dispatch_traits syntax - AFTER method definitions!
@@ -38,16 +38,18 @@ public:
         &test_actor::method3
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<test_actor, &test_actor::method1>:
-                return dispatch(this, &test_actor::method1, msg);
+                dispatch(this, &test_actor::method1, msg);
+                break;
             case actor_zeta::msg_id<test_actor, &test_actor::method2>:
-                return dispatch(this, &test_actor::method2, msg);
+                dispatch(this, &test_actor::method2, msg);
+                break;
             case actor_zeta::msg_id<test_actor, &test_actor::method3>:
-                return dispatch(this, &test_actor::method3, msg);
+                dispatch(this, &test_actor::method3, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     int call_count1() const { return call_count1_; }

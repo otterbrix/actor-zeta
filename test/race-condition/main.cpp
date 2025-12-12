@@ -23,15 +23,14 @@ public:
         // Simulate some work
         processed_count_.fetch_add(1, std::memory_order_relaxed);
         int result = value * 2;
-        return actor_zeta::make_ready_future<int>(resource(), result);
+        co_return result;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<stress_actor, &stress_actor::compute>) {
-            return dispatch(this, &stress_actor::compute, msg);
+            dispatch(this, &stress_actor::compute, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     std::size_t processed_count() const {

@@ -13,23 +13,23 @@ public:
     // Declare methods first (needed by dispatch_traits)
     unique_future<void> method1(int x) {
         counter_ += x;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method2(int x) {
         counter_ += x * 2;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method3(int x) {
         counter_ += x * 3;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method4(int x) {
         counter_ += x * 4;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method5(int x) {
         counter_ += x * 5;
-        return make_ready_future_void(resource());
+        co_return;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -44,7 +44,7 @@ public:
         : basic_actor<old_style_actor>(resource)
         , counter_(0) {}
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<old_style_actor, &old_style_actor::method1>) {
             dispatch(this, &old_style_actor::method1, msg);
@@ -57,7 +57,6 @@ public:
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method5>) {
             dispatch(this, &old_style_actor::method5, msg);
         }
-        return make_ready_future_void(resource());
     }
 
     int counter() const { return counter_; }
@@ -150,7 +149,7 @@ public:
     explicit coroutine_actor(std::pmr::memory_resource* resource)
         : basic_actor<coroutine_actor>(resource) {}
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<coroutine_actor, &coroutine_actor::compute>) {
             dispatch(this, &coroutine_actor::compute, msg);
@@ -161,7 +160,6 @@ public:
         } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::sum3>) {
             dispatch(this, &coroutine_actor::sum3, msg);
         }
-        co_return;
     }
 };
 

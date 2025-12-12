@@ -57,14 +57,16 @@ public:
         co_return;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
+
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<coro_supervisor, &coro_supervisor::prepare>) {
             actor_zeta::dispatch(this, &coro_supervisor::prepare, msg);
         } else if (cmd == actor_zeta::msg_id<coro_supervisor, &coro_supervisor::send>) {
             actor_zeta::dispatch(this, &coro_supervisor::send, msg);
         }
-        return actor_zeta::make_ready_future_void(resource_);
+
+
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

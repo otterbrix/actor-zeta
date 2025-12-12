@@ -39,13 +39,12 @@ public:
         destructor_counter++;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_storage>) {
-            return dispatch(this, &dummy_supervisor::create_storage, msg);
+            dispatch(this, &dummy_supervisor::create_storage, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_test_handlers>) {
-            return dispatch(this, &dummy_supervisor::create_test_handlers, msg);
+            dispatch(this, &dummy_supervisor::create_test_handlers, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     auto scheduler_test() noexcept -> actor_zeta::test::scheduler_test_t* {
@@ -122,20 +121,19 @@ public:
         constructor_counter++;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<storage_t, &storage_t::init>) {
-            return dispatch(this, &storage_t::init, msg);
+            dispatch(this, &storage_t::init, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::search>) {
-            return dispatch(this, &storage_t::search, msg);
+            dispatch(this, &storage_t::search, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::add>) {
-            return dispatch(this, &storage_t::add, msg);
+            dispatch(this, &storage_t::add, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::delete_table>) {
-            return dispatch(this, &storage_t::delete_table, msg);
+            dispatch(this, &storage_t::delete_table, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::create_table>) {
-            return dispatch(this, &storage_t::create_table, msg);
+            dispatch(this, &storage_t::create_table, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~storage_t() {
@@ -145,7 +143,7 @@ public:
     actor_zeta::unique_future<void> init() {
         init_counter++;
         TRACE("+++");
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> search(std::string key) {
@@ -153,7 +151,7 @@ public:
         std::cerr << __func__ << " :: "
                   << "key: " << key
                   << std::endl;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> add(std::string key, std::string value) {
@@ -162,7 +160,7 @@ public:
                   << "key: " << key << " | "
                   << "value: " << value << " | "
                   << std::endl;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> delete_table(std::string name, std::string path, int type) {
@@ -172,7 +170,7 @@ public:
                   << "path: " << path << " | "
                   << "type: " << type << " | "
                   << std::endl;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> create_table(std::string name, std::string path, int type, int time_sync) {
@@ -183,7 +181,7 @@ public:
                   << "type: " << type << " | "
                   << "time_sync: " << time_sync << " | "
                   << std::endl;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -221,22 +219,21 @@ public:
     }
 
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_0>) {
-            return dispatch(this, &test_handlers::ptr_0, msg);
+            dispatch(this, &test_handlers::ptr_0, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_1>) {
-            return dispatch(this, &test_handlers::ptr_1, msg);
+            dispatch(this, &test_handlers::ptr_1, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_2>) {
-            return dispatch(this, &test_handlers::ptr_2, msg);
+            dispatch(this, &test_handlers::ptr_2, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_3>) {
-            return dispatch(this, &test_handlers::ptr_3, msg);
+            dispatch(this, &test_handlers::ptr_3, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_4>) {
-            return dispatch(this, &test_handlers::ptr_4, msg);
+            dispatch(this, &test_handlers::ptr_4, msg);
         } else {
             TRACE("+++");
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~test_handlers() = default;
@@ -244,34 +241,34 @@ public:
     actor_zeta::unique_future<void> ptr_0() {
         TRACE("+++");
         ptr_0_counter++;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> ptr_1() {
         TRACE("+++");
         ptr_1_counter++;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> ptr_2(int data) {
         TRACE("+++");
         (void)data;
         ptr_2_counter++;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> ptr_3(int data_1, int data_2) {
         TRACE("+++");
         std::cerr << "ptr_3 : " << data_1 << " : " << data_2 << std::endl;
         ptr_3_counter++;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> ptr_4(int data_1, int data_2, std::string data_3) {
         TRACE("+++");
         std::cerr << "ptr_4 : " << data_1 << " : " << data_2 << " : " << data_3 << std::endl;
         ptr_4_counter++;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -303,7 +300,7 @@ actor_zeta::unique_future<void> dummy_supervisor::create_storage() {
     auto uptr = actor_zeta::spawn<storage_t>(resource());
     storages_.emplace_back(std::move(uptr));
     add_actor_impl_counter++;
-    return actor_zeta::make_ready_future_void(resource());
+    co_return;
 }
 
 actor_zeta::unique_future<void> dummy_supervisor::create_test_handlers() {
@@ -311,5 +308,5 @@ actor_zeta::unique_future<void> dummy_supervisor::create_test_handlers() {
     auto uptr = actor_zeta::spawn<test_handlers>(resource());
     test_handlers_.emplace_back(std::move(uptr));
     add_actor_impl_counter++;
-    return actor_zeta::make_ready_future_void(resource());
+    co_return;
 }

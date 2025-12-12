@@ -63,12 +63,13 @@ public:
     // =========================================================================
 
     /// @brief Trigger behavior() to process pending coroutines
-    void poll() {
+    unique_future<void> poll() {
         g_log.log("[%::poll] called", name_);
+        co_return;
     }
 
     /// @brief Close and cleanup cursor for session
-    void close_cursor(const session_id_t& session) {
+    unique_future<void> close_cursor(session_id_t session) {
         auto tid = thread_id_str();
         g_log.log("[%::close_cursor] thread=% session=%", name_, tid, session.data());
 
@@ -79,6 +80,7 @@ public:
         } else {
             g_log.log("[%::close_cursor] Cursor not found in storage", name_);
         }
+        co_return;
     }
 
     // =========================================================================
@@ -644,7 +646,7 @@ public:
     // behavior() - message dispatch with pending coroutine management
     // =========================================================================
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
@@ -766,8 +768,6 @@ public:
 
         // Process pending coroutines after each message
         poll_pending();
-
-        return make_ready_future_void(resource());
     }
 
     // =========================================================================

@@ -35,14 +35,14 @@ public:
         if (partner_) {
             actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
         }
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     // Receives PONG, increments counter (end of exchange)
     actor_zeta::unique_future<void> pong(Args...) {
         ++ping_pong_counter;
         ping_pong_done.store(true, std::memory_order_release);
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -50,7 +50,8 @@ public:
         &ping_pong_actor::pong
     >;
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
+
         switch (msg->command()) {
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>:
                 actor_zeta::dispatch(this, &ping_pong_actor::ping, msg);
@@ -59,7 +60,6 @@ public:
                 actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
                 break;
         }
-        return actor_zeta::make_ready_future_void(this->resource());
     }
 };
 

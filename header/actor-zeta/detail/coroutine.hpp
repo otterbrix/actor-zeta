@@ -21,6 +21,12 @@ namespace detail {
     using suspend_always = std::experimental::suspend_always;
     using suspend_never = std::experimental::suspend_never;
 
+    inline coroutine_handle<> noop_coroutine() noexcept {
+        // experimental coroutines don't have noop_coroutine
+        // return empty handle - caller must check before resume
+        return {};
+    }
+
 }
 } // namespace actor_zeta::detail
 
@@ -39,6 +45,10 @@ namespace detail {
 
     using suspend_always = std::suspend_always;
     using suspend_never = std::suspend_never;
+
+    inline coroutine_handle<> noop_coroutine() noexcept {
+        return std::noop_coroutine();
+    }
 
 }
 } // namespace actor_zeta::detail

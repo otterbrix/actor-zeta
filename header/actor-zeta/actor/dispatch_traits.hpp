@@ -41,6 +41,17 @@ namespace actor_zeta {
         struct has_const_lvalue_ref_in_list<type_traits::type_list<Args...>>
             : has_const_lvalue_ref_args<Args...> {};
 
+        /// @brief Compile-time check: method must return unique_future<T>
+        /// @tparam MethodPtr Pointer to member function
+        /// All actor methods must be coroutines returning unique_future<T>
+        template<auto MethodPtr>
+        struct method_return_type_check {
+            using trait = type_traits::callable_trait<decltype(MethodPtr)>;
+            using result_type = typename trait::result_type;
+
+            static constexpr bool returns_unique_future = type_traits::is_unique_future_v<result_type>;
+        };
+
         /// @brief Compile-time check: coroutines must not have const& parameters
         /// @tparam MethodPtr Pointer to member function
         /// After co_await, the message is destroyed, making const& parameters dangling.
@@ -62,25 +73,37 @@ namespace actor_zeta {
     /// @brief Dispatch traits for actor methods
     /// @tparam MethodPtrs Pointers to member functions
     ///
-    /// IMPORTANT: Coroutine methods (returning unique_future<T>) must NOT have const& parameters!
-    /// After co_await, the message is destroyed and const& becomes a dangling reference.
-    /// Use by-value parameters instead.
+    /// REQUIREMENTS:
+    /// 1. All methods MUST return unique_future<T> (must be coroutines)
+    /// 2. Coroutine methods must NOT have const& parameters (dangling after co_await)
     ///
     /// @code
+    /// // WRONG - raw void return:
+    /// void process(std::string data);  // COMPILE ERROR!
+    ///
     /// // WRONG - const& in coroutine causes use-after-free:
     /// unique_future<int> process(const std::string& data);  // COMPILE ERROR!
     ///
-    /// // CORRECT - by-value is safe:
-    /// unique_future<int> process(std::string data);  // OK
+    /// // CORRECT - coroutine with by-value parameters:
+    /// unique_future<int> process(std::string data) {
+    ///     co_return 42;
+    /// }
     /// @endcode
     template<auto... MethodPtrs>
     struct dispatch_traits {
         using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
 
+        // Compile-time safety: all methods must return unique_future<T>
+        static_assert(
+            (detail::method_return_type_check<MethodPtrs>::returns_unique_future && ...),
+            "All actor methods must return unique_future<T>. "
+            "Raw void or value returns are not allowed. "
+            "All actor methods must be coroutines using co_return.");
+
         // Compile-time safety: coroutines must not have const& parameters
         static_assert(
             (detail::coroutine_parameter_check<MethodPtrs>::is_safe && ...),
-            "Coroutine methods (returning unique_future<T>) must not have const& parameters. "
+            "Coroutine methods must not have const& parameters. "
             "After co_await, message is destroyed and const& becomes dangling. Use by-value instead.");
     };
 

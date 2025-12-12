@@ -305,14 +305,13 @@ public:
         , command2_(actor_zeta::make_behavior(resource(), this, &MyActor::handle_command2)) {
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command1>) {
             command1_(msg);
         } else if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command2>) {
             command2_(msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     ~MyActor() override = default;
@@ -505,12 +504,12 @@ Switch between profiles using the dropdown in CLion's toolbar.
 ✅ **These are LEGITIMATE APIs** - do not "fix" them:
 - `make_behavior(resource, this, &Class::method)` - creates behavior with automatic argument unpacking
 - `behavior_t` - type-erased behavior object
-- `unique_future<void> behavior(mailbox::message*)` - virtual method called by base class
+- `void behavior(mailbox::message*)` - virtual method called by base class
 - Direct `message*` usage in low-level code
 
 **Current API (all code should use this):**
 - Define `dispatch_traits<&Actor::method...>` with method pointers
-- Implement `unique_future<void> behavior(mailbox::message*)` to dispatch based on `msg_id<Actor, &Actor::method>`
+- Implement `void behavior(mailbox::message*)` to dispatch based on `msg_id<Actor, &Actor::method>`
 - Create `behavior_t` members using `make_behavior(resource, this, &Actor::method)`
 - Send messages using `send(actor, sender, &Actor::method, args...)`
 
@@ -646,7 +645,7 @@ unique_future<void> simple_void() {
 **6. Storing Pending Coroutines (CRITICAL)**
 ```cpp
 class MyActor : public basic_actor<MyActor> {
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         switch (msg->command()) {
             case msg_id<MyActor, &MyActor::async_method>: {
                 // CRITICAL: Store pending coroutine!
@@ -655,10 +654,9 @@ class MyActor : public basic_actor<MyActor> {
                 if (!future.is_ready()) {
                     pending_.push_back(std::move(future));
                 }
-                return make_ready_future_void(resource());
+                break;
             }
         }
-        return make_ready_future_void(resource());
     }
 
     // Poll and resume pending coroutines
@@ -722,11 +720,10 @@ public:
         : actor_zeta::basic_actor<Worker>(ptr)
         , compute_(actor_zeta::make_behavior(resource(), this, &Worker::compute)) {}
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<Worker, &Worker::compute>) {
             compute_(msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:

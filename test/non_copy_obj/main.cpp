@@ -40,11 +40,10 @@ public:
 
     actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
-            return dispatch(this, &dummy_supervisor::check, msg);
+            dispatch(this, &dummy_supervisor::check, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     template<typename R, typename... Args>
@@ -78,7 +77,7 @@ actor_zeta::unique_future<void> dummy_supervisor::check(std::unique_ptr<dummy_da
     REQUIRE(data->number == expected_data.number);
     REQUIRE(data->name.size() == expected_data.name.size());
     REQUIRE(data->name == expected_data.name);
-    return actor_zeta::make_ready_future_void(resource());
+    co_return;
 }
 
 TEST_CASE("base move test") {

@@ -49,15 +49,14 @@ public:
     }
 
     actor_zeta::unique_future<int> echo(int value) {
-        return actor_zeta::make_ready_future<int>(resource(), value);
+        co_return value;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<refcount_test_actor, &refcount_test_actor::echo>) {
-            return dispatch(this, &refcount_test_actor::echo, msg);
+            dispatch(this, &refcount_test_actor::echo, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
