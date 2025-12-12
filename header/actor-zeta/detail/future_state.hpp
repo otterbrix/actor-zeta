@@ -93,20 +93,6 @@ namespace actor_zeta { namespace detail {
 #endif
         }
 
-        /// @brief Try to increment reference count (like weak_ptr::lock())
-        /// @return true if successful, false if object being destroyed
-        [[nodiscard]] bool try_add_ref() noexcept {
-            int old_count = refcount_.load(std::memory_order_relaxed);
-            do {
-                if (old_count == 0)
-                    return false;
-            } while (!refcount_.compare_exchange_weak(
-                old_count, old_count + 1,
-                std::memory_order_acquire,
-                std::memory_order_relaxed));
-            return true;
-        }
-
         void release() noexcept {
             // CRITICAL: fetch_sub FIRST, then destroy. Same pattern as libstdc++ shared_ptr.
             int old_value = refcount_.fetch_sub(1, std::memory_order_release);
@@ -117,10 +103,6 @@ namespace actor_zeta { namespace detail {
                 std::atomic_thread_fence(std::memory_order_acquire);
                 destroy();
             }
-        }
-
-        [[nodiscard]] bool is_available() const noexcept {
-            return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
         }
 
         [[nodiscard]] bool is_ready() const noexcept {
@@ -162,7 +144,6 @@ namespace actor_zeta { namespace detail {
 
         /// @brief Wait until state becomes terminal (ready, consumed, error, or cancelled)
         /// Uses atomic_wait (C++20) or spin-yield-backoff fallback
-        /// @note Returns when is_available() == true (state >= ready)
         void wait_until_ready() const noexcept {
 #if HAVE_ATOMIC_WAIT
             while (!is_available()) {
@@ -209,24 +190,12 @@ namespace actor_zeta { namespace detail {
             return false;
         }
 
-        /// @brief Check if consumed (result already taken)
-        [[nodiscard]] bool is_consumed() const noexcept {
-            return state_.load(std::memory_order_acquire) == future_state_enum::consumed;
-        }
-
         /// @brief Check if still pending (not yet set)
         [[nodiscard]] bool is_pending() const noexcept {
             auto s = state_.load(std::memory_order_acquire);
             return s == future_state_enum::pending ||
                    s == future_state_enum::setting ||
                    s == future_state_enum::consuming;
-        }
-
-        /// @brief Atomic state transition with validation
-        /// @return true if transition successful, false if current state != expected
-        bool transition(future_state_enum expected, future_state_enum desired) noexcept {
-            return state_.compare_exchange_strong(expected, desired,
-                                                  std::memory_order_acq_rel, std::memory_order_acquire);
         }
 
         /// @brief Get memory resource
@@ -253,27 +222,14 @@ namespace actor_zeta { namespace detail {
             }
         }
 
-        /// @brief Check if coroutine is stored for resumption
-        [[nodiscard]] bool has_coroutine() const noexcept {
-            return resume_coro_handle_.operator bool();
-        }
-
-        /// @brief Check if stored coroutine is done
-        [[nodiscard]] bool coroutine_done() const noexcept {
-            if (owns_coroutine_ && owning_coro_handle_) {
-                return owning_coro_handle_.done();
-            }
-            return resume_coro_handle_ && resume_coro_handle_.done();
-        }
-
         /// @brief Store coroutine handle for resumption (non-owning, from awaiter)
-        void set_coroutine(std::coroutine_handle<> handle) noexcept {
+        void set_coroutine(coroutine_handle<> handle) noexcept {
             resume_coro_handle_ = handle;
         }
 
         /// @brief Store coroutine handle with ownership (from coroutine promise)
         /// @note This state will destroy the coroutine in destructor
-        void set_coroutine_owning(std::coroutine_handle<> handle) noexcept {
+        void set_coroutine_owning(coroutine_handle<> handle) noexcept {
             owning_coro_handle_ = handle;
             owns_coroutine_ = true;
         }
@@ -308,13 +264,19 @@ namespace actor_zeta { namespace detail {
         /// @return The stored continuation handle, or empty handle if none
         /// @note Clears the stored handle after taking (single-shot)
         /// @note Used by final_suspend to resume awaiting coroutine directly
-        [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
+        [[nodiscard]] coroutine_handle<> take_continuation() noexcept {
             auto h = resume_coro_handle_;
             resume_coro_handle_ = {};
             return h;
         }
 
     protected:
+        /// @brief Check if state is terminal (ready, consumed, error, or cancelled)
+        /// @note Internal helper for wait_until_ready()
+        [[nodiscard]] bool is_available() const noexcept {
+            return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
+        }
+
         /// @brief Try to resume awaiting continuation if conditions are met
         /// @note Extracted common pattern from set_value() and set_ready()
         /// @note Skips resume if we own a coroutine (let final_suspend do symmetric transfer)
@@ -640,11 +602,6 @@ namespace actor_zeta { namespace detail {
             return true;
         }
 
-        /// @brief Get typed forward target
-        [[nodiscard]] future_state<T>* get_forward_target() const noexcept {
-            return forward_target_.load(std::memory_order_acquire);
-        }
-
         /// @brief Set value directly in-place (ZERO ALLOCATION)
         /// If forward_target_ is set, forwards directly (also ZERO ALLOCATION!)
         template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
@@ -703,7 +660,8 @@ namespace actor_zeta { namespace detail {
         template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
         [[nodiscard]] U take_value() noexcept {
             auto expected = future_state_enum::ready;
-            bool transitioned = transition(expected, future_state_enum::consuming);
+            bool transitioned = state_.compare_exchange_strong(expected, future_state_enum::consuming,
+                                                                std::memory_order_acq_rel, std::memory_order_acquire);
             assert(transitioned && "take_value() called on non-ready state!");
             (void) transitioned;
 

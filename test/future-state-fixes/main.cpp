@@ -69,8 +69,8 @@ TEST_CASE("Issue #1: wait_until_ready exits on error state", "[wait_until_ready]
     REQUIRE(state->is_error());
     REQUIRE(!state->is_ready());
 
-    // is_available() should return true for error state
-    REQUIRE(state->is_available());
+    // Terminal state reached (is_ready() || is_failed())
+    REQUIRE((state->is_ready() || state->is_failed()));
 }
 
 TEST_CASE("Issue #1: wait_until_ready exits on cancelled state", "[wait_until_ready][critical]") {
@@ -100,8 +100,8 @@ TEST_CASE("Issue #1: wait_until_ready exits on cancelled state", "[wait_until_re
     REQUIRE(state->is_cancelled());
     REQUIRE(state->is_failed());
 
-    // is_available() should return true for cancelled state
-    REQUIRE(state->is_available());
+    // Terminal state reached (is_ready() || is_failed())
+    REQUIRE((state->is_ready() || state->is_failed()));
 }
 
 TEST_CASE("Issue #1: wait_until_ready exits on ready state (normal case)", "[wait_until_ready]") {
@@ -129,7 +129,6 @@ TEST_CASE("Issue #1: wait_until_ready exits on ready state (normal case)", "[wai
 
     // State should be ready with value
     REQUIRE(state->is_ready());
-    REQUIRE(state->is_available());
     REQUIRE(state->get_value() == 42);
 }
 
@@ -450,7 +449,7 @@ TEST_CASE("Issue #6: concurrent error/cancelled race - error_code_ consistent", 
 // Additional regression tests for stability
 // =============================================================================
 
-TEST_CASE("Regression: is_available() returns true for all terminal states", "[is_available][regression]") {
+TEST_CASE("Regression: terminal state detection for all terminal states", "[terminal][regression]") {
     auto* resource = std::pmr::get_default_resource();
 
     SECTION("ready state") {
@@ -458,7 +457,7 @@ TEST_CASE("Regression: is_available() returns true for all terminal states", "[i
         intrusive_ptr<future_state_base> holder(state, false);
 
         state->set_value(42);
-        REQUIRE(state->is_available());
+        REQUIRE((state->is_ready() || state->is_failed()));
         REQUIRE(state->is_ready());
     }
 
@@ -467,7 +466,7 @@ TEST_CASE("Regression: is_available() returns true for all terminal states", "[i
         intrusive_ptr<future_state_base> holder(state, false);
 
         state->error(std::make_error_code(std::errc::invalid_argument));
-        REQUIRE(state->is_available());
+        REQUIRE((state->is_ready() || state->is_failed()));
         REQUIRE(state->is_error());
     }
 
@@ -476,19 +475,8 @@ TEST_CASE("Regression: is_available() returns true for all terminal states", "[i
         intrusive_ptr<future_state_base> holder(state, false);
 
         state->cancelled();
-        REQUIRE(state->is_available());
+        REQUIRE((state->is_ready() || state->is_failed()));
         REQUIRE(state->is_cancelled());
-    }
-
-    SECTION("consumed state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
-
-        state->set_value(42);
-        int value = state->take_value();
-        REQUIRE(value == 42);
-        REQUIRE(state->is_available());
-        REQUIRE(state->is_consumed());
     }
 }
 
@@ -539,7 +527,6 @@ TEST_CASE("Regression: void future state transitions", "[void][state][regression
         REQUIRE(state->is_pending());
         state->set_ready();
         REQUIRE(state->is_ready());
-        REQUIRE(state->is_available());
     }
 
     SECTION("error()") {
@@ -549,7 +536,7 @@ TEST_CASE("Regression: void future state transitions", "[void][state][regression
         REQUIRE(state->is_pending());
         state->error(std::make_error_code(std::errc::invalid_argument));
         REQUIRE(state->is_error());
-        REQUIRE(state->is_available());
+        REQUIRE(state->is_failed());
     }
 
     SECTION("cancelled()") {
@@ -559,6 +546,6 @@ TEST_CASE("Regression: void future state transitions", "[void][state][regression
         REQUIRE(state->is_pending());
         state->cancelled();
         REQUIRE(state->is_cancelled());
-        REQUIRE(state->is_available());
+        REQUIRE(state->is_failed());
     }
 }

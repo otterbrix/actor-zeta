@@ -149,9 +149,7 @@ TEST_CASE("future_state coroutine methods") {
                                         alignof(actor_zeta::detail::future_state<int>));
         auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
 
-        // Test virtual methods exist and can be called
-        REQUIRE_FALSE(state->has_coroutine());  // No coroutine stored yet
-        REQUIRE_FALSE(state->coroutine_done());
+        // Test resume_coroutine exists and can be called
         state->resume_coroutine();  // Should not crash (no-op if no coroutine)
 
         // Cleanup
@@ -163,9 +161,7 @@ TEST_CASE("future_state coroutine methods") {
                                         alignof(actor_zeta::detail::future_state<void>));
         auto* state = new (mem) actor_zeta::detail::future_state<void>(resource);
 
-        // Test virtual methods exist
-        REQUIRE_FALSE(state->has_coroutine());
-        REQUIRE_FALSE(state->coroutine_done());
+        // Test resume_coroutine exists
         state->resume_coroutine();
 
         // Cleanup
@@ -196,9 +192,8 @@ TEST_CASE("coroutine handle can be stored in future_state") {
         // Process message
         actor->resume(100);
 
-        // Note: In real usage, await_suspend would call set_coroutine()
-        // Here we just verify the method exists
-        REQUIRE_FALSE(state->has_coroutine());
+        // Test resume_coroutine exists (no-op if no coroutine stored)
+        state->resume_coroutine();
 
         // Cleanup
         state->release();
@@ -220,9 +215,7 @@ TEST_CASE("virtual methods marked as final") {
     // Cast to base to ensure virtual call
     actor_zeta::detail::future_state_base* base = state;
 
-    // These should still be devirtualized by compiler (final keyword)
-    REQUIRE_FALSE(base->has_coroutine());
-    REQUIRE_FALSE(base->coroutine_done());
+    // Test resume_coroutine exists (no-op if no coroutine stored)
     base->resume_coroutine();
 
     // Cleanup

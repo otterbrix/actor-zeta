@@ -318,7 +318,7 @@ namespace actor_zeta {
                 return future_.available();
             }
 
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
+            detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> caller) noexcept {
                 if (future_.available()) {
                     return caller;
                 }
@@ -337,7 +337,7 @@ namespace actor_zeta {
                     return caller;
                 }
 
-                return std::noop_coroutine();
+                return detail::noop_coroutine();
             }
 
             auto await_resume() {
@@ -378,7 +378,7 @@ namespace actor_zeta {
                 void* mem = resource_->allocate(sizeof(coroutine_state_type), alignof(coroutine_state_type));
                 state_ = new (mem) coroutine_state_type(resource_);
 
-                auto handle = std::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
+                auto handle = detail::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
                 state_->set_coroutine_owning(handle); // This state owns the coroutine
 
                 // For void: coroutine_state_type* (future_state<void>*) → state_type* (future_state_base*)
@@ -400,14 +400,14 @@ namespace actor_zeta {
 
                     /// @brief Symmetric transfer at coroutine completion
                     /// @return Continuation handle if someone is waiting, else noop
-                    std::coroutine_handle<> await_suspend(
-                        std::coroutine_handle<promise_type> /*h*/
+                    detail::coroutine_handle<> await_suspend(
+                        detail::coroutine_handle<promise_type> /*h*/
                         ) noexcept {
                         // If there's a waiting coroutine, resume it directly
                         if (auto cont = state_->take_continuation()) {
                             return cont; // Symmetric transfer!
                         }
-                        return std::noop_coroutine(); // No waiter - stay suspended
+                        return detail::noop_coroutine(); // No waiter - stay suspended
                     }
 
                     void await_resume() noexcept {}
