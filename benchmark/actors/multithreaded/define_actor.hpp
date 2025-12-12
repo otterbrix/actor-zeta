@@ -37,7 +37,7 @@ public:
                 scheduler_->enqueue(partner_);
             }
         }
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> ping(Args...) {
@@ -49,12 +49,12 @@ public:
                 scheduler_->enqueue(partner_);
             }
         }
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> pong(Args...) {
         // Receive pong, do nothing (end of exchange)
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

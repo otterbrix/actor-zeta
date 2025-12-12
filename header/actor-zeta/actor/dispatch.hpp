@@ -122,17 +122,19 @@ namespace actor_zeta {
             }
         };
 
-        // Handle raw void vs unique_future<T> return types
-        if constexpr (std::is_void_v<result_type>) {
-            // Raw void method - call and return ready void future
-            invoke_method(std::make_index_sequence<args_size>{});
-            return make_ready_future_void(self->resource());
-        } else {
-            // Method returns unique_future<T> - use result chaining
-            auto future = invoke_method(std::make_index_sequence<args_size>{});
-            detail::setup_result_chaining_inline(future, msg);
-            return future;
-        }
+        // =====================================================================
+        // COROUTINE-ONLY: All methods must return unique_future<T>
+        // =====================================================================
+        static_assert(
+            type_traits::is_unique_future_v<result_type>,
+            "dispatch(): Actor methods must return unique_future<T>. "
+            "Raw void or value returns are not allowed. "
+            "All actor methods must be coroutines using co_return.");
+
+        // Method returns unique_future<T> - use result chaining
+        auto future = invoke_method(std::make_index_sequence<args_size>{});
+        detail::setup_result_chaining_inline(future, msg);
+        return future;
     }
 
 } // namespace actor_zeta

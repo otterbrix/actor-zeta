@@ -324,32 +324,6 @@ TEST_CASE("Coroutine allocation patterns") {
     }
 }
 
-TEST_CASE("make_ready_future allocation") {
-    tracking_resource tracker;
-
-    SECTION("make_ready_future<int> allocation") {
-        {
-            auto future = actor_zeta::make_ready_future<int>(&tracker, 42);
-            CHECK(tracker.alloc_count() > 0);
-            int result = std::move(future).get();
-            CHECK(result == 42);
-        }
-
-        CHECK(tracker.all_freed());
-        INFO("make_ready_future<int> used " << tracker.total_allocated() << " bytes");
-    }
-
-    SECTION("make_ready_future_void allocation") {
-        {
-            auto future = actor_zeta::make_ready_future_void(&tracker);
-            CHECK(tracker.alloc_count() > 0);
-            std::move(future).get();
-        }
-
-        CHECK(tracker.all_freed());
-        INFO("make_ready_future_void used " << tracker.total_allocated() << " bytes");
-    }
-}
 
 TEST_CASE("promise/future allocation") {
     tracking_resource tracker;

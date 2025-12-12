@@ -42,19 +42,17 @@ private:
     std::string tmp_;
 };
 
-// Request-response implementations - automatically return results via promise
+// Request-response implementations - all methods must be coroutines
 inline actor_zeta::unique_future<std::size_t> worker_t::download_with_result(std::string url, std::string /*user*/, std::string /*password*/) {
     std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
     tmp_ = std::move(url);
     std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
-    std::size_t result = tmp_.size(); // Return downloaded size
-    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
+    co_return tmp_.size(); // Return downloaded size
 }
 
 inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(std::string data, std::string /*operatorName*/) {
     tmp_ = std::move(data);
-    std::size_t result = tmp_.size(); // Return processed size
-    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
+    co_return tmp_.size(); // Return processed size
 }
 
 /// non thread safe
@@ -80,7 +78,7 @@ public:
         auto ptr = actor_zeta::spawn<worker_t>(resource_);
         actors_.emplace_back(std::move(ptr));
         ++size_actors_;
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

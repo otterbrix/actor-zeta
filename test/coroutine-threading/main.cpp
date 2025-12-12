@@ -72,7 +72,7 @@ public:
         g_log.log("[%::compute] thread=% x=% returning % (call #%)",
                   name_, tid, x, x * 2, compute_count_.load());
         last_compute_thread_ = tid;
-        return make_ready_future(resource(), x * 2);
+        co_return x * 2;
     }
 
     const std::string& last_compute_thread() const { return last_compute_thread_; }
@@ -170,7 +170,7 @@ public:
     }
 
     unique_future<int> get_result() {
-        return make_ready_future(resource(), final_result_.load());
+        co_return final_result_.load();
     }
 
     const std::string& process_start_thread() const { return process_start_thread_; }

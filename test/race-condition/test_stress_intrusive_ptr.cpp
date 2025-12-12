@@ -18,11 +18,11 @@ public:
 
     actor_zeta::unique_future<void> increment(int delta) {
         value_.fetch_add(delta, std::memory_order_relaxed);
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<int> get_value() const {
-        return actor_zeta::make_ready_future<int>(resource(), value_.load(std::memory_order_relaxed));
+        co_return value_.load(std::memory_order_relaxed);
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

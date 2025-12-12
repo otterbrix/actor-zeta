@@ -49,7 +49,7 @@ public:
     }
 
     actor_zeta::unique_future<int> echo(int value) {
-        return actor_zeta::make_ready_future<int>(resource(), value);
+        co_return value;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

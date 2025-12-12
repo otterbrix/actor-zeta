@@ -13,7 +13,7 @@ public:
 
     actor_zeta::unique_future<void> test() {
         ++processed_count_;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

@@ -23,7 +23,7 @@ public:
         // Simulate some work
         processed_count_.fetch_add(1, std::memory_order_relaxed);
         int result = value * 2;
-        return actor_zeta::make_ready_future<int>(resource(), result);
+        co_return result;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

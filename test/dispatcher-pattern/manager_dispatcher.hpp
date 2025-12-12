@@ -63,12 +63,13 @@ public:
     // =========================================================================
 
     /// @brief Trigger behavior() to process pending coroutines
-    void poll() {
+    unique_future<void> poll() {
         g_log.log("[%::poll] called", name_);
+        co_return;
     }
 
     /// @brief Close and cleanup cursor for session
-    void close_cursor(const session_id_t& session) {
+    unique_future<void> close_cursor(session_id_t session) {
         auto tid = thread_id_str();
         g_log.log("[%::close_cursor] thread=% session=%", name_, tid, session.data());
 
@@ -79,6 +80,7 @@ public:
         } else {
             g_log.log("[%::close_cursor] Cursor not found in storage", name_);
         }
+        co_return;
     }
 
     // =========================================================================

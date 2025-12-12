@@ -19,6 +19,9 @@ namespace actor_zeta {
     template<typename T>
     class unique_future;
 
+    template<typename T>
+    class promise;
+
     /// @brief Unified promise<T> - works for both void and non-void types
     /// Uses SFINAE to provide appropriate set_value() overloads
     template<typename T>
@@ -513,9 +516,19 @@ namespace actor_zeta {
                 U val = std::move(ready_future).get();
                 this->state_->set_value(std::move(val));
             }
+
+            /// @brief Return error from coroutine: co_return std::error_code
+            /// @param ec Error code to set on the future
+            /// @note Allows coroutines to signal errors without exceptions
+            void return_value(std::error_code ec) noexcept {
+                assert(this->state_ && "return_value(error_code) with null state");
+                this->state_->error(ec);
+            }
         };
 
-        // Void specialization: has return_void
+        // Void specialization: has return_void only
+        // Note: C++ standard forbids having both return_void and return_value for same type
+        // For error handling in void coroutines, use make_error_future() before co_return
         template<typename U>
         struct promise_type_return<U, true> : promise_type_base {
             using promise_type_base::promise_type_base;
@@ -595,44 +608,19 @@ namespace actor_zeta {
         bool needs_scheduling_;
     };
 
-    /// @brief Create ready future via promise (clean API)
-    /// @note Uses promise internally for consistency
-    template<typename T>
-    unique_future<T> make_ready_future(std::pmr::memory_resource* resource, T&& value) {
-        promise<T> p(resource);
-        p.set_value(std::forward<T>(value));
-        return p.get_future();
-    }
-
-    template<typename T>
-    unique_future<T> make_ready_future(std::pmr::memory_resource* resource, const T& value) {
-        promise<T> p(resource);
-        p.set_value(value);
-        return p.get_future();
-    }
-
-    /// @brief Create ready void future via promise (clean API)
-    inline unique_future<void> make_ready_future_void(std::pmr::memory_resource* resource) {
-        promise<void> p(resource);
-        p.set_value();
-        return p.get_future();
-    }
-
-    /// @brief Create error future via promise
-    /// @param resource Memory resource for allocation
-    /// @param ec Error code describing the failure
-    template<typename T>
-    unique_future<T> make_error_future(std::pmr::memory_resource* resource, std::error_code ec) {
-        promise<T> p(resource);
-        p.error(ec);
-        return p.get_future();
-    }
-
     template<typename T>
     unique_future<T> promise<T>::get_future() noexcept {
         assert(state_ && "get_future() on moved-from promise");
         // Use public constructor: unique_future(promise<T>&)
         return unique_future<T>(*this);
+    }
+
+    // make_error - create future with error for co_return
+    template<typename T>
+    [[nodiscard]] unique_future<T> make_error(std::pmr::memory_resource* res, std::error_code ec) {
+        promise<T> p(res);
+        p.error(ec);
+        return p.get_future();
     }
 
 } // namespace actor_zeta

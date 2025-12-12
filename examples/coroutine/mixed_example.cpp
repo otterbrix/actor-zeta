@@ -23,20 +23,19 @@ public:
     ~calculator_actor() = default;
 
     // ========================================
-    // SYNC METHODS - regular functions with make_ready_future
+    // All methods must be coroutines (use co_return)
     // ========================================
 
-    /// @brief Simple addition - synchronous method
-    /// Returns unique_future<int> using make_ready_future
+    /// @brief Simple addition - coroutine method
     actor_zeta::unique_future<int> add(int a, int b) {
-        std::cout << "[Calculator] SYNC add(" << a << ", " << b << ")\n";
-        return actor_zeta::make_ready_future(resource(), a + b);
+        std::cout << "[Calculator] add(" << a << ", " << b << ")\n";
+        co_return a + b;
     }
 
-    /// @brief Simple multiplication - synchronous method
+    /// @brief Simple multiplication - coroutine method
     actor_zeta::unique_future<int> multiply(int a, int b) {
-        std::cout << "[Calculator] SYNC multiply(" << a << ", " << b << ")\n";
-        return actor_zeta::make_ready_future(resource(), a * b);
+        std::cout << "[Calculator] multiply(" << a << ", " << b << ")\n";
+        co_return a * b;
     }
 
     // ========================================
@@ -153,11 +152,11 @@ int main() {
     }
 
     std::cout << "--- Key observations ---\n";
-    std::cout << "1. Both sync and async methods have SAME signature: unique_future<int>\n";
+    std::cout << "1. All methods have SAME signature: unique_future<T>\n";
     std::cout << "2. Caller uses SAME code: send() and get()\n";
-    std::cout << "3. Sync methods use 'make_ready_future()' for immediate results\n";
-    std::cout << "4. Async methods use 'co_await' and 'co_return'\n";
-    std::cout << "5. Coroutines need poll_pending() to resume after co_await\n";
+    std::cout << "3. All methods must be coroutines using 'co_return'\n";
+    std::cout << "4. Async methods can use 'co_await' to suspend\n";
+    std::cout << "5. Coroutines with co_await need poll_pending() to resume\n";
     std::cout << "\n NOTE: Recursive coroutines (like factorial, power) are NOT supported\n";
     std::cout << "   Use iterative algorithms instead.\n\n";
 

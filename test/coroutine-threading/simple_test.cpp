@@ -17,7 +17,7 @@ public:
 
     unique_future<int> compute(int x) {
         std::cerr << "[worker::compute] x=" << x << ", returning " << (x * 2) << std::endl;
-        return make_ready_future(resource(), x * 2);
+        co_return x * 2;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
@@ -64,7 +64,7 @@ public:
     }
 
     unique_future<int> get_result() {
-        return make_ready_future(resource(), final_result_.load());
+        co_return final_result_.load();
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

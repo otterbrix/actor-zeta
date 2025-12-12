@@ -13,23 +13,23 @@ public:
     // Declare methods first (needed by dispatch_traits)
     unique_future<void> method1(int x) {
         counter_ += x;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method2(int x) {
         counter_ += x * 2;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method3(int x) {
         counter_ += x * 3;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method4(int x) {
         counter_ += x * 4;
-        return make_ready_future_void(resource());
+        co_return;
     }
     unique_future<void> method5(int x) {
         counter_ += x * 5;
-        return make_ready_future_void(resource());
+        co_return;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

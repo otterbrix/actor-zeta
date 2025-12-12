@@ -27,37 +27,37 @@ public:
         : actor_zeta::basic_actor<collection_part_t>(ptr) {
         ++count_collection_part;
     }
-
-    // Методы для обработки сообщений
+    
+    
     // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
     actor_zeta::unique_future<void> insert(std::string key, std::string value) {
         data_.emplace(std::move(key), std::move(value));
         std::cerr << id() << " insert" << std::endl;
         ++count_insert;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> remove(std::string key) {
         data_.erase(key);
         std::cerr << id() << " remove " << key << std::endl;
         ++count_remove;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> update(std::string key, std::string value) {
         data_[std::move(key)] = std::move(value);
         std::cerr << id() << " update" << std::endl;
         ++count_update;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<std::string> find(std::string key) {
         auto it = data_.find(key);
         ++count_find;
         if (it != data_.end()) {
-            return actor_zeta::make_ready_future<std::string>(resource(), it->second);
+            co_return it->second;
         } else {
-            return actor_zeta::make_ready_future<std::string>(resource(), std::string{});
+            co_return std::string{};
         }
     }
 
@@ -110,10 +110,10 @@ public:
 
     // Dummy methods - just for dispatch_traits, never actually called
     // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
-    actor_zeta::unique_future<void> insert(std::string, std::string) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<void> remove(std::string) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<void> update(std::string, std::string) { return actor_zeta::make_ready_future_void(resource_); }
-    actor_zeta::unique_future<std::string> find(std::string) { return actor_zeta::make_ready_future<std::string>(resource_, std::string("")); }
+    actor_zeta::unique_future<void> insert(std::string, std::string) { co_return; }
+    actor_zeta::unique_future<void> remove(std::string) { co_return; }
+    actor_zeta::unique_future<void> update(std::string, std::string) { co_return; }
+    actor_zeta::unique_future<std::string> find(std::string) { co_return std::string{}; }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &collection_t::insert,
@@ -132,7 +132,7 @@ public:
         // Check if we have any child actors
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
-            return actor_zeta::make_error_future<R>(resource_, std::make_error_code(std::errc::no_child_process));
+            return actor_zeta::make_error<R>(resource_, std::make_error_code(std::errc::no_child_process));
         }
 
         // Balancer logic: forward to child actor using round-robin

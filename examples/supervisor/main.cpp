@@ -46,12 +46,12 @@ private:
 actor_zeta::unique_future<void> worker_actor::process_task(std::string task) {
     std::cerr << "[" << name_ << "] Processing task: " << task << std::endl;
     ++tasks_processed_;
-    return actor_zeta::make_ready_future_void(resource());
+    co_return;
 }
 
 actor_zeta::unique_future<void> worker_actor::get_status() {
     std::cerr << "[" << name_ << "] Processed " << tasks_processed_ << " tasks" << std::endl;
-    return actor_zeta::make_ready_future_void(resource());
+    co_return;
 }
 
 // Supervisor that manages worker actors with manual scheduling
@@ -72,13 +72,13 @@ public:
         auto worker = actor_zeta::spawn<worker_actor>(resource_, name);
         std::cerr << "[Supervisor] Created worker: " << name << std::endl;
         workers_.emplace_back(std::move(worker));
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     actor_zeta::unique_future<void> assign_task(std::string task) {
         if (workers_.empty()) {
             std::cerr << "[Supervisor] No workers available!" << std::endl;
-            return actor_zeta::make_ready_future_void(resource_);
+            co_return;
         }
 
         // Round-robin task distribution
@@ -94,14 +94,14 @@ public:
         if (future.needs_scheduling()) {
             scheduler_->enqueue(worker.get());
         }
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     actor_zeta::unique_future<void> stop_workers() {
         std::cerr << "[Supervisor] Stopping all workers..." << std::endl;
         // Workers will be automatically destroyed when supervisor is destroyed
         // In real system, you'd send shutdown messages and wait
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     actor_zeta::unique_future<void> check_status() {
@@ -115,7 +115,7 @@ public:
                 scheduler_->enqueue(worker.get());
             }
         }
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

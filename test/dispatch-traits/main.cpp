@@ -13,22 +13,22 @@ public:
         , call_count3_(0) {
     }
 
-    // Method definitions inside the class
+    // All methods must be coroutines (use co_return)
     actor_zeta::unique_future<void> method1(int value) {
         ++call_count1_;
         last_value1_ = value;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> method2(std::string text) {
         ++call_count2_;
         last_value2_ = text;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> method3() {
         ++call_count3_;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
     // New dispatch_traits syntax - AFTER method definitions!

@@ -204,14 +204,15 @@ static void BM_FutureState_Void(benchmark::State& state) {
 BENCHMARK(BM_FutureState_Void);
 
 // =============================================================================
-// Benchmark: make_ready_future (synchronous path)
+// Benchmark: Simple coroutine (via actor methods)
 // =============================================================================
 
-static void BM_MakeReadyFuture_Int(benchmark::State& state) {
-    auto* resource =std::pmr::get_default_resource();
+static void BM_SimpleCoroutine_Int(benchmark::State& state) {
+    auto* resource = std::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<BenchActor>(resource);
 
     for (auto _ : state) {
-        auto future = actor_zeta::make_ready_future<int>(resource, 42);
+        auto future = actor->compute(42);
         benchmark::DoNotOptimize(future);
         int result = std::move(future).get();
         benchmark::DoNotOptimize(result);
@@ -219,20 +220,21 @@ static void BM_MakeReadyFuture_Int(benchmark::State& state) {
 
     state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK(BM_MakeReadyFuture_Int);
+BENCHMARK(BM_SimpleCoroutine_Int);
 
-static void BM_MakeReadyFuture_Void(benchmark::State& state) {
+static void BM_SimpleCoroutine_Void(benchmark::State& state) {
     auto* resource = std::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<BenchActor>(resource);
 
     for (auto _ : state) {
-        auto future = actor_zeta::make_ready_future_void(resource);
+        auto future = actor->noop();
         benchmark::DoNotOptimize(future);
         std::move(future).get();
     }
 
     state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK(BM_MakeReadyFuture_Void);
+BENCHMARK(BM_SimpleCoroutine_Void);
 
 // =============================================================================
 // Benchmark: Estimate coroutine frame overhead

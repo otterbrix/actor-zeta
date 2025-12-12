@@ -50,8 +50,9 @@ public:
     // =========================================================================
 
     /// @brief Trigger behavior() to process pending coroutines
-    void poll() {
+    unique_future<void> poll() {
         g_log.log("[%::poll] called", name_);
+        co_return;
     }
 
     // =========================================================================

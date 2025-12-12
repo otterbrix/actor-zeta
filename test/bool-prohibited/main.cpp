@@ -11,26 +11,23 @@ public:
         : actor_zeta::basic_actor<good_actor>(ptr) {
     }
 
-    // ALLOWED: void - fire-and-forget
+    // All methods must be coroutines (use co_return)
     actor_zeta::unique_future<void> ping() {
         ping_count_++;
-        return actor_zeta::make_ready_future_void(resource());
+        co_return;
     }
 
-    // ALLOWED: int - returns result via future
     actor_zeta::unique_future<int> calculate() {
-        return actor_zeta::make_ready_future<int>(resource(), 42);
+        co_return 42;
     }
 
-    // ALLOWED: enum for status instead of bool
     enum class status { ok, error };
     actor_zeta::unique_future<status> check_status() {
-        return actor_zeta::make_ready_future<status>(resource(), status::ok);
+        co_return status::ok;
     }
 
-    // ALLOWED: std::string - returns result via future
     actor_zeta::unique_future<std::string> get_name() {
-        return actor_zeta::make_ready_future<std::string>(resource(), std::string("good_actor"));
+        co_return std::string("good_actor");
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

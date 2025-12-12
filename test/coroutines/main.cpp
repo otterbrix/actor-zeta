@@ -269,7 +269,13 @@ TEST_CASE("Coroutine futures") {
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("co_return creates valid future") {
-        auto future = actor->coro_int();  // co_return 42
+        // Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &coroutine_test_actor::coro_int
+        );
+        actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.available());
@@ -279,7 +285,14 @@ TEST_CASE("Coroutine futures") {
     }
 
     SECTION("move constructor preserves future state") {
-        auto future1 = actor->coro_string();
+        // Use send() instead of direct call
+        auto future1 = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &coroutine_test_actor::coro_string
+        );
+        actor->resume(100);
+
         REQUIRE(future1.valid());
 
         auto future2 = std::move(future1);
@@ -306,24 +319,54 @@ TEST_CASE("Coroutine futures") {
 }
 
 // ============================================================================
-// Test 13: Sync methods returning unique_future via make_ready_future()
+// Test 13: All methods must be coroutines via actor (need resource())
 // ============================================================================
 
-// Sync method returning unique_future<int>
-actor_zeta::unique_future<int> sync_add(int a, int b) {
-    auto* resource =std::pmr::get_default_resource();
-    return actor_zeta::make_ready_future(resource, a + b);
-}
+// Test actor for arithmetic coroutine tests
+class arithmetic_test_actor final : public actor_zeta::basic_actor<arithmetic_test_actor> {
+public:
+    explicit arithmetic_test_actor(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<arithmetic_test_actor>(res) {}
 
-// Sync method returning unique_future<std::string>
-actor_zeta::unique_future<std::string> sync_concat(const std::string& a, const std::string& b) {
-    auto* resource =std::pmr::get_default_resource();
-    return actor_zeta::make_ready_future(resource, a + b);
-}
+    // Coroutine method returning unique_future<int>
+    actor_zeta::unique_future<int> coro_add(int a, int b) {
+        co_return a + b;
+    }
 
-TEST_CASE("sync methods with unique_future return type") {
-    SECTION("sync_add returns ready future") {
-        auto future = sync_add(10, 20);
+    // Coroutine method returning unique_future<std::string>
+    actor_zeta::unique_future<std::string> coro_concat(std::string a, std::string b) {
+        co_return a + b;
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &arithmetic_test_actor::coro_add,
+        &arithmetic_test_actor::coro_concat
+    >;
+
+    void behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::msg_id<arithmetic_test_actor, &arithmetic_test_actor::coro_add>:
+                actor_zeta::dispatch(this, &arithmetic_test_actor::coro_add, msg);
+                break;
+            case actor_zeta::msg_id<arithmetic_test_actor, &arithmetic_test_actor::coro_concat>:
+                actor_zeta::dispatch(this, &arithmetic_test_actor::coro_concat, msg);
+                break;
+        }
+    }
+};
+
+TEST_CASE("coroutine methods with unique_future return type") {
+    auto* resource = std::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<arithmetic_test_actor>(resource);
+
+    SECTION("coro_add returns ready future") {
+        // Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &arithmetic_test_actor::coro_add, 10, 20
+        );
+        actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.available());
@@ -332,8 +375,15 @@ TEST_CASE("sync methods with unique_future return type") {
         REQUIRE(result == 30);
     }
 
-    SECTION("sync_concat returns ready future") {
-        auto future = sync_concat("hello", " world");
+    SECTION("coro_concat returns ready future") {
+        // Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &arithmetic_test_actor::coro_concat,
+            std::string("hello"), std::string(" world")
+        );
+        actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.available());
@@ -343,7 +393,15 @@ TEST_CASE("sync methods with unique_future return type") {
     }
 
     SECTION("ready future - no waiting, instant get()") {
-        auto future = sync_add(5, 7);
+        // Use send() instead of direct call
+        auto future = actor_zeta::send(
+            actor.get(),
+            actor_zeta::address_t::empty_address(),
+            &arithmetic_test_actor::coro_add, 5, 7
+        );
+        actor->resume(100);
+
+        REQUIRE(future.available());
 
         // get() should return immediately without blocking
         auto start = std::chrono::steady_clock::now();
@@ -370,12 +428,11 @@ public:
         : actor_zeta::basic_actor<future_test_actor>(res) {
     }
 
-    // Sync method returning ready future via make_ready_future()
+    // All methods must be coroutines
     actor_zeta::unique_future<int> sync_add(int a, int b) {
-        return actor_zeta::make_ready_future(resource(), a + b);
+        co_return a + b;
     }
 
-    // Async coroutine method
     actor_zeta::unique_future<int> async_multiply(int a, int b) {
         co_return a * b;
     }
@@ -508,14 +565,20 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 // This test ensures basic coroutine lifecycle works without crashing.
 
 TEST_CASE("coroutine cleanup does not crash") {
-    auto* resource =std::pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
 
     SECTION("simple coroutine with co_return") {
         // This test ensures basic coroutine lifecycle completes without crash
         // Memory leak detection requires ASAN or Valgrind
         {
-            auto future = actor->coro_int();  // co_return 42
+            // FIXED: Use send() instead of direct call (Actor Model)
+            auto future = actor_zeta::send(
+                actor.get(),
+                actor_zeta::address_t::empty_address(),
+                &coroutine_test_actor::coro_int
+            );
+            actor->resume(100);
             REQUIRE(future.valid());
             REQUIRE(future.available());
             int result = std::move(future).get();
@@ -529,7 +592,13 @@ TEST_CASE("coroutine cleanup does not crash") {
     SECTION("multiple coroutines") {
         // Stress test - create/destroy many coroutines
         for (int i = 0; i < 100; ++i) {
-            auto future = actor->coro_int();
+            // FIXED: Use send() instead of direct call (Actor Model)
+            auto future = actor_zeta::send(
+                actor.get(),
+                actor_zeta::address_t::empty_address(),
+                &coroutine_test_actor::coro_int
+            );
+            actor->resume(100);
             int result = std::move(future).get();
             REQUIRE(result == 42);
         }
@@ -539,7 +608,13 @@ TEST_CASE("coroutine cleanup does not crash") {
 
     SECTION("coroutine with string") {
         {
-            auto future = actor->coro_string();  // co_return "hello"
+            // FIXED: Use send() instead of direct call (Actor Model)
+            auto future = actor_zeta::send(
+                actor.get(),
+                actor_zeta::address_t::empty_address(),
+                &coroutine_test_actor::coro_string
+            );
+            actor->resume(100);
             REQUIRE(future.valid());
             std::string result = std::move(future).get();
             REQUIRE(result == "hello");
@@ -549,7 +624,13 @@ TEST_CASE("coroutine cleanup does not crash") {
 
     SECTION("void coroutine") {
         {
-            auto future = actor->coro_void();  // co_return;
+            // FIXED: Use send() instead of direct call (Actor Model)
+            auto future = actor_zeta::send(
+                actor.get(),
+                actor_zeta::address_t::empty_address(),
+                &coroutine_test_actor::coro_void
+            );
+            actor->resume(100);
             REQUIRE(future.valid());
             std::move(future).get();  // Should not throw
         }

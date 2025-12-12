@@ -77,7 +77,7 @@ actor_zeta::unique_future<void> dummy_supervisor::check(std::unique_ptr<dummy_da
     REQUIRE(data->number == expected_data.number);
     REQUIRE(data->name.size() == expected_data.name.size());
     REQUIRE(data->name == expected_data.name);
-    return actor_zeta::make_ready_future_void(resource());
+    co_return;
 }
 
 TEST_CASE("base move test") {

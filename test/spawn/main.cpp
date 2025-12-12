@@ -26,9 +26,9 @@ public:
 
     ~storage_t() = default;
 
-    void update() {}
-    void find() {}
-    void remove() {}
+    actor_zeta::unique_future<void> update() { co_return; }
+    actor_zeta::unique_future<void> find() { co_return; }
+    actor_zeta::unique_future<void> remove() { co_return; }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &storage_t::update,
@@ -126,19 +126,19 @@ public:
     actor_zeta::unique_future<void> create_actor() {
         auto uptr = actor_zeta::spawn<storage_t>(resource_, this);
         actors_.emplace_back(std::move(uptr));
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     actor_zeta::unique_future<void> create_supervisor() {
         auto uptr = actor_zeta::spawn<dummy_supervisor_sub>(resource_, this);
         supervisor_.emplace_back(std::move(uptr));
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     actor_zeta::unique_future<void> create_supervisor_custom_resource() {
         auto uptr = actor_zeta::spawn<dummy_supervisor_sub>(resource_);
         supervisor_.emplace_back(std::move(uptr));
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

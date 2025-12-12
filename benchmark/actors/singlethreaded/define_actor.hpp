@@ -26,7 +26,7 @@ public:
         if (partner_) {
             actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
         }
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> ping(Args...) {
@@ -34,12 +34,12 @@ public:
         if (partner_) {
             actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
         }
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     actor_zeta::unique_future<void> pong(Args...) {
         // Receive pong, do nothing (end of exchange)
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

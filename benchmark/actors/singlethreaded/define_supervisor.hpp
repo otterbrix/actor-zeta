@@ -40,7 +40,7 @@ public:
         // Set partners
         actor_0_->set_partner(actor_1_.get());
         actor_1_->set_partner(actor_0_.get());
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     actor_zeta::unique_future<void> send() {
@@ -55,7 +55,7 @@ public:
             actor_1_->resume(1);
             actor_0_->resume(1);
         }
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     void behavior(actor_zeta::mailbox::message* msg) {

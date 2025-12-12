@@ -35,14 +35,14 @@ public:
         if (partner_) {
             actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
         }
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     // Receives PONG, increments counter (end of exchange)
     actor_zeta::unique_future<void> pong(Args...) {
         ++ping_pong_counter;
         ping_pong_done.store(true, std::memory_order_release);
-        return actor_zeta::make_ready_future_void(this->resource());
+        co_return;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

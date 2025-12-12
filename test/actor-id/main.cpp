@@ -79,7 +79,7 @@ actor_zeta::unique_future<void> dummy_supervisor::create() {
     ids_.insert(reinterpret_cast<int64_t>(uptr.get()));
     ///scheduler_test()->enqueue(uptr.get());
     storage_.emplace_back(std::move(uptr));
-    return actor_zeta::make_ready_future_void(resource_);
+    co_return;
 }
 
 TEST_CASE("actor id match") {
