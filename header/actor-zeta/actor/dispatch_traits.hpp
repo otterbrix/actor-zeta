@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 
 #include <actor-zeta/detail/callable_trait.hpp>
@@ -22,24 +23,28 @@ namespace actor_zeta {
         // Coroutines MUST NOT have const& parameters - they become dangling after co_await
         // =========================================================================
 
-        /// @brief Detect if T is const lvalue reference (const U&)
+        /// @brief Concept: T is const lvalue reference (const U&)
         template<typename T>
-        struct is_const_lvalue_ref : std::false_type {};
+        concept const_lvalue_ref = std::is_lvalue_reference_v<T> && std::is_const_v<std::remove_reference_t<T>>;
 
-        template<typename T>
-        struct is_const_lvalue_ref<const T&> : std::true_type {};
-
-        /// @brief Check if any type in parameter pack is const lvalue ref
+        /// @brief Concept: Any type in parameter pack is const lvalue ref
         template<typename... Args>
-        struct has_const_lvalue_ref_args : std::disjunction<is_const_lvalue_ref<Args>...> {};
+        concept has_any_const_lvalue_ref = (const_lvalue_ref<Args> || ...);
 
-        /// @brief Check if any type in type_list is const lvalue ref
+        /// @brief Helper to check const lvalue refs in type_list
+        namespace type_list_check {
+            template<typename ArgsList>
+            struct has_const_ref_impl;
+
+            template<typename... Args>
+            struct has_const_ref_impl<type_traits::type_list<Args...>> {
+                static constexpr bool value = has_any_const_lvalue_ref<Args...>;
+            };
+        }
+
+        /// @brief Concept: type_list contains const lvalue ref
         template<typename ArgsList>
-        struct has_const_lvalue_ref_in_list;
-
-        template<typename... Args>
-        struct has_const_lvalue_ref_in_list<type_traits::type_list<Args...>>
-            : has_const_lvalue_ref_args<Args...> {};
+        concept type_list_has_const_lvalue_ref = type_list_check::has_const_ref_impl<ArgsList>::value;
 
         /// @brief Compile-time check: method must return unique_future<T>
         /// @tparam MethodPtr Pointer to member function
@@ -63,7 +68,7 @@ namespace actor_zeta {
             using args_types = typename trait::args_types;
 
             static constexpr bool is_coroutine = type_traits::is_unique_future_v<result_type>;
-            static constexpr bool has_const_ref = has_const_lvalue_ref_in_list<args_types>::value;
+            static constexpr bool has_const_ref = type_list_has_const_lvalue_ref<args_types>;
 
             // Coroutines MUST NOT have const& parameters (use-after-free after co_await)
             static constexpr bool is_safe = !is_coroutine || !has_const_ref;
@@ -115,15 +120,23 @@ namespace actor_zeta {
             typename type_traits::is_unique_future<T>::value_type,
             T>;
 
+        /// @brief Check if SearchPtr matches CurrentPtr (true only if same type AND same value)
         template<auto SearchPtr, auto CurrentPtr>
-        struct is_same_method_ptr : std::false_type {};
+        struct is_same_ptr {
+            static constexpr bool value = false;
+        };
 
         template<auto Ptr>
-        struct is_same_method_ptr<Ptr, Ptr> : std::true_type {};
+        struct is_same_ptr<Ptr, Ptr> {
+            static constexpr bool value = true;
+        };
+
+        template<auto SearchPtr, auto CurrentPtr>
+        inline constexpr bool is_same_ptr_v = is_same_ptr<SearchPtr, CurrentPtr>::value;
 
         template<auto SearchPtr, auto... MethodPtrs>
         static constexpr uint64_t find_method_index() {
-            constexpr bool matches[] = {is_same_method_ptr<SearchPtr, MethodPtrs>::value...};
+            constexpr bool matches[] = {is_same_ptr_v<SearchPtr, MethodPtrs>...};
 
             for (std::size_t i = 0; i < sizeof...(MethodPtrs); ++i) {
                 if (matches[i]) {
@@ -208,7 +221,7 @@ namespace actor_zeta {
             -> typename Actor::template unique_future<
                 detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>> {
             // Check if this method matches
-            if constexpr (std::is_same<Method, decltype(FirstMethod)>::value) {
+            if constexpr (std::same_as<Method, decltype(FirstMethod)>) {
                 if (method == FirstMethod) {
                     // Match! Dispatch and return
                     return detail::dispatch_method_impl<Actor, FirstMethod, FirstIndex>(

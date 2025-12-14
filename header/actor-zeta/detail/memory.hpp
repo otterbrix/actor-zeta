@@ -1,31 +1,21 @@
 #pragma once
 
 #include <cassert>
+#include <concepts>
 
 #include <memory_resource>
 
 namespace actor_zeta { namespace pmr {
 
+    /// @brief Concept to check if type has a static 'placement' member
     template<typename T>
-    struct has_placement_check {
-    private:
-        typedef char one;
-        typedef struct {
-            char arr[2];
-        } two;
-
-        template<typename U>
-        static one test(decltype(U::placement)*);
-        template<typename U>
-        static two test(...);
-
-    public:
-        enum { value = sizeof(test<T>(nullptr)) == sizeof(one) };
+    concept has_placement = requires {
+        { T::placement };
     };
 
     template<class Target, class... Args>
-    typename std::enable_if<has_placement_check<Target>::value, Target*>::type
-    allocate_ptr(std::pmr::memory_resource* resource, Args&&... args) {
+        requires has_placement<Target>
+    Target* allocate_ptr(std::pmr::memory_resource* resource, Args&&... args) {
         assert(resource);
         auto* buffer = resource->allocate(sizeof(Target), alignof(Target));
         auto* target_ptr = new (buffer, Target::placement) Target(std::forward<Args>(args)...);
@@ -33,8 +23,8 @@ namespace actor_zeta { namespace pmr {
     }
 
     template<class Target, class... Args>
-    typename std::enable_if<!has_placement_check<Target>::value, Target*>::type
-    allocate_ptr(std::pmr::memory_resource* resource, Args&&... args) {
+        requires(!has_placement<Target>)
+    Target* allocate_ptr(std::pmr::memory_resource* resource, Args&&... args) {
         assert(resource);
         auto* buffer = resource->allocate(sizeof(Target), alignof(Target));
         auto* target_ptr = new (buffer) Target(std::forward<Args>(args)...);

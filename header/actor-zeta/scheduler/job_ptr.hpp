@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <concepts>
 #include <cstddef>
 #include <type_traits>
 
@@ -18,19 +19,16 @@ namespace actor_zeta { namespace scheduler {
             return static_cast<T*>(ptr)->resume(max_throughput);
         }
 
-        // SFINAE check for resume method
+        /// @brief Concept to check if type has resume(size_t) method
+        template<typename T>
+        concept resumable_type = requires(T* t, size_t n) {
+            { t->resume(n) } -> std::same_as<resume_info>;
+        };
+
+        /// @brief Type trait for has_resume_method (using concept)
         template<class T>
         struct has_resume_method {
-        private:
-            template<class U>
-            static auto test(int) -> decltype(std::declval<U*>()->resume(std::declval<size_t>()),
-                                              std::true_type{});
-
-            template<class>
-            static std::false_type test(...);
-
-        public:
-            static constexpr bool value = decltype(test<T>(0))::value;
+            static constexpr bool value = resumable_type<T>;
         };
 
     } // namespace detail

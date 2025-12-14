@@ -11,131 +11,120 @@
 
 namespace actor_zeta::detail {
 
+    /// @brief Concept for message_id type
     template<typename Name>
-    typename std::enable_if<
-        std::is_same<typename std::decay<Name>::type, mailbox::message_id>::value,
-        mailbox::message_id>::type
-    to_message_id(Name&& name) {
+    concept is_message_id = std::is_same_v<std::decay_t<Name>, mailbox::message_id>;
+
+    /// @brief Concept for types convertible to message_id (enum or integral)
+    template<typename Name>
+    concept is_convertible_to_message_id =
+        !is_message_id<Name> &&
+        (std::is_enum_v<std::decay_t<Name>> || std::is_integral_v<std::decay_t<Name>>);
+
+    /// @brief Concept for valid message name types
+    template<typename Name>
+    concept valid_message_name =
+        is_message_id<Name> || is_convertible_to_message_id<Name>;
+
+    template<typename Name>
+        requires is_message_id<Name>
+    mailbox::message_id to_message_id(Name&& name) {
         return std::forward<Name>(name);
     }
 
     template<typename Name>
-    typename std::enable_if<
-        !std::is_same<typename std::decay<Name>::type, mailbox::message_id>::value &&
-            (std::is_enum<typename std::decay<Name>::type>::value ||
-             std::is_integral<typename std::decay<Name>::type>::value),
-        mailbox::message_id>::type
-    to_message_id(Name&& name) {
+        requires is_convertible_to_message_id<Name>
+    mailbox::message_id to_message_id(Name&& name) {
         return mailbox::make_message_id(static_cast<uint64_t>(name));
     }
 
+    // Legacy type trait for backward compatibility
     template<typename Name>
     struct is_valid_name_type {
         typedef typename std::decay<Name>::type decayed_type;
-        static const bool value =
-            std::is_same<decayed_type, mailbox::message_id>::value ||
-            std::is_enum<decayed_type>::value ||
-            std::is_integral<decayed_type>::value;
+        static const bool value = valid_message_name<Name>;
     };
 
     // =====================================================================
-    // Type validation traits for message arguments
+    // Type validation concepts for message arguments
     // =====================================================================
 
-    /// @brief Check if type can be stored in RTT (message body)
+    /// @brief Concept: type can be stored in RTT (message body)
     /// Requirements:
     /// - Not a reference (will be stored by value)
     /// - Not abstract
     /// - Move or copy constructible
     template<typename T>
-    struct is_valid_rtt_type {
-        using decayed_type = typename std::decay<T>::type;
+    concept valid_rtt_type =
+        !std::is_reference_v<T> &&
+        !std::is_abstract_v<std::decay_t<T>> &&
+        (std::is_copy_constructible_v<std::decay_t<T>> ||
+         std::is_move_constructible_v<std::decay_t<T>>);
 
-        static constexpr bool value =
-            !std::is_reference<T>::value &&
-            !std::is_abstract<decayed_type>::value &&
-            (std::is_copy_constructible<decayed_type>::value ||
-             std::is_move_constructible<decayed_type>::value);
-    };
-
+    // Legacy compatibility
     template<typename T>
-    inline constexpr bool is_valid_rtt_type_v = is_valid_rtt_type<T>::value;
+    inline constexpr bool is_valid_rtt_type_v = valid_rtt_type<T>;
 
-    /// @brief Check if provided argument type is compatible with expected method parameter type
+    /// @brief Concept: provided argument type is compatible with expected method parameter type
     /// After decay, types should be convertible
     template<typename Expected, typename Provided>
-    struct is_convertible_arg {
-        using expected_decay = typename std::decay<Expected>::type;
-        using provided_decay = typename std::decay<Provided>::type;
+    concept convertible_arg =
+        std::is_same_v<std::decay_t<Expected>, std::decay_t<Provided>> ||
+        std::is_convertible_v<std::decay_t<Provided>, std::decay_t<Expected>>;
 
-        static constexpr bool value =
-            std::is_same<expected_decay, provided_decay>::value ||
-            std::is_convertible<provided_decay, expected_decay>::value;
-    };
-
+    // Legacy compatibility
     template<typename Expected, typename Provided>
-    inline constexpr bool is_convertible_arg_v = is_convertible_arg<Expected, Provided>::value;
+    inline constexpr bool is_convertible_arg_v = convertible_arg<Expected, Provided>;
 
-    template<bool...>
-    struct bool_pack {};
-
-    template<bool... values>
-    using all_true = std::is_same<bool_pack<values..., true>, bool_pack<true, values...>>;
-
+    /// @brief Concept: all types are valid for RTT storage
     template<typename... Args>
-    struct all_valid_rtt_types : all_true<is_valid_rtt_type<Args>::value...> {};
+    concept all_valid_rtt = (valid_rtt_type<Args> && ...);
 
+    // Legacy compatibility
     template<typename... Args>
-    inline constexpr bool all_valid_rtt_types_v = all_valid_rtt_types<Args...>::value;
+    inline constexpr bool all_valid_rtt_types_v = all_valid_rtt<Args...>;
 
     // =====================================================================
     // Type list argument validation
     // =====================================================================
 
-    /// @brief Check if all provided args are compatible with expected args (type_list)
+    namespace detail_args {
+        // Helper to check args compatibility with index sequence
+        template<typename ExpectedList, typename ProvidedList, typename IndexSeq>
+        struct args_compatible_impl;
+
+        template<typename... Expected, typename... Provided, std::size_t... Is>
+        struct args_compatible_impl<
+            type_traits::type_list<Expected...>,
+            type_traits::type_list<Provided...>,
+            std::index_sequence<Is...>> {
+            static constexpr bool value =
+                (convertible_arg<
+                    type_traits::type_list_at_t<type_traits::type_list<Expected...>, Is>,
+                    type_traits::type_list_at_t<type_traits::type_list<Provided...>, Is>> && ...);
+        };
+    } // namespace detail_args
+
+    /// @brief Concept: all provided args are compatible with expected args (type_list)
     template<typename ExpectedList, typename ProvidedList>
-    struct args_compatible;
+    concept compatible_args = requires {
+        requires (type_traits::type_list_size_v<ExpectedList> ==
+                  type_traits::type_list_size_v<ProvidedList>);
+    } && detail_args::args_compatible_impl<
+            ExpectedList, ProvidedList,
+            std::make_index_sequence<type_traits::type_list_size_v<ExpectedList>>>::value;
 
-    // Base case: empty lists are compatible
-    template<>
-    struct args_compatible<type_traits::type_list<>, type_traits::type_list<>> {
-        static constexpr bool value = true;
-    };
-
-    // Mismatch count
-    template<typename... Expected>
-    struct args_compatible<type_traits::type_list<Expected...>, type_traits::type_list<>> {
-        static constexpr bool value = false;
-    };
-
-    template<typename... Provided>
-    struct args_compatible<type_traits::type_list<>, type_traits::type_list<Provided...>> {
-        static constexpr bool value = false;
-    };
-
-    // Recursive check
-    template<typename ExpHead, typename... ExpTail, typename ProvHead, typename... ProvTail>
-    struct args_compatible<
-        type_traits::type_list<ExpHead, ExpTail...>,
-        type_traits::type_list<ProvHead, ProvTail...>> {
-        static constexpr bool value =
-            is_convertible_arg<ExpHead, ProvHead>::value &&
-            args_compatible<
-                type_traits::type_list<ExpTail...>,
-                type_traits::type_list<ProvTail...>>::value;
-    };
-
+    // Legacy compatibility
     template<typename ExpectedList, typename ProvidedList>
-    inline constexpr bool args_compatible_v = args_compatible<ExpectedList, ProvidedList>::value;
+    inline constexpr bool args_compatible_v = compatible_args<ExpectedList, ProvidedList>;
 
-    /// @brief Check that all provided args are valid for RTT storage
+    /// @brief Concept: all provided args are valid for RTT storage
     template<typename... Args>
-    struct all_args_storable {
-        static constexpr bool value = all_valid_rtt_types<typename std::decay<Args>::type...>::value;
-    };
+    concept all_args_storable = all_valid_rtt<std::decay_t<Args>...>;
 
+    // Legacy compatibility
     template<typename... Args>
-    inline constexpr bool all_args_storable_v = all_args_storable<Args...>::value;
+    inline constexpr bool all_args_storable_v = all_args_storable<Args...>;
 
     // =====================================================================
     // make_message<R>() - creates message + promise in one call
@@ -150,9 +139,8 @@ namespace actor_zeta::detail {
     /// @param name Message command/name
     /// @return pair<message_ptr, unique_future<R>> - message and future for result
     template<typename R = void, typename Name>
-    typename std::enable_if<
-        is_valid_name_type<Name>::value,
-        std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>>::type
+        requires valid_message_name<Name>
+    std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>
     make_message(
         std::pmr::memory_resource* resource,
         actor::address_t sender,
@@ -174,10 +162,8 @@ namespace actor_zeta::detail {
     /// @param args Message arguments
     /// @return pair<message_ptr, unique_future<R>> - message and future for result
     template<typename R = void, typename Name, typename... Args>
-    typename std::enable_if<
-        is_valid_name_type<Name>::value &&
-            all_valid_rtt_types<std::decay_t<Args>...>::value,
-        std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>>::type
+        requires(valid_message_name<Name> && all_valid_rtt_types_v<std::decay_t<Args>...>)
+    std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>
     make_message(
         std::pmr::memory_resource* resource,
         actor::address_t sender,

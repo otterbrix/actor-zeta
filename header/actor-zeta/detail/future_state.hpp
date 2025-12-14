@@ -604,7 +604,8 @@ namespace actor_zeta { namespace detail {
 
         /// @brief Set value directly in-place (ZERO ALLOCATION)
         /// If forward_target_ is set, forwards directly (also ZERO ALLOCATION!)
-        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        template<typename U = T>
+            requires(!std::is_void_v<U>)
         void set_value(U&& value) noexcept {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: set_value() on deleted state!");
@@ -635,7 +636,8 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Get value reference (only for non-void) - returns T&
-        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        template<typename U = T>
+            requires(!std::is_void_v<U>)
         [[nodiscard]] U& get_value() noexcept {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: get_value() on deleted state!");
@@ -646,7 +648,8 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Get const value reference (only for non-void) - returns const T&
-        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        template<typename U = T>
+            requires(!std::is_void_v<U>)
         [[nodiscard]] const U& get_value() const noexcept {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: get_value() on deleted state!");
@@ -657,7 +660,8 @@ namespace actor_zeta { namespace detail {
         }
 
         /// @brief Take value and mark consumed (only for non-void) - returns T
-        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
+        template<typename U = T>
+            requires(!std::is_void_v<U>)
         [[nodiscard]] U take_value() noexcept {
             auto expected = future_state_enum::ready;
             bool transitioned = state_.compare_exchange_strong(expected, future_state_enum::consuming,
@@ -672,8 +676,9 @@ namespace actor_zeta { namespace detail {
 
         /// @brief Mark as ready (only for void)
         /// @note Forwards to target BEFORE setting ready (same pattern as set_value)
-        template<typename U = T, std::enable_if_t<std::is_void_v<U>, int> = 0>
-        void set_ready() noexcept {
+        void set_ready() noexcept
+            requires(std::is_void_v<T>)
+        {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: set_ready() on deleted state!");
 #endif

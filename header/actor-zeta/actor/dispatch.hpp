@@ -30,43 +30,51 @@ namespace actor_zeta {
 
     namespace dispatch_validation {
 
-        /// @brief Check if type is non-const lvalue reference (T& but not const T&)
+        /// @brief Concept: T is non-const lvalue reference (T& but not const T&)
         template<typename T>
-        struct is_non_const_lvalue_ref : std::false_type {};
+        concept non_const_lvalue_ref = std::is_lvalue_reference_v<T> && !std::is_const_v<std::remove_reference_t<T>>;
 
-        template<typename T>
-        struct is_non_const_lvalue_ref<T&> : std::bool_constant<!std::is_const_v<T>> {};
+        /// @brief Concept: Any type in parameter pack is non-const lvalue ref
+        template<typename... Args>
+        concept has_any_non_const_lvalue_ref = (non_const_lvalue_ref<Args> || ...);
 
-        template<typename T>
-        inline constexpr bool is_non_const_lvalue_ref_v = is_non_const_lvalue_ref<T>::value;
+        /// @brief Concept: All types in parameter pack are valid for RTT storage
+        template<typename... Args>
+        concept all_valid_rtt_types = (detail::is_valid_rtt_type_v<type_traits::decay_t<Args>> && ...);
 
-        /// @brief Validate that all argument types in the type_list are valid for RTT storage
-        /// and do NOT contain non-const lvalue references (T&)
+        /// @brief Helper to extract types from type_list for concept
+        namespace detail {
+            template<typename ArgsList>
+            struct args_list_traits;
+
+            template<typename... Args>
+            struct args_list_traits<type_traits::type_list<Args...>> {
+                static constexpr bool all_valid = all_valid_rtt_types<Args...>;
+                static constexpr bool no_non_const_refs = !has_any_non_const_lvalue_ref<Args...>;
+            };
+
+            // Empty list specialization
+            template<>
+            struct args_list_traits<type_traits::type_list<>> {
+                static constexpr bool all_valid = true;
+                static constexpr bool no_non_const_refs = true;
+            };
+        }
+
+        /// @brief Concept: all argument types in type_list are valid for RTT storage
         template<typename ArgsList>
-        struct validate_args_list;
+        concept valid_args_list = detail::args_list_traits<ArgsList>::all_valid;
 
-        template<>
-        struct validate_args_list<type_traits::type_list<>> {
-            static constexpr bool value = true;
-            static constexpr bool no_non_const_refs = true;
-        };
+        /// @brief Concept: no non-const lvalue refs in type_list
+        template<typename ArgsList>
+        concept no_non_const_refs_in_list = detail::args_list_traits<ArgsList>::no_non_const_refs;
 
-        template<typename Head, typename... Tail>
-        struct validate_args_list<type_traits::type_list<Head, Tail...>> {
-            using decay_head = type_traits::decay_t<Head>;
-            static constexpr bool value =
-                detail::is_valid_rtt_type_v<decay_head> &&
-                validate_args_list<type_traits::type_list<Tail...>>::value;
-            static constexpr bool no_non_const_refs =
-                !is_non_const_lvalue_ref_v<Head> &&
-                validate_args_list<type_traits::type_list<Tail...>>::no_non_const_refs;
-        };
+        // Legacy compatibility
+        template<typename ArgsList>
+        inline constexpr bool validate_args_list_v = valid_args_list<ArgsList>;
 
         template<typename ArgsList>
-        inline constexpr bool validate_args_list_v = validate_args_list<ArgsList>::value;
-
-        template<typename ArgsList>
-        inline constexpr bool no_non_const_refs_v = validate_args_list<ArgsList>::no_non_const_refs;
+        inline constexpr bool no_non_const_refs_v = no_non_const_refs_in_list<ArgsList>;
 
     } // namespace dispatch_validation
 

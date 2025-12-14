@@ -39,10 +39,10 @@ namespace actor_zeta::actor {
         void* ptr_;
     };
 
-    static_assert(!std::is_default_constructible<address_t>::value, "");
-    static_assert(std::is_move_constructible<address_t>::value, "");
-    static_assert(std::is_move_assignable<address_t>::value, "");
-    static_assert(std::is_copy_constructible<address_t>::value, "");
-    static_assert(std::is_copy_assignable<address_t>::value, "");
+    static_assert(!std::is_default_constructible_v<address_t>);
+    static_assert(std::is_move_constructible_v<address_t>);
+    static_assert(std::is_move_assignable_v<address_t>);
+    static_assert(std::is_copy_constructible_v<address_t>);
+    static_assert(std::is_copy_assignable_v<address_t>);
 
 } // namespace actor_zeta::actor
