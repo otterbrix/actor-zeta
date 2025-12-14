@@ -39,7 +39,8 @@ bool wait_available_with_timeout(actor_zeta::unique_future<T>& future,
     return true;
 }
 
-constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(10);
+// Increased timeout for CI environments with sanitizers (TSan adds 10-50x overhead)
+constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(60);
 
 // Simple test actor for refcount testing
 class refcount_test_actor final : public actor_zeta::basic_actor<refcount_test_actor> {
