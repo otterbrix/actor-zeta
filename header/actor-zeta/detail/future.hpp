@@ -551,18 +551,18 @@ namespace actor_zeta {
             /// @brief Allocate coroutine frame using actor's memory_resource
             /// @note Compiler passes coroutine arguments to operator new
             /// @note First argument is typically 'this' pointer (actor*)
-            /// @note We pass arguments without std::forward to avoid GCC 11 ambiguity with collapsed references
-            template<typename First, typename... Args>
-            static void* operator new(std::size_t size, First&& first, Args&&... args) {
-                // Don't use std::forward - just pass as lvalues to avoid GCC 11 ambiguity
-                auto* res = promise_type_base::extract_resource_from_args(first, args...);
+            /// @note Using const Args&... to avoid GCC 11 issues with forwarding references
+            ///       and move-only types in coroutine signatures
+            template<typename... Args>
+            static void* operator new(std::size_t size, const Args&... args) {
+                auto* res = promise_type_base::extract_resource_from_args(args...);
                 return detail::allocate_coro_frame(res, size);
             }
 
             /// @brief Matching placement delete (called if promise constructor throws)
             /// @note Required for exception safety, though we compile with -fno-exceptions
-            template<typename First, typename... Args>
-            static void operator delete(void* ptr, std::size_t size, First&&, Args&&...) noexcept {
+            template<typename... Args>
+            static void operator delete(void* ptr, std::size_t size, const Args&...) noexcept {
                 detail::deallocate_coro_frame(ptr, size);
             }
 
