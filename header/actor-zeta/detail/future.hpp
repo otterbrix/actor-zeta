@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <concepts>
 #include <memory_resource>
 #include <new>
 #include <thread>
@@ -16,11 +17,22 @@
 
 namespace actor_zeta {
 
+    namespace detail {
+        /// @brief Concept to check if type has resource() method returning memory_resource*
+        template<typename T>
+        concept has_resource_method = requires(T* ptr) {
+            { ptr->resource() } -> std::convertible_to<std::pmr::memory_resource*>;
+        };
+    } // namespace detail
+
     template<typename T>
     class unique_future;
 
+    template<typename T>
+    class promise;
+
     /// @brief Unified promise<T> - works for both void and non-void types
-    /// Uses SFINAE to provide appropriate set_value() overloads
+    /// Uses C++20 requires clauses to provide appropriate set_value() overloads
     template<typename T>
     class promise final {
     private:
@@ -82,7 +94,8 @@ namespace actor_zeta {
         /// @brief Set value (non-void types) - perfect forwarding
         /// @note Uses forwarding reference to handle both rvalue and lvalue
         /// @note Accepts any type convertible to T (e.g., const char* → std::string)
-        template<typename U, std::enable_if_t<!std::is_void_v<T> && std::is_constructible_v<T, U&&>, int> = 0>
+        template<typename U>
+            requires(!std::is_void_v<T> && std::is_constructible_v<T, U&&>)
         void set_value(U&& value) {
             assert(state_ && "set_value() on moved-from promise");
             if (state_->is_cancelled()) {
@@ -93,14 +106,22 @@ namespace actor_zeta {
         }
 
         /// @brief Set value (void type) - no arguments
-        template<typename U = T, std::enable_if_t<std::is_void_v<U>, int> = 0>
-        void set_value() {
+        void set_value()
+            requires(std::is_void_v<T>)
+        {
             assert(state_ && "set_value() on moved-from promise");
             if (state_->is_cancelled()) {
                 assert(false && "set_value() on orphaned/cancelled promise");
                 return;
             }
             state_->set_ready();
+        }
+
+        /// @brief Set error state with error code
+        /// @param ec The error code describing the failure
+        void error(std::error_code ec) {
+            assert(state_ && "error() on moved-from promise");
+            state_->error(ec);
         }
 
         /// @brief Check if promise has valid state
@@ -168,7 +189,8 @@ namespace actor_zeta {
         /// @note SAFE: Stores as future_state_base* (common base class) - NO UB!
         /// @note Result delivery happens via result_slot mechanism, not through behavior() return
         /// @warning The typed result is DISCARDED - this is intentional for behavior() pattern
-        template<typename U, std::enable_if_t<is_void_type && !std::is_void_v<U>, int> = 0>
+        template<typename U>
+            requires(is_void_type && !std::is_void_v<U>)
         unique_future(unique_future<U>&& other) noexcept
             : state_()                    // Default init first
             , resource_(other.resource()) // Get resource while other.state_ still valid
@@ -181,9 +203,9 @@ namespace actor_zeta {
 
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
-                // Cancel current if pending
-                if (state_ && !state_->is_ready()) {
-                    state_->set_state(detail::future_state_enum::cancelled);
+                // Cancel current only if still pending (don't overwrite error/cancelled/ready)
+                if (state_ && state_->is_pending()) {
+                    state_->cancelled();
                 }
 
                 state_ = std::move(other.state_);
@@ -197,28 +219,28 @@ namespace actor_zeta {
         ~unique_future() noexcept = default;
 
         // get() for non-void types - returns T
-        template<typename U = T>
-        [[nodiscard]] std::enable_if_t<!std::is_void_v<U>, U> get() && {
+        [[nodiscard]] T get() &&
+            requires(!std::is_void_v<T>)
+        {
             assert(state_ && "get() on invalid future");
             wait_for_ready();
-            U result = state_->take_value();
+            T result = state_->take_value();
             state_ = nullptr;
             return result;
         }
 
         // get() for void type - returns void
-        template<typename U = T>
-        std::enable_if_t<std::is_void_v<U>, void> get() && {
+        void get() &&
+            requires(std::is_void_v<T>)
+        {
             assert(state_ && "get() on invalid future");
             wait_for_ready();
             state_ = nullptr;
         }
 
         // Deleted lvalue get()
-        template<typename U = T>
-        std::enable_if_t<!std::is_void_v<U>, U> get() & = delete;
-        template<typename U = T>
-        std::enable_if_t<std::is_void_v<U>, void> get() & = delete;
+        T get() & requires(!std::is_void_v<T>) = delete;
+        void get() & requires(std::is_void_v<T>) = delete;
 
         /// @brief Check if result is available (ready or consumed)
         [[nodiscard]] bool available() const noexcept {
@@ -228,6 +250,11 @@ namespace actor_zeta {
         /// @brief Check if future failed (error or cancelled)
         [[nodiscard]] bool failed() const noexcept {
             return state_ && state_->is_failed();
+        }
+
+        /// @brief Get error code (valid when failed() == true)
+        [[nodiscard]] std::error_code error() const noexcept {
+            return state_ ? state_->error() : std::error_code{};
         }
 
         /// @brief Check if future has valid state
@@ -259,7 +286,7 @@ namespace actor_zeta {
 
         void cancel() noexcept {
             if (state_) {
-                state_->set_state(detail::future_state_enum::cancelled);
+                state_->cancelled();
             }
         }
 
@@ -270,8 +297,9 @@ namespace actor_zeta {
         /// @brief Forward result to target promise (non-void types)
         /// @note Always sets up forwarding chain (handles both ready and pending)
         /// @note Uses set_forward_target which handles ready states internally
-        template<typename U = T, std::enable_if_t<!std::is_void_v<U>, int> = 0>
-        void forward_to(promise<T>& target) {
+        void forward_to(promise<T>& target)
+            requires(!std::is_void_v<T>)
+        {
             if (!state_)
                 return;
             auto* target_state = static_cast<detail::future_state<T>*>(target.internal_state_base());
@@ -280,8 +308,9 @@ namespace actor_zeta {
 
         /// @brief Forward completion to target promise (void type)
         /// @note Always sets up forwarding chain (handles both ready and pending)
-        template<typename U = T, std::enable_if_t<std::is_void_v<U>, int> = 0>
-        void forward_to(promise<void>& target) {
+        void forward_to(promise<void>& target)
+            requires(std::is_void_v<T>)
+        {
             if (!state_)
                 return;
             auto* target_state = static_cast<detail::future_state<void>*>(target.internal_state_base());
@@ -303,7 +332,7 @@ namespace actor_zeta {
                 return future_.available();
             }
 
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
+            detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> caller) noexcept {
                 if (future_.available()) {
                     return caller;
                 }
@@ -322,7 +351,7 @@ namespace actor_zeta {
                     return caller;
                 }
 
-                return std::noop_coroutine();
+                return detail::noop_coroutine();
             }
 
             auto await_resume() {
@@ -363,7 +392,7 @@ namespace actor_zeta {
                 void* mem = resource_->allocate(sizeof(coroutine_state_type), alignof(coroutine_state_type));
                 state_ = new (mem) coroutine_state_type(resource_);
 
-                auto handle = std::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
+                auto handle = detail::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
                 state_->set_coroutine_owning(handle); // This state owns the coroutine
 
                 // For void: coroutine_state_type* (future_state<void>*) → state_type* (future_state_base*)
@@ -385,14 +414,14 @@ namespace actor_zeta {
 
                     /// @brief Symmetric transfer at coroutine completion
                     /// @return Continuation handle if someone is waiting, else noop
-                    std::coroutine_handle<> await_suspend(
-                        std::coroutine_handle<promise_type> /*h*/
+                    detail::coroutine_handle<> await_suspend(
+                        detail::coroutine_handle<promise_type> /*h*/
                         ) noexcept {
                         // If there's a waiting coroutine, resume it directly
                         if (auto cont = state_->take_continuation()) {
                             return cont; // Symmetric transfer!
                         }
-                        return std::noop_coroutine(); // No waiter - stay suspended
+                        return detail::noop_coroutine(); // No waiter - stay suspended
                     }
 
                     void await_resume() noexcept {}
@@ -424,30 +453,23 @@ namespace actor_zeta {
 
         protected:
             template<typename U>
-            static auto try_get_resource(U* ptr, int) noexcept -> decltype(ptr->resource()) {
-                return ptr->resource();
-            }
-
-            template<typename U>
-            static std::pmr::memory_resource* try_get_resource(U*, ...) noexcept {
-                return nullptr;
-            }
-
-            template<typename U>
-            static std::pmr::memory_resource* extract_impl_dispatch(U&& arg, std::true_type) noexcept {
-                using ptr_type = std::remove_reference_t<U>;
-                return try_get_resource(static_cast<ptr_type>(arg), 0);
-            }
-
-            template<typename U>
-            static std::pmr::memory_resource* extract_impl_dispatch(U&& arg, std::false_type) noexcept {
-                return try_get_resource(&arg, 0);
+            static std::pmr::memory_resource* try_get_resource(U* ptr) noexcept {
+                if constexpr (detail::has_resource_method<U>) {
+                    return ptr->resource();
+                } else {
+                    return nullptr;
+                }
             }
 
             template<typename U>
             static std::pmr::memory_resource* extract_resource_impl(U&& arg) noexcept {
                 using decayed = std::decay_t<U>;
-                return extract_impl_dispatch(std::forward<U>(arg), std::is_pointer<decayed>{});
+                if constexpr (std::is_pointer_v<decayed>) {
+                    using ptr_type = std::remove_reference_t<U>;
+                    return try_get_resource(static_cast<ptr_type>(arg));
+                } else {
+                    return try_get_resource(&arg);
+                }
             }
 
             // Direct overload for std::pmr::memory_resource* - enables lambda-coroutines
@@ -480,31 +502,40 @@ namespace actor_zeta {
         };
 
         // Non-void: has return_value
-        template<typename U, bool IsVoid>
-        struct promise_type_return : promise_type_base {
+        struct promise_type_non_void : promise_type_base {
             using promise_type_base::promise_type_base;
 
-            void return_value(U&& value) noexcept {
+            void return_value(T&& value) noexcept {
                 assert(this->state_ && "return_value() with null state");
-                this->state_->set_value(std::forward<U>(value));
+                this->state_->set_value(std::forward<T>(value));
             }
 
-            void return_value(const U& value) noexcept {
+            void return_value(const T& value) noexcept {
                 assert(this->state_ && "return_value() with null state");
                 this->state_->set_value(value);
             }
 
-            void return_value(unique_future<U>&& ready_future) noexcept {
+            void return_value(unique_future<T>&& ready_future) noexcept {
                 assert(this->state_ && "return_value() with null state");
                 assert(ready_future.valid() && "return_value() with invalid future");
-                U val = std::move(ready_future).get();
+                assert(ready_future.available() && "return_value() requires READY future - use co_await first!");
+                T val = std::move(ready_future).get();
                 this->state_->set_value(std::move(val));
+            }
+
+            /// @brief Return error from coroutine: co_return std::error_code
+            /// @param ec Error code to set on the future
+            /// @note Allows coroutines to signal errors without exceptions
+            void return_value(std::error_code ec) noexcept {
+                assert(this->state_ && "return_value(error_code) with null state");
+                this->state_->error(ec);
             }
         };
 
-        // Void specialization: has return_void
-        template<typename U>
-        struct promise_type_return<U, true> : promise_type_base {
+        // Void: has return_void only
+        // Note: C++ standard forbids having both return_void and return_value for same type
+        // For error handling in void coroutines, use make_error_future() before co_return
+        struct promise_type_void : promise_type_base {
             using promise_type_base::promise_type_base;
 
             void return_void() noexcept {
@@ -513,10 +544,13 @@ namespace actor_zeta {
             }
         };
 
+        // Select correct base using conditional_t
+        using promise_type_selected = std::conditional_t<is_void_type, promise_type_void, promise_type_non_void>;
+
     public:
         // Final promise_type selects correct base
-        struct promise_type : promise_type_return<T, is_void_type> {
-            using promise_type_return<T, is_void_type>::promise_type_return;
+        struct promise_type : promise_type_selected {
+            using promise_type_selected::promise_type_selected;
 
             // =========================================================================
             // Custom coroutine frame allocation using actor's memory_resource
@@ -525,18 +559,18 @@ namespace actor_zeta {
             /// @brief Allocate coroutine frame using actor's memory_resource
             /// @note Compiler passes coroutine arguments to operator new
             /// @note First argument is typically 'this' pointer (actor*)
-            /// @note We pass arguments without std::forward to avoid GCC 11 ambiguity with collapsed references
-            template<typename First, typename... Args>
-            static void* operator new(std::size_t size, First&& first, Args&&... args) {
-                // Don't use std::forward - just pass as lvalues to avoid GCC 11 ambiguity
-                auto* res = promise_type_base::extract_resource_from_args(first, args...);
+            /// @note Using const Args&... to avoid GCC 11 issues with forwarding references
+            ///       and move-only types in coroutine signatures
+            template<typename... Args>
+            static void* operator new(std::size_t size, const Args&... args) {
+                auto* res = promise_type_base::extract_resource_from_args(args...);
                 return detail::allocate_coro_frame(res, size);
             }
 
             /// @brief Matching placement delete (called if promise constructor throws)
             /// @note Required for exception safety, though we compile with -fno-exceptions
-            template<typename First, typename... Args>
-            static void operator delete(void* ptr, std::size_t size, First&&, Args&&...) noexcept {
+            template<typename... Args>
+            static void operator delete(void* ptr, std::size_t size, const Args&...) noexcept {
                 detail::deallocate_coro_frame(ptr, size);
             }
 
@@ -555,63 +589,25 @@ namespace actor_zeta {
 
     private:
         void wait_for_ready() {
-            // Helper to check cancellation and handle error
-            auto check_cancelled = [this]() -> bool {
-                if (state_->is_cancelled()) {
-                    state_ = nullptr;
-                    assert(false && "get() on cancelled future!");
-                    if constexpr (!is_void_type)
-                        std::terminate();
-                    return true;
-                }
-                return false;
+            // Helper to handle failed state (error or cancelled) - consistent for all types
+            auto handle_failed = [this]() {
+                state_ = nullptr;
+                assert(false && "get() on failed/cancelled future!");
+                std::terminate();
             };
 
-            int spin_count = 0;
-            constexpr int fast_spin_limit = 10;
-            constexpr int yield_limit = 100;
-
-            // Fast spin phase (no syscall)
-            while (!state_->is_ready() && spin_count < fast_spin_limit) {
-                if (check_cancelled())
-                    return;
-                ++spin_count;
+            // Check failure before waiting
+            if (state_->is_failed()) {
+                handle_failed();
             }
 
-            // Yield phase
-            while (!state_->is_ready() && spin_count < yield_limit) {
-                if (check_cancelled())
-                    return;
-                std::this_thread::yield();
-                ++spin_count;
-            }
+            // Use centralized wait logic in future_state_base
+            state_->wait_until_ready();
 
-#if HAVE_ATOMIC_WAIT
-            // Wait until truly ready (not just state changed)
-            // Must handle transient states: pending → setting → ready
-            while (!state_->is_ready()) {
-                if (check_cancelled())
-                    return;
-                auto current = state_->state();
-                // Wait on pending OR setting states (both are transient)
-                if (current == detail::future_state_enum::pending ||
-                    current == detail::future_state_enum::setting) {
-                    state_->wait(current); // Returns when state changes
-                }
+            // Check failure after waiting (state may have changed during wait)
+            if (state_->is_failed()) {
+                handle_failed();
             }
-#else
-            // Backoff phase
-            auto backoff = std::chrono::microseconds(1);
-            constexpr auto max_backoff = std::chrono::microseconds(100);
-
-            while (!state_->is_ready()) {
-                if (check_cancelled())
-                    return;
-                std::this_thread::sleep_for(backoff);
-                if (backoff < max_backoff)
-                    backoff *= 2;
-            }
-#endif
         }
 
         // Member variables - simplified after removing inline storage
@@ -620,42 +616,19 @@ namespace actor_zeta {
         bool needs_scheduling_;
     };
 
-    /// @brief Create ready future via promise (clean API)
-    /// @note Uses promise internally for consistency
-    template<typename T>
-    unique_future<T> make_ready_future(std::pmr::memory_resource* resource, T&& value) {
-        promise<T> p(resource);
-        p.set_value(std::forward<T>(value));
-        return p.get_future();
-    }
-
-    template<typename T>
-    unique_future<T> make_ready_future(std::pmr::memory_resource* resource, const T& value) {
-        promise<T> p(resource);
-        p.set_value(value);
-        return p.get_future();
-    }
-
-    /// @brief Create ready void future via promise (clean API)
-    inline unique_future<void> make_ready_future_void(std::pmr::memory_resource* resource) {
-        promise<void> p(resource);
-        p.set_value();
-        return p.get_future();
-    }
-
-    /// @brief Create error future via promise
-    template<typename T>
-    unique_future<T> make_error_future(std::pmr::memory_resource* resource) {
-        promise<T> p(resource);
-        p.internal_state_base()->set_state(detail::future_state_enum::error);
-        return p.get_future();
-    }
-
     template<typename T>
     unique_future<T> promise<T>::get_future() noexcept {
         assert(state_ && "get_future() on moved-from promise");
         // Use public constructor: unique_future(promise<T>&)
         return unique_future<T>(*this);
+    }
+
+    // make_error - create future with error for co_return
+    template<typename T>
+    [[nodiscard]] unique_future<T> make_error(std::pmr::memory_resource* res, std::error_code ec) {
+        promise<T> p(res);
+        p.error(ec);
+        return p.get_future();
     }
 
 } // namespace actor_zeta

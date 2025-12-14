@@ -4,15 +4,11 @@
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
-#include <algorithm>
 #include <cassert>
 #include <cstddef>
-#include <cstdint>
-#include <cstring>
 #include <memory>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace actor_zeta { namespace detail {
 
@@ -39,19 +35,25 @@ namespace actor_zeta { namespace detail {
 
 #endif
 
-    inline void dummy(std::initializer_list<int>) {}
+    /// @brief Align value up to given alignment (compile-time)
+    constexpr std::size_t align_up(std::size_t n, std::size_t align) noexcept {
+        return (n + align - 1) & ~(align - 1);
+    }
 
-#define EXPAND_VARIADIC(expression) \
-    dummy({(expression, 0)...})
+    /// @brief Check memory resource is not nullptr
+    inline std::pmr::memory_resource* check_resource(std::pmr::memory_resource* r) noexcept {
+        assert(r && "memory_resource must not be nullptr");
+        return r;
+    }
 
-    template<size_t N>
-    constexpr size_t getSize() {
+    template<std::size_t N>
+    constexpr std::size_t getSize() {
         return N;
     }
 
-    template<size_t N, class Head, class... Args>
-    constexpr size_t getSize() {
-        return getSize<((N + alignof(Head) - 1) & -(alignof(Head))) + sizeof(Head), Args...>();
+    template<std::size_t N, class Head, class... Args>
+    constexpr std::size_t getSize() {
+        return getSize<align_up(N, alignof(Head)) + sizeof(Head), Args...>();
     }
 
     template<typename T>
@@ -72,46 +74,85 @@ namespace actor_zeta { namespace detail {
         std::size_t capacity_ = 0;
         std::size_t volume_ = 0;
 
-        void* allocation = nullptr;
+        void* allocation_ = nullptr;
         char* data_ = nullptr;
 
         objects_t* objects_ = nullptr;
         std::size_t objects_idx_ = 0;
 
-        // TODO mark noexcept?
-        void clear() {
+        void clear() noexcept {
             auto tmp = data_;
-            for (std::size_t i = 0; i < objects_idx_; ++i) {
+            // Destroy in reverse order (LIFO) - C++ convention
+            for (std::size_t i = objects_idx_; i-- > 0; ) {
                 objects_[i].destroyer(tmp + objects_[i].offset);
             }
 
             // Note: capacity_ stores the actual data size, not aligned size
-            // So we need to recalculate aligned size for deallocation
+            // So we need to recalculate aligned size for deallocation_
             // However, the actual allocated size is implementation-defined
-            // For simplicity, we'll use the formula that matches allocation
-            if (allocation) {
-                // Align capacity to objects_t boundary
-                constexpr std::size_t objects_alignment = alignof(objects_t);
-                std::size_t aligned_capacity = (capacity_ + objects_alignment - 1) & ~(objects_alignment - 1);
+            // For simplicity, we'll use the formula that matches allocation_
+            if (allocation_) {
+                std::size_t aligned_capacity = align_up(capacity_, alignof(objects_t));
                 std::size_t allocated_size = aligned_capacity + objects_idx_ * sizeof(objects_t);
-                memory_resource_->deallocate(allocation, allocated_size);
+                memory_resource_->deallocate(allocation_, allocated_size);
             }
 
             volume_ = 0;
             objects_idx_ = 0;
-            allocation = nullptr;
+            allocation_ = nullptr;
             data_ = nullptr;
             objects_ = nullptr;
             capacity_ = 0;
         }
 
+        template<typename T>
+        char* try_to_align() {
+            auto space_left = capacity_ - volume_;
+            void* creation_place = data_ + volume_;
+            auto aligned_place = std::align(alignof(T), sizeof(T), creation_place, space_left);
+            return static_cast<char*>(aligned_place);
+        }
+
+        template<typename T>
+        char* force_align() {
+            auto creation_place = try_to_align<T>();
+            assert(creation_place != nullptr);
+
+            return creation_place;
+        }
+
+        template<typename T>
+        void push_back_no_realloc(T&& object) {
+            using raw_type = actor_zeta::type_traits::decay_t<T>;
+            auto creation_place = force_align<raw_type>();
+            new (creation_place) raw_type(std::forward<T>(object));
+            const auto new_offset = static_cast<std::size_t>(creation_place - data_);
+            objects_[objects_idx_++] = objects_t{new_offset, &destroy<raw_type>};
+            volume_ = new_offset + sizeof(raw_type);
+        }
+
+        std::size_t offset(std::size_t index) const {
+            assert(index < objects_idx_ && "rtt::offset(): index out of bounds");
+            return objects_[index].offset;
+        }
+
+        template<typename T>
+        const T& get_by_offset(std::size_t offset) const {
+            return *static_cast<const T*>(static_cast<const void*>(data_ + offset));
+        }
+
+        template<typename T>
+        T& get_by_offset(std::size_t offset) {
+            return *static_cast<T*>(static_cast<void*>(data_ + offset));
+        }
+
     public:
         template<typename... Args>
         explicit rtt(std::pmr::memory_resource* resource, Args&&... args)
-            : memory_resource_([](std::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+            : memory_resource_(check_resource(resource))
             , capacity_(0)
             , volume_(0)
-            , allocation(nullptr)
+            , allocation_(nullptr)
             , data_(nullptr)
             , objects_(nullptr)
             , objects_idx_(0) {
@@ -125,20 +166,18 @@ namespace actor_zeta { namespace detail {
             }
 
             constexpr std::size_t sz = getSize<0, Args...>();
+            constexpr std::size_t aligned_capacity = align_up(sz, alignof(objects_t));
+            constexpr std::size_t total_size = aligned_capacity + sizeof...(Args) * sizeof(objects_t);
+
             capacity_ = sz;
-
-            // Align capacity to objects_t boundary to prevent misaligned access
-            constexpr std::size_t objects_alignment = alignof(objects_t);
-            std::size_t aligned_capacity = (capacity_ + objects_alignment - 1) & ~(objects_alignment - 1);
-
-            allocation = memory_resource_->allocate(aligned_capacity + sizeof...(Args) * sizeof(objects_t));
-            assert(allocation);
-            data_ = static_cast<char*>(allocation);
+            allocation_ = memory_resource_->allocate(total_size);
+            assert(allocation_);
+            data_ = static_cast<char*>(allocation_);
             assert(data_);
             objects_ = static_cast<objects_t*>(static_cast<void*>(data_ + aligned_capacity));
             assert(objects_);
 
-            EXPAND_VARIADIC(push_back_no_realloc(std::forward<Args>(args)));
+            (push_back_no_realloc(std::forward<Args>(args)), ...);
 
 #ifdef __ENABLE_TESTS_MEASUREMENTS__
             rtt_test::templated_ctor_++;
@@ -146,10 +185,10 @@ namespace actor_zeta { namespace detail {
         }
 
         rtt(std::pmr::memory_resource* resource)
-            : memory_resource_([](std::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+            : memory_resource_(check_resource(resource))
             , capacity_(0)
             , volume_(0)
-            , allocation(nullptr)
+            , allocation_(nullptr)
             , data_(nullptr)
             , objects_(nullptr)
             , objects_idx_(0) {
@@ -164,14 +203,14 @@ namespace actor_zeta { namespace detail {
             : memory_resource_(other.memory_resource_)
             , capacity_(other.capacity_)
             , volume_(other.volume_)
-            , allocation(other.allocation)
+            , allocation_(other.allocation_)
             , data_(other.data_)
             , objects_(other.objects_)
             , objects_idx_(other.objects_idx_) {
             other.memory_resource_ = nullptr;
             other.capacity_ = 0;
             other.volume_ = 0;
-            other.allocation = nullptr;
+            other.allocation_ = nullptr;
             other.data_ = nullptr;
             other.objects_ = nullptr;
             other.objects_idx_ = 0;
@@ -181,10 +220,10 @@ namespace actor_zeta { namespace detail {
         }
 
         rtt(std::allocator_arg_t, std::pmr::memory_resource* resource, rtt&& other) noexcept
-            : memory_resource_([](std::pmr::memory_resource* resource) {assert(resource);return resource; }(resource))
+            : memory_resource_(check_resource(resource))
             , capacity_(0)
             , volume_(0)
-            , allocation(nullptr)
+            , allocation_(nullptr)
             , data_(nullptr)
             , objects_(nullptr)
             , objects_idx_(0) {
@@ -196,7 +235,7 @@ namespace actor_zeta { namespace detail {
             // Same arena - cheap move (just steal pointers)
             capacity_ = other.capacity_;
             volume_ = other.volume_;
-            allocation = other.allocation;
+            allocation_ = other.allocation_;
             data_ = other.data_;
             objects_ = other.objects_;
             objects_idx_ = other.objects_idx_;
@@ -204,7 +243,7 @@ namespace actor_zeta { namespace detail {
             other.memory_resource_ = nullptr;
             other.capacity_ = 0;
             other.volume_ = 0;
-            other.allocation = nullptr;
+            other.allocation_ = nullptr;
             other.data_ = nullptr;
             other.objects_ = nullptr;
             other.objects_idx_ = 0;
@@ -217,6 +256,9 @@ namespace actor_zeta { namespace detail {
         rtt(rtt& other) = delete;
         ~rtt() {
             clear();
+#ifdef __ENABLE_TESTS_MEASUREMENTS__
+            rtt_test::dtor_++;
+#endif
         }
 
         rtt& operator=(rtt&& other) noexcept {
@@ -232,7 +274,7 @@ namespace actor_zeta { namespace detail {
             memory_resource_ = other.memory_resource_;
             capacity_ = other.capacity_;
             volume_ = other.volume_;
-            allocation = other.allocation;
+            allocation_ = other.allocation_;
             data_ = other.data_;
             objects_ = other.objects_;
             objects_idx_ = other.objects_idx_;
@@ -240,7 +282,7 @@ namespace actor_zeta { namespace detail {
             other.memory_resource_ = nullptr;
             other.capacity_ = 0;
             other.volume_ = 0;
-            other.allocation = nullptr;
+            other.allocation_ = nullptr;
             other.data_ = nullptr;
             other.objects_ = nullptr;
             other.objects_idx_ = 0;
@@ -255,82 +297,32 @@ namespace actor_zeta { namespace detail {
         rtt& operator=(const rtt& other) = delete;
         rtt& operator=(rtt& other) = delete;
 
-        template<typename T>
-        char* try_to_align(const T&) {
-            auto space_left = capacity_ - volume_;
-            void* creation_place = data_ + volume_;
-            auto aligned_place = std::align(alignof(T), sizeof(T), creation_place, space_left);
-            return static_cast<char*>(aligned_place);
-        }
-
-        template<typename T>
-        char* force_align(const T& object) {
-            auto creation_place = try_to_align(object);
-            assert(creation_place != nullptr);
-
-            return creation_place;
-        }
-
-        template<typename T>
-        void push_back_no_realloc(T&& object) {
-            auto creation_place = force_align(object);
-
-            using raw_type = actor_zeta::type_traits::decay_t<T>;
-            new (creation_place) raw_type(std::forward<T>(object));
-            const auto new_offset = static_cast<std::size_t>(creation_place - data_);
-            objects_[objects_idx_++] = objects_t{new_offset, &destroy<raw_type>};
-            volume_ = new_offset + sizeof(raw_type);
-        }
-
-        void swap(rtt& that) {
-            using std::swap;
-
-            swap(this->memory_resource_, that.memory_resource_);
-            swap(this->capacity_, that.capacity_);
-            swap(this->volume_, that.volume_);
-            swap(this->allocation, that.allocation);
-            swap(this->data_, that.data_);
-            swap(this->objects_, that.objects_);
-            swap(this->objects_idx_, that.objects_idx_);
-        }
-
+        /// @brief Get element at index
         template<typename T>
         const T& get(std::size_t index) const {
             return get_by_offset<T>(offset(index));
         }
 
+        /// @brief Get element at index (mutable)
         template<typename T>
         T& get(std::size_t index) {
             return get_by_offset<T>(offset(index));
         }
 
-        std::size_t offset(std::size_t index) const {
-            return objects_[index].offset;
-        }
-
-        template<typename T>
-        const T& get_by_offset(std::size_t offset) const {
-            return *static_cast<const T*>(static_cast<const void*>(data_ + offset));
-        }
-
-        template<typename T>
-        T& get_by_offset(std::size_t offset) {
-            return *static_cast<T*>(static_cast<void*>(data_ + offset)); // this is necessary to use double static_cast here, compile error
-        }
-
-        std::size_t size() const {
+        /// @brief Get number of stored elements
+        std::size_t size() const noexcept {
             return objects_idx_;
         }
 
-        std::size_t volume() const {
+        std::size_t volume() const noexcept {
             return volume_;
         }
 
-        std::size_t capacity() const {
+        std::size_t capacity() const noexcept {
             return capacity_;
         }
 
-        bool empty() const {
+        bool empty() const noexcept {
             return objects_idx_ == 0;
         }
 
@@ -340,10 +332,6 @@ namespace actor_zeta { namespace detail {
             return memory_resource_;
         }
     };
-
-    inline void swap(rtt& left, rtt& right) {
-        left.swap(right);
-    }
 
     /// @brief Extract argument from rtt at index I according to type list List
     ///

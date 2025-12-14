@@ -23,40 +23,36 @@ public:
         : actor_zeta::basic_actor<worker_t>(ptr) {
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         std::cerr << "[Worker " << id() << "] behavior() called, cmd=" << cmd << std::endl;
 
         switch (cmd) {
-            case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>: {
-                auto result = actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
+            case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>:
+                actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
                 std::cerr << "[Worker " << id() << "] After handler" << std::endl;
-                return result;
-            }
-            case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>: {
-                return actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
-            }
+                break;
+            case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>:
+                actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
+                break;
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
 private:
     std::string tmp_;
 };
 
-// Request-response implementations - automatically return results via promise
+// Request-response implementations - all methods must be coroutines
 inline actor_zeta::unique_future<std::size_t> worker_t::download_with_result(std::string url, std::string /*user*/, std::string /*password*/) {
     std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
     tmp_ = std::move(url);
     std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
-    std::size_t result = tmp_.size(); // Return downloaded size
-    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
+    co_return tmp_.size(); // Return downloaded size
 }
 
 inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(std::string data, std::string /*operatorName*/) {
     tmp_ = std::move(data);
-    std::size_t result = tmp_.size(); // Return processed size
-    return actor_zeta::make_ready_future<std::size_t>(resource(), result);
+    co_return tmp_.size(); // Return processed size
 }
 
 /// non thread safe
@@ -82,15 +78,14 @@ public:
         auto ptr = actor_zeta::spawn<worker_t>(resource_);
         actors_.emplace_back(std::move(ptr));
         ++size_actors_;
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>) {
-            return actor_zeta::dispatch(this, &supervisor_lite::create, msg);
+            actor_zeta::dispatch(this, &supervisor_lite::create, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

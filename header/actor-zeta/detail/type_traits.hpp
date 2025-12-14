@@ -1,6 +1,7 @@
 #pragma once
 
 #include <actor-zeta/config.hpp>
+#include <concepts>
 #include <type_traits>
 #include <utility>
 
@@ -9,35 +10,10 @@ namespace actor_zeta { namespace type_traits {
     struct internal_construct_tag {};
 
     using std::decay_t;
-    using std::enable_if_t;
     using std::index_sequence;
     using std::make_index_sequence;
     using std::remove_reference_t;
-
-    template<typename _Tp>
-    using remove_cvref_t = typename std::remove_cv<typename std::remove_reference<_Tp>::type>::type; // C++ 20
-
-    template<typename...>
-    struct _or_;
-
-    template<>
-    struct _or_<>
-        : public std::false_type {};
-
-    template<typename _B1>
-    struct _or_<_B1>
-        : public _B1 {};
-
-    template<typename _B1, typename _B2>
-    struct _or_<_B1, _B2>
-        : public std::conditional<_B1::value, _B1, _B2>::type {};
-
-    template<typename _B1, typename _B2, typename _B3, typename... _Bn>
-    struct _or_<_B1, _B2, _B3, _Bn...>
-        : public std::conditional<_B1::value, _B1, _or_<_B2, _B3, _Bn...>>::type {};
-
-    template<typename...>
-    using void_t = void;
+    using std::remove_cvref_t; // C++20
 
     struct erased_type {};
 
@@ -70,5 +46,9 @@ namespace actor_zeta { namespace type_traits {
     /// @brief Helper variable template (C++17)
     template<typename T>
     constexpr bool is_unique_future_v = is_unique_future<T>::value;
+
+    /// @brief Concept to detect unique_future<T>
+    template<typename T>
+    concept unique_future_type = is_unique_future_v<T>;
 
 }} // namespace actor_zeta::type_traits

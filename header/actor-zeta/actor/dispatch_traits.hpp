@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 
 #include <actor-zeta/detail/callable_trait.hpp>
@@ -22,24 +23,39 @@ namespace actor_zeta {
         // Coroutines MUST NOT have const& parameters - they become dangling after co_await
         // =========================================================================
 
-        /// @brief Detect if T is const lvalue reference (const U&)
+        /// @brief Concept: T is const lvalue reference (const U&)
         template<typename T>
-        struct is_const_lvalue_ref : std::false_type {};
+        concept const_lvalue_ref = std::is_lvalue_reference_v<T> && std::is_const_v<std::remove_reference_t<T>>;
 
-        template<typename T>
-        struct is_const_lvalue_ref<const T&> : std::true_type {};
-
-        /// @brief Check if any type in parameter pack is const lvalue ref
+        /// @brief Concept: Any type in parameter pack is const lvalue ref
         template<typename... Args>
-        struct has_const_lvalue_ref_args : std::disjunction<is_const_lvalue_ref<Args>...> {};
+        concept has_any_const_lvalue_ref = (const_lvalue_ref<Args> || ...);
 
-        /// @brief Check if any type in type_list is const lvalue ref
+        /// @brief Helper to check const lvalue refs in type_list
+        namespace type_list_check {
+            template<typename ArgsList>
+            struct has_const_ref_impl;
+
+            template<typename... Args>
+            struct has_const_ref_impl<type_traits::type_list<Args...>> {
+                static constexpr bool value = has_any_const_lvalue_ref<Args...>;
+            };
+        }
+
+        /// @brief Concept: type_list contains const lvalue ref
         template<typename ArgsList>
-        struct has_const_lvalue_ref_in_list;
+        concept type_list_has_const_lvalue_ref = type_list_check::has_const_ref_impl<ArgsList>::value;
 
-        template<typename... Args>
-        struct has_const_lvalue_ref_in_list<type_traits::type_list<Args...>>
-            : has_const_lvalue_ref_args<Args...> {};
+        /// @brief Compile-time check: method must return unique_future<T>
+        /// @tparam MethodPtr Pointer to member function
+        /// All actor methods must be coroutines returning unique_future<T>
+        template<auto MethodPtr>
+        struct method_return_type_check {
+            using trait = type_traits::callable_trait<decltype(MethodPtr)>;
+            using result_type = typename trait::result_type;
+
+            static constexpr bool returns_unique_future = type_traits::is_unique_future_v<result_type>;
+        };
 
         /// @brief Compile-time check: coroutines must not have const& parameters
         /// @tparam MethodPtr Pointer to member function
@@ -52,7 +68,7 @@ namespace actor_zeta {
             using args_types = typename trait::args_types;
 
             static constexpr bool is_coroutine = type_traits::is_unique_future_v<result_type>;
-            static constexpr bool has_const_ref = has_const_lvalue_ref_in_list<args_types>::value;
+            static constexpr bool has_const_ref = type_list_has_const_lvalue_ref<args_types>;
 
             // Coroutines MUST NOT have const& parameters (use-after-free after co_await)
             static constexpr bool is_safe = !is_coroutine || !has_const_ref;
@@ -62,25 +78,37 @@ namespace actor_zeta {
     /// @brief Dispatch traits for actor methods
     /// @tparam MethodPtrs Pointers to member functions
     ///
-    /// IMPORTANT: Coroutine methods (returning unique_future<T>) must NOT have const& parameters!
-    /// After co_await, the message is destroyed and const& becomes a dangling reference.
-    /// Use by-value parameters instead.
+    /// REQUIREMENTS:
+    /// 1. All methods MUST return unique_future<T> (must be coroutines)
+    /// 2. Coroutine methods must NOT have const& parameters (dangling after co_await)
     ///
     /// @code
+    /// // WRONG - raw void return:
+    /// void process(std::string data);  // COMPILE ERROR!
+    ///
     /// // WRONG - const& in coroutine causes use-after-free:
     /// unique_future<int> process(const std::string& data);  // COMPILE ERROR!
     ///
-    /// // CORRECT - by-value is safe:
-    /// unique_future<int> process(std::string data);  // OK
+    /// // CORRECT - coroutine with by-value parameters:
+    /// unique_future<int> process(std::string data) {
+    ///     co_return 42;
+    /// }
     /// @endcode
     template<auto... MethodPtrs>
     struct dispatch_traits {
         using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
 
+        // Compile-time safety: all methods must return unique_future<T>
+        static_assert(
+            (detail::method_return_type_check<MethodPtrs>::returns_unique_future && ...),
+            "All actor methods must return unique_future<T>. "
+            "Raw void or value returns are not allowed. "
+            "All actor methods must be coroutines using co_return.");
+
         // Compile-time safety: coroutines must not have const& parameters
         static_assert(
             (detail::coroutine_parameter_check<MethodPtrs>::is_safe && ...),
-            "Coroutine methods (returning unique_future<T>) must not have const& parameters. "
+            "Coroutine methods must not have const& parameters. "
             "After co_await, message is destroyed and const& becomes dangling. Use by-value instead.");
     };
 
@@ -92,15 +120,23 @@ namespace actor_zeta {
             typename type_traits::is_unique_future<T>::value_type,
             T>;
 
+        /// @brief Check if SearchPtr matches CurrentPtr (true only if same type AND same value)
         template<auto SearchPtr, auto CurrentPtr>
-        struct is_same_method_ptr : std::false_type {};
+        struct is_same_ptr {
+            static constexpr bool value = false;
+        };
 
         template<auto Ptr>
-        struct is_same_method_ptr<Ptr, Ptr> : std::true_type {};
+        struct is_same_ptr<Ptr, Ptr> {
+            static constexpr bool value = true;
+        };
+
+        template<auto SearchPtr, auto CurrentPtr>
+        inline constexpr bool is_same_ptr_v = is_same_ptr<SearchPtr, CurrentPtr>::value;
 
         template<auto SearchPtr, auto... MethodPtrs>
         static constexpr uint64_t find_method_index() {
-            constexpr bool matches[] = {is_same_method_ptr<SearchPtr, MethodPtrs>::value...};
+            constexpr bool matches[] = {is_same_ptr_v<SearchPtr, MethodPtrs>...};
 
             for (std::size_t i = 0; i < sizeof...(MethodPtrs); ++i) {
                 if (matches[i]) {
@@ -185,7 +221,7 @@ namespace actor_zeta {
             -> typename Actor::template unique_future<
                 detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>> {
             // Check if this method matches
-            if constexpr (std::is_same<Method, decltype(FirstMethod)>::value) {
+            if constexpr (std::same_as<Method, decltype(FirstMethod)>) {
                 if (method == FirstMethod) {
                     // Match! Dispatch and return
                     return detail::dispatch_method_impl<Actor, FirstMethod, FirstIndex>(

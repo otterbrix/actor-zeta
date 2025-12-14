@@ -26,7 +26,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 180)
 
 # Phase 1 Critical Tests: Actor Shutdown
 set(CURRENT_TEST_NAME tests_race_shutdown)

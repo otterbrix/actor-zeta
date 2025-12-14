@@ -19,22 +19,21 @@ public:
     actor_zeta::unique_future<int> compute(int value) {
         // Simulate some processing
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        return actor_zeta::make_ready_future<int>(resource(), value * 2);
+        co_return value * 2;
     }
 
     actor_zeta::unique_future<int> fast_task(int value) {
         // Immediate processing (no delay)
-        return actor_zeta::make_ready_future<int>(resource(), value + 1);
+        co_return value + 1;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<state_test_actor, &state_test_actor::compute>) {
-            return dispatch(this, &state_test_actor::compute, msg);
+            dispatch(this, &state_test_actor::compute, msg);
         } else if (cmd == actor_zeta::msg_id<state_test_actor, &state_test_actor::fast_task>) {
-            return dispatch(this, &state_test_actor::fast_task, msg);
+            dispatch(this, &state_test_actor::fast_task, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

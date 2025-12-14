@@ -27,14 +27,22 @@ namespace actor_zeta { namespace type_traits {
 
     using empty_type_list = type_list<>;
 
+    namespace detail {
+        template<class T>
+        struct is_type_list_impl : std::false_type {};
+
+        template<class... args>
+        struct is_type_list_impl<type_list<args...>> : std::true_type {};
+    }
+
+    /// @brief Concept to check if T is a type_list
+    template<typename T>
+    concept type_list_type = detail::is_type_list_impl<T>::value;
+
+    /// @brief Legacy type trait (using concept)
     template<class T>
     struct is_type_list {
-        static constexpr bool value = false;
-    };
-
-    template<class... args>
-    struct is_type_list<type_list<args...>> {
-        static constexpr bool value = true;
+        static constexpr bool value = type_list_type<T>;
     };
 
     // size_t size(type_list)
@@ -48,8 +56,9 @@ namespace actor_zeta { namespace type_traits {
         static constexpr size_t value = sizeof...(args);
     };
 
-    template<class... args>
-    constexpr size_t type_list_size<type_list<args...>>::value;
+    /// @brief Helper variable template for type_list_size
+    template<class List>
+    inline constexpr size_t type_list_size_v = type_list_size<List>::value;
 
     // type at(size_t)
 
@@ -122,6 +131,10 @@ namespace actor_zeta { namespace type_traits {
     template<class... args>
     constexpr size_t tl_size<type_list<args...>>::value;
 
+    /// @brief Helper variable template for tl_size (alias for type_list_size_v)
+    template<class List>
+    inline constexpr size_t tl_size_v = tl_size<List>::value;
+
     // list slice(size_t, size_t)
 
     template<size_t LeftOffset, size_t Remaining, typename PadType, class List, class... args>
@@ -167,7 +180,7 @@ namespace actor_zeta { namespace type_traits {
     /// Creates a new list from range (First, Last].
     template<class List, size_t First, size_t Last>
     struct tl_slice {
-        using type = typename tl_slice_<List, tl_size<List>::value,
+        using type = typename tl_slice_<List, type_list_size_v<List>,
                                         (First > Last ? Last : First), Last>::type;
     };
 

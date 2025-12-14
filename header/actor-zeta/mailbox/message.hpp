@@ -61,8 +61,8 @@ namespace actor_zeta { namespace mailbox {
         intrusive_ptr<actor_zeta::detail::future_state_base> result_slot_;
     };
 
-    static_assert(std::is_move_constructible<message>::value, "");
-    static_assert(not std::is_copy_constructible<message>::value, "");
+    static_assert(std::is_move_constructible_v<message>);
+    static_assert(!std::is_copy_constructible_v<message>);
 
     namespace detail {
 
@@ -104,7 +104,7 @@ namespace actor_zeta { namespace mailbox {
         }
     };
 
-    static_assert(std::is_empty<message_deleter>::value, "EBO expected");
+    static_assert(std::is_empty_v<message_deleter>, "EBO expected");
 
     using message_ptr = std::unique_ptr<message, message_deleter>;
 

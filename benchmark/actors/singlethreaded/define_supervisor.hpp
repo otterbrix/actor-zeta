@@ -40,7 +40,7 @@ public:
         // Set partners
         actor_0_->set_partner(actor_1_.get());
         actor_1_->set_partner(actor_0_.get());
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
     actor_zeta::unique_future<void> send() {
@@ -55,17 +55,19 @@ public:
             actor_1_->resume(1);
             actor_0_->resume(1);
         }
-        return actor_zeta::make_ready_future_void(resource_);
+        co_return;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
+
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<simple_supervisor, &simple_supervisor::prepare>) {
             actor_zeta::dispatch(this, &simple_supervisor::prepare, msg);
         } else if (cmd == actor_zeta::msg_id<simple_supervisor, &simple_supervisor::send>) {
             actor_zeta::dispatch(this, &simple_supervisor::send, msg);
         }
-        return actor_zeta::make_ready_future_void(resource_);
+
+
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

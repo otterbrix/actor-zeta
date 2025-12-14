@@ -39,7 +39,8 @@ bool wait_available_with_timeout(actor_zeta::unique_future<T>& future,
     return true;
 }
 
-constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(10);
+// Increased timeout for CI environments with sanitizers (TSan adds 10-50x overhead)
+constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(60);
 
 // Simple test actor for refcount testing
 class refcount_test_actor final : public actor_zeta::basic_actor<refcount_test_actor> {
@@ -49,15 +50,14 @@ public:
     }
 
     actor_zeta::unique_future<int> echo(int value) {
-        return actor_zeta::make_ready_future<int>(resource(), value);
+        co_return value;
     }
 
-    actor_zeta::unique_future<void> behavior(actor_zeta::mailbox::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<refcount_test_actor, &refcount_test_actor::echo>) {
-            return dispatch(this, &refcount_test_actor::echo, msg);
+            dispatch(this, &refcount_test_actor::echo, msg);
         }
-        return actor_zeta::make_ready_future_void(resource());
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

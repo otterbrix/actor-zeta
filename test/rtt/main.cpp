@@ -861,32 +861,45 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
 
     // REFERENCES
 
-    SECTION("Knows how to give references to immutable values by their indentation in the rtt") {
+    SECTION("Knows how to give references to immutable values by index") {
         auto* resource = std::pmr::get_default_resource();
         const rtt t(resource, std::string("123"), 42, true);
-        auto int_offset = t.offset(1);
-        REQUIRE(t.get_by_offset<int>(int_offset) == 42);
+        // Use public get<T>(index) API instead of internal offset/get_by_offset
+        REQUIRE(t.get<int>(1) == 42);
     }
 
-    SECTION("Knows how to give links to mutable values by their indentation in rtt") {
+    SECTION("Knows how to give links to mutable values by index") {
         auto* resource = std::pmr::get_default_resource();
         auto old_value = 42;
         auto new_value = 99;
 
         rtt t(resource, std::string("123"), old_value, true);
-        auto int_offset = t.offset(1);
 
         REQUIRE(t.get<int>(1) == old_value);
-        t.get_by_offset<int>(int_offset) = new_value;
+        // Use public get<T>(index) API for mutation
+        t.get<int>(1) = new_value;
 
         REQUIRE(t.get<int>(1) == new_value);
     }
 
-    SECTION("swap") {
+    SECTION("move semantics instead of swap") {
+        // Note: swap() was removed due to cross-arena safety issues
+        // Use move semantics within same arena instead
         auto* resource = std::pmr::get_default_resource();
         auto t = rtt(resource, 1, 3.14);
         auto u = rtt(resource, std::string("qwe"), true);
 
-        actor_zeta::detail::swap(t, u);
+        // Verify initial state
+        REQUIRE(t.get<int>(0) == 1);
+        REQUIRE(u.get<std::string>(0) == "qwe");
+
+        // Swap using move semantics
+        rtt temp(std::move(t));
+        t = std::move(u);
+        u = std::move(temp);
+
+        // Verify swapped state
+        REQUIRE(t.get<std::string>(0) == "qwe");
+        REQUIRE(u.get<int>(0) == 1);
     }
 }

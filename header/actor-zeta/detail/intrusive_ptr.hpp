@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <concepts>
 #include <utility>
 
 #include <actor-zeta/detail/ref_counted.hpp>
@@ -42,9 +43,9 @@ namespace actor_zeta {
         }
 
         template<class Y>
+            requires std::convertible_to<Y*, T*>
         intrusive_ptr(intrusive_ptr<Y> other) noexcept
             : ptr_(other.detach()) {
-            static_assert(std::is_convertible<Y*, T*>::value, "Y* is not assignable to T*");
         }
 
         intrusive_ptr& operator=(pointer ptr) noexcept {

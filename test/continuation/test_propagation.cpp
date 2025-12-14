@@ -211,7 +211,7 @@ TEST_CASE("forward_target propagation - cancelled source", "[forward_target][edg
     source_state->set_forward_target(target_state);
 
     // Cancel source
-    source_state->set_state(future_state_enum::cancelled);
+    source_state->cancelled();
 
     REQUIRE(source_state->is_cancelled());
     REQUIRE(!target_state->is_ready());

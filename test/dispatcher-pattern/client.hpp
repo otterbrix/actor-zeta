@@ -50,8 +50,9 @@ public:
     // =========================================================================
 
     /// @brief Trigger behavior() to process pending coroutines
-    void poll() {
+    unique_future<void> poll() {
         g_log.log("[%::poll] called", name_);
+        co_return;
     }
 
     // =========================================================================
@@ -104,7 +105,7 @@ public:
     // behavior()
     // =========================================================================
 
-    unique_future<void> behavior(mailbox::message* msg) {
+    void behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
@@ -127,8 +128,6 @@ public:
 
         // Process pending coroutines after each message
         poll_pending();
-
-        return make_ready_future_void(resource());
     }
 
     // =========================================================================
