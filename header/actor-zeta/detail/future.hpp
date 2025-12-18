@@ -218,27 +218,48 @@ namespace actor_zeta {
 
         ~unique_future() noexcept = default;
 
-        // get() for non-void types - returns T
+        // =========================================================================
+        // get() - Extract result from READY future (non-blocking)
+        // REQUIRES: available() == true
+        // For waiting: use co_await future (coroutine) or poll with available()
+        // =========================================================================
+
+        /// @brief Extract result from ready future (non-void types)
+        /// @pre Future must be ready: available() == true
+        /// @return The stored value (moved out)
+        /// @note Non-blocking! Use `co_await future` for coroutine-based waiting
         [[nodiscard]] T get() &&
             requires(!std::is_void_v<T>)
         {
             assert(state_ && "get() on invalid future");
-            wait_for_ready();
+            assert(available() && "get() requires ready future - use co_await or check available() first!");
+            if (state_->is_failed()) {
+                state_ = nullptr;
+                assert(false && "get() on failed/cancelled future!");
+                std::terminate();
+            }
             T result = state_->take_value();
             state_ = nullptr;
             return result;
         }
 
-        // get() for void type - returns void
+        /// @brief Consume void future (void type)
+        /// @pre Future must be ready: available() == true
+        /// @note Non-blocking! Use `co_await future` for coroutine-based waiting
         void get() &&
             requires(std::is_void_v<T>)
         {
             assert(state_ && "get() on invalid future");
-            wait_for_ready();
+            assert(available() && "get() requires ready future - use co_await or check available() first!");
+            if (state_->is_failed()) {
+                state_ = nullptr;
+                assert(false && "get() on failed/cancelled future!");
+                std::terminate();
+            }
             state_ = nullptr;
         }
 
-        // Deleted lvalue get()
+        // Deleted lvalue get() - must move to extract
         T get() & requires(!std::is_void_v<T>) = delete;
         void get() & requires(std::is_void_v<T>) = delete;
 
@@ -588,28 +609,6 @@ namespace actor_zeta {
         };
 
     private:
-        void wait_for_ready() {
-            // Helper to handle failed state (error or cancelled) - consistent for all types
-            auto handle_failed = [this]() {
-                state_ = nullptr;
-                assert(false && "get() on failed/cancelled future!");
-                std::terminate();
-            };
-
-            // Check failure before waiting
-            if (state_->is_failed()) {
-                handle_failed();
-            }
-
-            // Use centralized wait logic in future_state_base
-            state_->wait_until_ready();
-
-            // Check failure after waiting (state may have changed during wait)
-            if (state_->is_failed()) {
-                handle_failed();
-            }
-        }
-
         // Member variables - simplified after removing inline storage
         intrusive_ptr<state_type> state_;
         std::pmr::memory_resource* resource_;
@@ -621,6 +620,18 @@ namespace actor_zeta {
         assert(state_ && "get_future() on moved-from promise");
         // Use public constructor: unique_future(promise<T>&)
         return unique_future<T>(*this);
+    }
+
+    // =========================================================================
+    // operator co_await - enables `co_await future` syntax (like Seastar)
+    // =========================================================================
+
+    /// @brief Enable co_await on unique_future (rvalue)
+    /// @note Usage: `T result = co_await std::move(future);`
+    /// @note This is the primary way to wait for future results in coroutines
+    template<typename T>
+    auto operator co_await(unique_future<T>&& f) noexcept {
+        return typename unique_future<T>::awaiter_type{f, nullptr};
     }
 
     // make_error - create future with error for co_return
