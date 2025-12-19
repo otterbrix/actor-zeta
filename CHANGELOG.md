@@ -384,8 +384,109 @@ return future;
 
 ---
 
+---
+
+## [2025-12] - C++20 Coroutines & std::pmr Migration
+
+### PMR Migration
+**Date:** 2025-12
+
+**Change:** Migrated from custom `actor_zeta::pmr` to `std::pmr`.
+
+**API Changes:**
+```cpp
+// OLD API (removed)
+actor_zeta::pmr::memory_resource* resource;
+actor_zeta::pmr::get_default_resource();
+
+// NEW API (current)
+std::pmr::memory_resource* resource;
+std::pmr::get_default_resource();
+```
+
+**Files affected:**
+- All header files using memory resources
+- All examples and tests
+
+---
+
+### unique_future API Updates
+**Date:** 2025-12
+
+**Change:** Renamed `is_ready()` to `available()` for clearer semantics.
+
+**API Changes:**
+```cpp
+// OLD API
+if (future.is_ready()) { ... }
+
+// NEW API (current)
+if (future.available()) { ... }
+```
+
+**Additional API:**
+- `failed()` - Check if future has error
+- `error()` - Get error code
+- `valid()` - Check if future has valid state
+
+---
+
+### Coroutine-First Design
+**Date:** 2025-12
+
+**Change:** All actor methods returning `unique_future<T>` must now be coroutines.
+
+**Pattern:**
+```cpp
+// ALL handlers must use co_return
+unique_future<int> compute(int x) {
+    co_return x * 2;  // Required!
+}
+
+unique_future<void> process() {
+    co_return;  // Required for void!
+}
+```
+
+**Behavior dispatch with coroutines:**
+```cpp
+void behavior(mailbox::message* msg) {
+    switch (msg->command()) {
+        case msg_id<Actor, &Actor::compute>:
+            dispatch(this, &Actor::compute, msg);
+            break;
+        case msg_id<Actor, &Actor::async_method>: {
+            // CRITICAL: Store pending coroutine!
+            auto future = dispatch(this, &Actor::async_method, msg);
+            if (!future.available()) {
+                pending_.push_back(std::move(future));
+            }
+            break;
+        }
+    }
+}
+```
+
+---
+
+### Examples Updated
+**Date:** 2025-12
+
+**Changes:**
+- `dataflow` example removed (commented out in CMakeLists.txt)
+- `coroutine` example added with `mixed_example.cpp`
+- All examples updated to use `std::pmr` and coroutine patterns
+
+**Current examples:**
+- `balancer` - Load balancing with coroutines
+- `broadcast` - Message broadcasting
+- `supervisor` - Supervisor pattern
+- `coroutine` - Mixed sync/async coroutine patterns
+
+---
+
 ## See Also
 
 - `MESSAGE_CREATION_REFACTORING.md` - Detailed message creation refactoring notes
-- `PROMISE_FUTURE_IMPLEMENTATION.md` - Promise/future architecture
+- `PROMISE_FUTURE_GUIDE.md` - Promise/future patterns and usage
 - `CLAUDE.md` - Development guide for this codebase

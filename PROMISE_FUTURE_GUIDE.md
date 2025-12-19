@@ -17,14 +17,16 @@ Complete guide to using the async request-response pattern in actor-zeta.
 
 ## Overview
 
-Actor-zeta supports **async request-response** via nested `promise<T>` and `unique_future<T>` classes in `cooperative_actor`. This enables both fire-and-forget and request-response patterns.
+Actor-zeta supports **async request-response** via `promise<T>` and `unique_future<T>` classes. This enables both fire-and-forget and request-response patterns with full C++20 coroutine support.
 
 **Key Features:**
+- C++20 coroutines with `co_await` and `co_return`
 - Non-blocking message sends with optional result
 - Fire-and-forget pattern (ignore future)
 - Request-response pattern (wait for result)
 - Orphaned futures (future destroyed before actor processes)
 - Cancellation support
+- Uses `std::pmr::memory_resource` for allocation
 
 ---
 
@@ -33,7 +35,7 @@ Actor-zeta supports **async request-response** via nested `promise<T>` and `uniq
 ### Fire-and-Forget (No Return Value)
 
 ```cpp
-// Send message, don't care about result
+// Send message, don't care about result - future auto-destroyed
 send(target_actor, sender, &TargetActor::handle_command, arg1, arg2);
 ```
 
@@ -43,36 +45,37 @@ send(target_actor, sender, &TargetActor::handle_command, arg1, arg2);
 // Send message, get future
 auto future = send(target_actor, sender, &TargetActor::compute, arg1);
 
-// Wait for result (blocking)
-int result = std::move(future).get();
-
-// Or check if ready (non-blocking)
-if (future.is_ready()) {
+// Check if ready (non-blocking)
+if (future.available()) {
     int result = std::move(future).get();
 }
+
+// Or in a coroutine - use co_await (recommended)
+int result = co_await std::move(future);
 ```
 
 ### Handler Implementation
 
-Handlers automatically return results via `unique_future<T>`:
+All handlers are coroutines using `co_return`:
 
 ```cpp
 class Worker : public basic_actor<Worker> {
 public:
-    // Handler returns future
+    // Handler returns future via co_return
     unique_future<int> compute(int x) {
         int result = x * 2;
-        // Return ready future with result
-        return make_ready_future<int>(resource(), result);
+        co_return result;  // Use co_return, not return!
     }
 
-    // Or for void results
-    unique_future<void> process_task(const std::string& task) {
+    // For void results
+    unique_future<void> process_task(std::string task) {
         // Do work...
-        return make_ready_future_void(resource());
+        co_return;  // Use co_return for void
     }
 };
 ```
+
+**Note:** All actor methods that return `unique_future<T>` must be coroutines using `co_return`.
 
 ---
 
@@ -83,7 +86,10 @@ public:
 **Sender side:**
 ```cpp
 auto future = send(worker, address(), &Worker::compute, 42);
-int result = std::move(future).get();  // Blocks until ready
+
+// In non-coroutine code: process messages first, then get result
+worker->resume(100);
+int result = std::move(future).get();  // Only call when available()!
 std::cout << "Result: " << result << "\n";
 ```
 
@@ -93,9 +99,7 @@ class Worker : public basic_actor<Worker> {
     unique_future<int> compute(int x) {
         // Do expensive computation
         int result = x * 2;
-
-        // Return result (promise fulfilled automatically)
-        return make_ready_future<int>(resource(), result);
+        co_return result;  // Use co_return for coroutines
     }
 };
 ```
@@ -118,16 +122,12 @@ for (auto& worker : workers) {
 // Wait for all results
 std::vector<int> results;
 for (auto& future : futures) {
-    results.push_back(std::move(future).get());
-}
-
-// Or process as they complete
-for (auto& future : futures) {
-    while (!future.is_ready()) {
+    // Ensure message is processed first
+    while (!future.available()) {
+        // Process messages or wait
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    int result = std::move(future).get();
-    process_result(result);
+    results.push_back(std::move(future).get());
 }
 ```
 
@@ -157,14 +157,14 @@ Don't care about result - drop future immediately:
 
 ### Pattern 4: Timeout with Polling
 
-Implement timeout using `is_ready()` polling:
+Implement timeout using `available()` polling:
 
 ```cpp
 auto future = send(worker, address(), &Worker::slow_task, data);
 
 // Poll with timeout
 auto start = std::chrono::steady_clock::now();
-while (!future.is_ready()) {
+while (!future.available()) {
     auto elapsed = std::chrono::steady_clock::now() - start;
     if (elapsed > std::chrono::seconds(5)) {
         std::cerr << "Timeout waiting for result\n";
@@ -174,7 +174,7 @@ while (!future.is_ready()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
 
-if (future.is_ready()) {
+if (future.available()) {
     int result = std::move(future).get();
     process_result(result);
 }
@@ -194,7 +194,7 @@ auto future = send(worker, address(), &Worker::compute, data);
 // Do other work...
 
 // Check if result is ready without blocking
-if (future.is_ready()) {
+if (future.available()) {
     int result = std::move(future).get();
     process_result(result);
 } else {
@@ -209,9 +209,9 @@ if (future.is_ready()) {
 
 ### ✅ DO:
 
-1. **Use `is_ready()` for non-blocking checks**
+1. **Use `available()` for non-blocking checks**
    ```cpp
-   if (future.is_ready()) {
+   if (future.available()) {
        auto result = std::move(future).get();
    }
    ```
@@ -242,11 +242,17 @@ if (future.is_ready()) {
    int result = std::move(future).get();  // Move ownership
    ```
 
+6. **Use `co_await` in coroutines (recommended)**
+   ```cpp
+   // Best: suspends without blocking
+   int result = co_await std::move(future);
+   ```
+
 ---
 
 ### ❌ DON'T:
 
-1. **Call `get()` in tight loop without `is_ready()` check**
+1. **Call `get()` in tight loop without `available()` check**
    ```cpp
    // BAD: Busy-wait
    while (some_condition) {
@@ -254,7 +260,7 @@ if (future.is_ready()) {
    }
 
    // GOOD: Check first
-   while (some_condition && future.is_ready()) {
+   while (some_condition && future.available()) {
        auto result = std::move(future).get();
    }
    ```
@@ -463,37 +469,37 @@ Solution: Always call get() or let future destruct
 
 ### 1. No Timeout Support
 
-`get()` blocks indefinitely.
+`get()` requires `available() == true` (non-blocking design).
 
-**Workaround:**
+**Pattern with timeout:**
 ```cpp
 auto start = std::chrono::steady_clock::now();
-while (!future.is_ready()) {
+while (!future.available()) {
     if (std::chrono::steady_clock::now() - start > timeout) {
         future.cancel();
-        throw timeout_error();
+        // Handle timeout
+        return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
+auto result = std::move(future).get();
 ```
-
-**Future enhancement:** Add `get(timeout)` overload.
 
 ---
 
 ### 2. No Exception Support
 
-Errors via `future_state_enum` (pending/ready/error/cancelled) only.
+Errors via `failed()` and `error()` methods only.
 
 **Design constraint:** `-fno-exceptions` build requirement.
 
-**Alternative:** Use `std::optional<T>` or `std::variant<T, error_code>`:
+**Alternative:** Use `std::error_code` return via `co_return`:
 ```cpp
-unique_future<std::optional<int>> compute(int x) {
+unique_future<int> compute(int x) {
     if (x < 0) {
-        return make_ready_future<std::optional<int>>(resource(), std::nullopt);
+        co_return std::make_error_code(std::errc::invalid_argument);
     }
-    return make_ready_future<std::optional<int>>(resource(), x * 2);
+    co_return x * 2;
 }
 ```
 
@@ -552,75 +558,86 @@ No automatic lifetime management.
 ```cpp
 #include <actor-zeta.hpp>
 #include <iostream>
-#include <vector>
 
-// Worker actor that performs computations
-class ComputeWorker : public actor_zeta::basic_actor<ComputeWorker> {
+// Calculator actor with coroutine methods
+class calculator_actor final : public actor_zeta::basic_actor<calculator_actor> {
 public:
-    // Handler returns future with result
+    explicit calculator_actor(std::pmr::memory_resource* ptr)
+        : actor_zeta::basic_actor<calculator_actor>(ptr) {}
+
+    ~calculator_actor() = default;
+
+    // Simple computation - coroutine
     actor_zeta::unique_future<int> compute(int x) {
-        int result = x * x;
-        return actor_zeta::make_ready_future<int>(resource(), result);
+        co_return x * x;
+    }
+
+    // Async method using co_await
+    actor_zeta::unique_future<int> compute_chain(int x) {
+        auto future = actor_zeta::send(this, address(), &calculator_actor::compute, x);
+        int result = co_await std::move(future);  // Suspend until ready
+        co_return result + 10;
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &ComputeWorker::compute
+        &calculator_actor::compute,
+        &calculator_actor::compute_chain
     >;
 
-    explicit ComputeWorker(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<ComputeWorker>(ptr)
-        , compute_(actor_zeta::make_behavior(resource(), this, &ComputeWorker::compute)) {
-    }
-
     void behavior(actor_zeta::mailbox::message* msg) {
-        if (msg->command() == actor_zeta::msg_id<ComputeWorker, &ComputeWorker::compute>) {
-            compute_(msg);
+        switch (msg->command()) {
+            case actor_zeta::msg_id<calculator_actor, &calculator_actor::compute>:
+                actor_zeta::dispatch(this, &calculator_actor::compute, msg);
+                break;
+            case actor_zeta::msg_id<calculator_actor, &calculator_actor::compute_chain>: {
+                auto future = actor_zeta::dispatch(this, &calculator_actor::compute_chain, msg);
+                if (!future.available()) {
+                    pending_.push_back(std::move(future));
+                }
+                break;
+            }
         }
     }
 
+    // Clean up completed pending futures
+    bool poll_pending() {
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (it->available()) {
+                it = pending_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return !pending_.empty();
+    }
+
 private:
-    actor_zeta::behavior_t compute_;
+    std::vector<actor_zeta::unique_future<int>> pending_;
 };
 
 int main() {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
+    auto calculator = actor_zeta::spawn<calculator_actor>(resource);
 
-    // Create workers
-    std::vector<std::unique_ptr<ComputeWorker, actor_zeta::pmr::deleter_t>> workers;
-    for (int i = 0; i < 3; ++i) {
-        workers.push_back(actor_zeta::spawn<ComputeWorker>(resource));
+    // Simple call
+    auto future = actor_zeta::send(calculator.get(), calculator->address(),
+                                   &calculator_actor::compute, 5);
+    calculator->resume(100);
+    int result = std::move(future).get();
+    std::cout << "5^2 = " << result << "\n";  // Output: 5^2 = 25
+
+    // Chained call with co_await
+    auto future2 = actor_zeta::send(calculator.get(), calculator->address(),
+                                    &calculator_actor::compute_chain, 5);
+    while (!future2.available()) {
+        calculator->resume(100);
+        calculator->poll_pending();
     }
-
-    // Send parallel requests
-    std::vector<ComputeWorker::unique_future<int>> futures;
-    futures.reserve(workers.size());  // CRITICAL: Reserve capacity!
-
-    for (size_t i = 0; i < workers.size(); ++i) {
-        futures.push_back(actor_zeta::send(
-            workers[i].get(),
-            actor_zeta::address_t::empty_address(),
-            &ComputeWorker::compute,
-            static_cast<int>(i + 1)
-        ));
-    }
-
-    // Wait for all results
-    std::cout << "Results:\n";
-    for (size_t i = 0; i < futures.size(); ++i) {
-        int result = std::move(futures[i]).get();
-        std::cout << "  Worker " << i << ": " << result << "\n";
-    }
+    int result2 = std::move(future2).get();
+    std::cout << "5^2 + 10 = " << result2 << "\n";  // Output: 5^2 + 10 = 35
 
     return 0;
 }
-```
-
-**Output:**
-```
-Results:
-  Worker 0: 1
-  Worker 1: 4
-  Worker 2: 9
 ```
 
 ---
@@ -629,4 +646,5 @@ Results:
 
 - `CLAUDE.md` - Development guide for this codebase
 - `CHANGELOG.md` - Recent promise/future improvements
-- `header/actor-zeta/base/detail/cooperative_actor_classic.hpp` - Implementation
+- `header/actor-zeta/detail/future.hpp` - Promise/Future implementation
+- `examples/coroutine/mixed_example.cpp` - Working coroutine example

@@ -100,8 +100,8 @@ cd build && ctest --output-on-failure
 ./build/bin/tests_behavior
 
 # Run examples
-./build/bin/dataflow
 ./build/bin/balancer
+./build/bin/broadcast
 ```
 
 ## File Structure Reference
@@ -132,9 +132,8 @@ actor-zeta/
 │   │   │   ├── sharing_scheduler.hpp
 │   │   │   └── resumable.hpp       # Resumable execution
 │   │   ├── detail/                 # Internal implementation
-│   │   │   ├── pmr/                # Polymorphic memory resources
-│   │   │   │   ├── memory_resource.hpp
-│   │   │   │   └── polymorphic_allocator.hpp
+│   │   │   ├── future.hpp          # Promise/Future with coroutine support
+│   │   │   ├── future_state.hpp    # Future state management
 │   │   │   ├── rtt.hpp             # Custom RTTI (no typeid)
 │   │   │   ├── intrusive_ptr.hpp   # Reference counting
 │   │   │   ├── unique_function.hpp # Move-only function wrapper
@@ -145,11 +144,13 @@ actor-zeta/
 │   ├── message/
 │   ├── behavior/
 │   ├── actor-id/
+│   ├── coroutines/
 │   └── ...
 ├── examples/                       # Usage examples
-│   ├── dataflow/
-│   ├── balancer/
-│   └── broadcast/
+│   ├── balancer/                   # Load balancing pattern
+│   ├── broadcast/                  # Message broadcasting
+│   ├── supervisor/                 # Supervisor pattern
+│   └── coroutine/                  # Coroutine examples
 └── source/src.cpp                  # Library implementation (if not header-only)
 ```
 
@@ -195,14 +196,12 @@ Actors run until they yield control (no timeslicing).
 
 ### Memory Management
 
-**CRITICAL:** This is a custom PMR implementation, not std::pmr.
+Uses `std::pmr::memory_resource` for memory allocation.
 
-- **memory_resource** - Abstract allocator base class
-- **polymorphic_allocator** - Type-erased allocator
 - **spawn()** - **ALWAYS use this for actor allocation:**
   ```cpp
-  auto actor = spawn<MyActor>(memory_resource, constructor_args...);
-  // Returns: unique_ptr<MyActor, pmr::deleter_t>
+  auto actor = spawn<MyActor>(std::pmr::get_default_resource(), constructor_args...);
+  // Returns: unique_ptr<MyActor, actor_zeta::pmr::deleter_t>
   ```
 
 **Never use `new MyActor` directly** - breaks memory resource tracking.
@@ -404,9 +403,10 @@ Tests use **Catch2 2.13.8** framework with auto-discovery via `catch_discover_te
 ## Examples
 
 Located in `examples/`:
-- **dataflow** - Dataflow processing pipeline with actor graph
 - **balancer** - Load balancing across multiple worker actors
 - **broadcast** - Broadcasting messages to multiple actors
+- **supervisor** - Supervisor pattern for actor management
+- **coroutine** - Mixed sync/async coroutine patterns
 
 Build with `-DALLOW_EXAMPLES=ON`, run from `build/bin/`.
 
@@ -482,7 +482,6 @@ Switch between profiles using the dropdown in CLion's toolbar.
 ### Memory Management
 - ❌ Using `new`/`delete` instead of `spawn()`
 - ❌ Using `std::shared_ptr` for actors (use `intrusive_ptr` instead)
-- ❌ Assuming `std::pmr` exists (this is a custom PMR, not std::pmr)
 - ❌ Using `std::memcpy` for non-trivial types (breaks `std::string`, etc.)
 - ❌ Cross-arena migration for type-erased containers (RTT, message) - only same-arena supported
 - ❌ Using alignment < `sizeof(void*)` with `posix_memalign`
@@ -563,12 +562,12 @@ auto future = send(target_actor, sender, &TargetActor::compute, arg1);
 int result = std::move(future).get();  // Blocks until ready
 ```
 
-**Handler returns future:**
+**Handler returns future (coroutine):**
 ```cpp
 class Worker : public basic_actor<Worker> {
     unique_future<int> compute(int x) {
         int result = x * 2;
-        return make_ready_future<int>(resource(), result);
+        co_return result;  // Use co_return for coroutines
     }
 };
 ```
@@ -603,10 +602,11 @@ for (auto& future : futures) {
 auto future = send(worker, address(), &Worker::slow_task, data);
 
 auto start = std::chrono::steady_clock::now();
-while (!future.is_ready()) {
+while (!future.available()) {
     if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
         future.cancel();  // Best-effort cancellation
-        throw timeout_error();
+        // Handle timeout - no exceptions
+        return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
@@ -651,7 +651,7 @@ class MyActor : public basic_actor<MyActor> {
                 // CRITICAL: Store pending coroutine!
                 // If destroyed immediately, coroutine is destroyed → refcount underflow!
                 auto future = dispatch(this, &MyActor::async_method, msg);
-                if (!future.is_ready()) {
+                if (!future.available()) {
                     pending_.push_back(std::move(future));
                 }
                 break;
@@ -659,17 +659,14 @@ class MyActor : public basic_actor<MyActor> {
         }
     }
 
-    // Poll and resume pending coroutines
+    // Poll and clean up completed coroutines
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->awaiting_ready()) {
-                it->resume();
-                if (it->is_ready()) {
-                    it = pending_.erase(it);
-                    continue;
-                }
+            if (it->available()) {
+                it = pending_.erase(it);
+            } else {
+                ++it;
             }
-            ++it;
         }
         return !pending_.empty();
     }
@@ -682,7 +679,7 @@ private:
 ### Best Practices
 
 ✅ **DO:**
-- Use `is_ready()` for non-blocking checks
+- Use `available()` for non-blocking checks
 - Reserve vector capacity before adding futures
 - Ensure actor outlives all futures
 - Use fire-and-forget for notifications/logging
@@ -691,7 +688,7 @@ private:
 - Use **typed coroutines** (`unique_future<T>`) when you need `co_await`
 
 ❌ **DON'T:**
-- Call `get()` in tight loop without `is_ready()` check
+- Call `get()` in tight loop without `available()` check
 - Destroy actor while futures are pending
 - Store futures indefinitely
 - Use exceptions for error handling
@@ -707,31 +704,29 @@ Current implementation uses **exponential backoff** in `get()`:
 
 ```cpp
 #include <actor-zeta.hpp>
+#include <iostream>
 
 class Worker : public actor_zeta::basic_actor<Worker> {
 public:
+    // Handler as coroutine
     actor_zeta::unique_future<int> compute(int x) {
-        return actor_zeta::make_ready_future<int>(resource(), x * x);
+        co_return x * x;  // Use co_return for coroutines
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&Worker::compute>;
 
-    explicit Worker(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<Worker>(ptr)
-        , compute_(actor_zeta::make_behavior(resource(), this, &Worker::compute)) {}
+    explicit Worker(std::pmr::memory_resource* ptr)
+        : actor_zeta::basic_actor<Worker>(ptr) {}
 
     void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<Worker, &Worker::compute>) {
-            compute_(msg);
+            actor_zeta::dispatch(this, &Worker::compute, msg);
         }
     }
-
-private:
-    actor_zeta::behavior_t compute_;
 };
 
 int main() {
-    auto* resource = actor_zeta::pmr::get_default_resource();
+    auto* resource = std::pmr::get_default_resource();
     auto worker = actor_zeta::spawn<Worker>(resource);
 
     auto future = actor_zeta::send(
@@ -740,6 +735,9 @@ int main() {
         &Worker::compute,
         42
     );
+
+    // Process message
+    worker->resume(100);
 
     int result = std::move(future).get();
     std::cout << "Result: " << result << "\n";  // Output: Result: 1764

@@ -8,7 +8,7 @@
 A lightweight, high-performance C++20 virtual actor model implementation with:
 - **Coroutine support** (`co_await`, `co_return`)
 - **Promise/Future** for async request-response
-- **Custom PMR allocators** for memory management
+- **std::pmr allocators** for memory management
 - **No RTTI, no exceptions** - compiles with `-fno-rtti -fno-exceptions`
 
 ## Requirements
@@ -26,7 +26,7 @@ A lightweight, high-performance C++20 virtual actor model implementation with:
 
 class compute_actor final : public actor_zeta::basic_actor<compute_actor> {
 public:
-    explicit compute_actor(actor_zeta::pmr::memory_resource* res)
+    explicit compute_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<compute_actor>(res) {}
 
     // Coroutine method - returns unique_future<T>
