@@ -396,7 +396,7 @@ struct generator_promise_type {
 
     template<typename First, typename... Args>
     generator_promise_type(First&& first, Args&&...) noexcept
-        : resource_(extract_resource_from_args(std::forward<First>(first)))
+        : resource_(extract_resource_from_args(std::forward<std::remove_reference_t<First>>(first)))
         , state_(nullptr) {
         assert(resource_ != nullptr && "generator requires actor with resource()");
     }
