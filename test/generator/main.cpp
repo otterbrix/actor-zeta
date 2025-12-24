@@ -332,6 +332,7 @@ TEST_CASE("generator MT - concurrent send", "[generator][mt]") {
         generators.reserve(num_threads * msgs_per_thread);
 
         std::atomic<int> counter{0};
+        std::atomic<int> valid_count{0};
         std::vector<std::thread> threads;
 
         for (int t = 0; t < num_threads; ++t) {
@@ -339,7 +340,10 @@ TEST_CASE("generator MT - concurrent send", "[generator][mt]") {
                 for (int i = 0; i < msgs_per_thread; ++i) {
                     auto gen = send(actor.get(), actor::address_t::empty_address(),
                                     &StreamingActor::stream_numbers, 2);
-                    REQUIRE(gen.valid());
+                    // Avoid REQUIRE inside threads - Catch2 is not thread-safe
+                    if (gen.valid()) {
+                        valid_count.fetch_add(1, std::memory_order_relaxed);
+                    }
                     counter.fetch_add(1, std::memory_order_relaxed);
                 }
             });
@@ -350,6 +354,7 @@ TEST_CASE("generator MT - concurrent send", "[generator][mt]") {
         }
 
         REQUIRE(counter.load() == num_threads * msgs_per_thread);
+        REQUIRE(valid_count.load() == num_threads * msgs_per_thread);
 
         auto info = actor->resume(100);
         REQUIRE(info.messages_processed == static_cast<size_t>(num_threads * msgs_per_thread));
@@ -410,12 +415,16 @@ TEST_CASE("generator MT - producer/consumer threads", "[generator][mt]") {
     SECTION("send in one thread, process in another") {
         std::atomic<bool> send_done{false};
         std::atomic<int> generators_created{0};
+        std::atomic<int> valid_generators{0};
 
         std::thread producer([&]() {
             for (int i = 0; i < 20; ++i) {
                 auto gen = send(actor.get(), actor::address_t::empty_address(),
                                 &StreamingActor::stream_numbers, 3);
-                REQUIRE(gen.valid());
+                // Avoid REQUIRE inside threads - Catch2 is not thread-safe
+                if (gen.valid()) {
+                    valid_generators.fetch_add(1, std::memory_order_relaxed);
+                }
                 generators_created.fetch_add(1, std::memory_order_relaxed);
             }
             send_done.store(true, std::memory_order_release);
@@ -436,6 +445,7 @@ TEST_CASE("generator MT - producer/consumer threads", "[generator][mt]") {
         consumer.join();
 
         REQUIRE(generators_created.load() == 20);
+        REQUIRE(valid_generators.load() == 20);
     }
 }
 

@@ -99,7 +99,7 @@ public:
     }
 
     void set_suspended(void* value_ptr) noexcept {
-        value_ptr_ = value_ptr;
+        value_ptr_.store(value_ptr, std::memory_order_release);
         store_state_raw(generator_states::suspended);
     }
 
@@ -122,20 +122,22 @@ public:
     }
 
     void reset_to_created() noexcept {
-        value_ptr_ = nullptr;
+        value_ptr_.store(nullptr, std::memory_order_release);
         store_state_raw(generator_states::created);
     }
 
     [[nodiscard]] T& current() noexcept {
         assert(load_state_raw() == generator_states::suspended && "current() requires suspended state");
-        assert(value_ptr_ != nullptr && "value_ptr_ is null");
-        return *static_cast<T*>(value_ptr_);
+        void* ptr = value_ptr_.load(std::memory_order_acquire);
+        assert(ptr != nullptr && "value_ptr_ is null");
+        return *static_cast<T*>(ptr);
     }
 
     [[nodiscard]] const T& current() const noexcept {
         assert(load_state_raw() == generator_states::suspended && "current() requires suspended state");
-        assert(value_ptr_ != nullptr && "value_ptr_ is null");
-        return *static_cast<const T*>(value_ptr_);
+        void* ptr = value_ptr_.load(std::memory_order_acquire);
+        assert(ptr != nullptr && "value_ptr_ is null");
+        return *static_cast<const T*>(ptr);
     }
 
     void link_to(generator_state<T>* external) noexcept {
@@ -221,7 +223,7 @@ private:
         consumer_waiting = 2,
     };
 
-    void* value_ptr_;
+    std::atomic<void*> value_ptr_;
     generator_state<T>* linked_state_;
     std::atomic<uint8_t> sync_;
     std::error_code error_code_;
