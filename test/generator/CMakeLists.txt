@@ -19,10 +19,8 @@ target_include_directories(${CURRENT_TARGET}
 
 target_compile_features(${CURRENT_TARGET} PRIVATE cxx_std_20)
 
-# Enable coroutines
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(${CURRENT_TARGET} PRIVATE -fcoroutines)
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+# Enable coroutines for GCC (Clang enables coroutines with -std=c++20)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(${CURRENT_TARGET} PRIVATE -fcoroutines)
 endif()
 

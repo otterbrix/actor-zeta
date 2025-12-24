@@ -92,17 +92,6 @@ public:
         co_return result;
     }
 
-    /// @brief Consume stream from dispatcher
-    ///
-    /// Demonstrates: Generator consumption pattern
-    /// - Request generator from dispatcher
-    /// - co_await inside unique_future to consume each value
-    /// - Collect all rows
-    /// - Handle errors via stream_error
-    ///
-    /// @param session Session ID (BY VALUE)
-    /// @param collection Collection name (BY VALUE)
-    /// @return unique_future<std::vector<std::string>> with all rows
     unique_future<std::vector<std::string>> consume_stream(
             session_id_t session,
             std::string collection) {
@@ -113,7 +102,6 @@ public:
 
         std::vector<std::string> rows;
 
-        // Get generator from dispatcher
         auto gen = send(
             dispatcher_,
             address(),
@@ -123,21 +111,16 @@ public:
 
         g_log.log("[%::consume_stream] Got generator, consuming rows...", name_);
 
-        // Consume generator using co_await
         while (co_await gen) {
-            // Check for error
             if (gen.has_error()) {
                 g_log.log("[%::consume_stream] Stream error: %",
                           name_, gen.error().message());
                 last_stream_error_ = gen.error();
-                co_return rows;  // Return partial results
+                co_return rows;
             }
 
-            // Get current value
             auto& row = gen.current();
             g_log.log("[%::consume_stream] Received row: %", name_, row);
-
-            // Transform: add client prefix
             rows.push_back("[client] " + row);
         }
 

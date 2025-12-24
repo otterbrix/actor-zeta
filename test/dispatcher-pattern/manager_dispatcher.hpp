@@ -617,21 +617,6 @@ public:
         co_return result;
     }
 
-    // =========================================================================
-    // PATTERN 6: Generator Streaming
-    // Forward streaming data from storage layer
-    // =========================================================================
-
-    /// @brief Create row stream from storage - generator forwarding pattern
-    ///
-    /// Demonstrates:
-    /// - Generator method that proxies another generator
-    /// - co_await inside generator to consume upstream
-    /// - co_yield to forward values to downstream consumer
-    /// - Error handling via stream_error
-    ///
-    /// @param session Session ID (BY VALUE)
-    /// @param collection Collection name (BY VALUE)
     generator<std::string> create_row_stream(
             session_id_t session,
             std::string collection) {
@@ -640,14 +625,12 @@ public:
         g_log.log("[%::create_row_stream] thread=% session=% collection=%",
                   name_, tid, session.data(), collection);
 
-        // Validate input
         if (collection.empty()) {
             g_log.log("[%::create_row_stream] Error: empty collection name", name_);
             co_yield stream_error{std::make_error_code(std::errc::invalid_argument)};
             co_return;
         }
 
-        // Get generator from storage
         auto storage_gen = send(
             memory_storage_,
             address(),
@@ -657,7 +640,6 @@ public:
 
         g_log.log("[%::create_row_stream] Got storage generator, forwarding rows...", name_);
 
-        // Forward all rows from storage generator
         while (co_await storage_gen) {
             if (storage_gen.has_error()) {
                 g_log.log("[%::create_row_stream] Storage error: %",
@@ -668,8 +650,6 @@ public:
 
             auto& row = storage_gen.current();
             g_log.log("[%::create_row_stream] Forwarding: %", name_, row);
-
-            // Add manager prefix to demonstrate transformation
             co_yield "[manager] " + row;
         }
 

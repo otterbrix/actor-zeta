@@ -17,10 +17,8 @@ if(CMAKE_CXX_STANDARD GREATER_EQUAL 20)
         CXX_STANDARD_REQUIRED ON
     )
 
-    # Enable coroutines for Clang/GCC
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_compile_options(generator PRIVATE -fcoroutines)
-    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Enable coroutines for GCC (Clang enables coroutines with -std=c++20)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(generator PRIVATE -fcoroutines)
     endif()
 

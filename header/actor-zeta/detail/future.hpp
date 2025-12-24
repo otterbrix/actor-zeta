@@ -20,7 +20,7 @@ namespace actor_zeta {
     // Forward declarations for generator support
     template<typename T> class generator;
     namespace detail {
-        template<typename T> struct generator_state;
+        template<typename T> class generator_state;
         template<typename T> struct next_awaiter;
     }
 
