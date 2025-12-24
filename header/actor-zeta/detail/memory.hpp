@@ -7,7 +7,6 @@
 
 namespace actor_zeta { namespace pmr {
 
-    /// @brief Concept to check if type has a static 'placement' member
     template<typename T>
     concept has_placement = requires {
         { T::placement };

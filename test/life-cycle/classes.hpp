@@ -61,12 +61,13 @@ public:
         return storages_.size()+test_handlers_.size();
     }
 
-    template<typename R, typename... Args>
-    unique_future<R> enqueue_impl(
+    template<typename ReturnType, typename... Args>
+    ReturnType enqueue_impl(
         actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
+        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
         enqueue_base_counter++;
         return enqueue_sync_impl<R>(
             sender,
@@ -252,7 +253,7 @@ public:
 
     actor_zeta::unique_future<void> ptr_2(int data) {
         TRACE("+++");
-        (void)data;
+        actor_zeta::detail::ignore_unused(data);
         ptr_2_counter++;
         co_return;
     }

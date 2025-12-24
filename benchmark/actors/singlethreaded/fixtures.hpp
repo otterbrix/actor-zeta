@@ -6,7 +6,6 @@
 #include "define_actor.hpp"
 #include "define_supervisor.hpp"
 
-// Macro to register benchmarks for different argument counts
 #define REGISTER_BENCHMARK(type, count, ...)                                                 \
     class Fixture_##type##_##count : public benchmark::Fixture {                            \
         using Actor = ping_pong_actor<__VA_ARGS__>;                                         \

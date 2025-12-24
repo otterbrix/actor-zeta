@@ -5,9 +5,7 @@
 #include <cstddef>
 
 namespace actor_zeta {
-    ///
-    /// @brief This class represents reference counter
-    ///
+
     class ref_counted {
     public:
         virtual ~ref_counted();
@@ -20,8 +18,6 @@ namespace actor_zeta {
 
         void ref() const noexcept {
 #ifndef NDEBUG
-            // RACE CONDITION DETECTION: Verify object is alive before incrementing refcount
-            // If rc_ == 0, object is being/was deleted - use-after-free!
             auto old_rc = rc_.load(std::memory_order_acquire);
             assert(old_rc > 0 && "ref(): use-after-free - refcount is 0, object deleted!");
 #endif
@@ -30,7 +26,6 @@ namespace actor_zeta {
 
         void deref() const noexcept {
 #ifndef NDEBUG
-            // RACE CONDITION DETECTION: Verify refcount > 0 before decrementing
             auto old_rc = rc_.load(std::memory_order_acquire);
             assert(old_rc > 0 && "deref(): refcount underflow - called deref() more than ref()!");
 #endif
@@ -38,10 +33,8 @@ namespace actor_zeta {
                 delete this;
         }
 
-        /// Queries whether there is exactly one reference.
         bool unique() const noexcept {
 #ifndef NDEBUG
-            // RACE CONDITION DETECTION: Verify refcount is valid
             auto count = rc_.load(std::memory_order_acquire);
             assert(count > 0 && "unique(): use-after-free - refcount is 0!");
 #endif
@@ -50,7 +43,6 @@ namespace actor_zeta {
 
         size_t get_reference_count() const noexcept {
 #ifndef NDEBUG
-            // RACE CONDITION DETECTION: Verify refcount is valid
             auto count = rc_.load(std::memory_order_acquire);
             assert(count > 0 && "get_reference_count(): use-after-free - refcount is 0!");
 #endif

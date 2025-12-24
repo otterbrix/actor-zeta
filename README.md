@@ -1,104 +1,150 @@
+# actor-zeta
 
 |    compiler    | Master | Develop |
 |:--------------:|:---:|:---:|
-| gcc 4.8.5 - 12 | |[![ubuntu](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml/badge.svg?branch=develop)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml) |
-| clang 3.9 - 16 | |[![ubuntu](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml/badge.svg?branch=develop)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml)|
+| gcc 9+ | |[![ubuntu](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml/badge.svg?branch=develop)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml) |
+| clang 10+ | |[![ubuntu](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml/badge.svg?branch=develop)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml)|
 
-actor-zeta
-========================
+A lightweight, high-performance C++20 virtual actor model implementation with:
+- **Coroutine support** (`co_await`, `co_return`)
+- **Promise/Future** for async request-response
+- **std::pmr allocators** for memory management
+- **No RTTI, no exceptions** - compiles with `-fno-rtti -fno-exceptions`
 
-actor-zeta is an open source C++11/14/17 virtual actor model implementation featuring lightweight & fast and more.
+## Requirements
 
-## Example
+- **C++20** compiler (GCC 9+, Clang 10+, MSVC 2019+)
+- CMake >= 3.15
+- Conan 2.x (for dependencies)
 
-```C++
+## Quick Example
 
+### Coroutine Actor
+
+```cpp
 #include <actor-zeta.hpp>
 
-class key_value_storage_t final : public actor_zeta::basic_actor<key_value_storage_t> {
+class compute_actor final : public actor_zeta::basic_actor<compute_actor> {
 public:
-    void init();
-    void search(std::string& key);
-    void add(const std::string& key, const std::string& value);
+    explicit compute_actor(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<compute_actor>(res) {}
+
+    // Coroutine method - returns unique_future<T>
+    actor_zeta::unique_future<int> compute(int x) {
+        co_return x * 2;
+    }
+
+    // Coroutine with co_await
+    actor_zeta::unique_future<int> compute_chain(int x) {
+        auto future = actor_zeta::send(this, address(), &compute_actor::compute, x);
+        int result = co_await std::move(future);  // Wait for result
+        co_return result + 10;
+    }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &key_value_storage_t::init,
-        &key_value_storage_t::search,
-        &key_value_storage_t::add
+        &compute_actor::compute,
+        &compute_actor::compute_chain
     >;
 
-    explicit key_value_storage_t(actor_zeta::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<key_value_storage_t>(ptr)
-        , init_(actor_zeta::make_behavior(resource(), this, &key_value_storage_t::init))
-        , search_(actor_zeta::make_behavior(resource(), this, &key_value_storage_t::search))
-        , add_(actor_zeta::make_behavior(resource(), this, &key_value_storage_t::add)) {
-    }
-
-    void behavior(actor_zeta::message* msg) {
+    void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
-        if (cmd == actor_zeta::msg_id<key_value_storage_t, &key_value_storage_t::init>) {
-            init_(msg);
-        } else if (cmd == actor_zeta::msg_id<key_value_storage_t, &key_value_storage_t::search>) {
-            search_(msg);
-        } else if (cmd == actor_zeta::msg_id<key_value_storage_t, &key_value_storage_t::add>) {
-            add_(msg);
+        if (cmd == actor_zeta::msg_id<compute_actor, &compute_actor::compute>) {
+            dispatch(this, &compute_actor::compute, msg);
+        } else if (cmd == actor_zeta::msg_id<compute_actor, &compute_actor::compute_chain>) {
+            dispatch(this, &compute_actor::compute_chain, msg);
         }
     }
-
-    ~key_value_storage_t() override = default;
-
-private:
-    actor_zeta::behavior_t init_;
-    actor_zeta::behavior_t search_;
-    actor_zeta::behavior_t add_;
-
-    void init() {
-       /// ...
-    }
-
-    void search(std::string& key) {
-        /// ...
-    }
-
-    void add(const std::string& key, const std::string& value) {
-        /// ...
-    }
 };
-
 ```
 
-### Header-Only
+### Getting Results
 
-To use as header-only; that is, to eliminate the requirement to
-link a program to a static or dynamic library, simply
-place the following line in exactly one new or existing source
-file in your project.
+```cpp
+// Method 1: co_await in coroutine (recommended)
+actor_zeta::unique_future<int> caller_method() {
+    auto future = actor_zeta::send(target, address(), &Target::compute, 21);
+    int result = co_await std::move(future);  // Suspends until ready
+    co_return result;
+}
+
+// Method 2: Polling (for non-coroutine code)
+auto future = actor_zeta::send(target, address(), &Target::compute, 21);
+while (!future.available()) {
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+}
+int result = std::move(future).get();  // Extract ready result
+
+// Method 3: Check and extract
+auto future = actor_zeta::send(target, address(), &Target::compute, 21);
+if (future.available()) {
+    int result = std::move(future).get();
+}
 ```
+
+## API Overview
+
+### unique_future<T>
+
+| Method | Description |
+|--------|-------------|
+| `available()` | Check if result is ready |
+| `get() &&` | Extract result (requires `available() == true`) |
+| `failed()` | Check if future has error |
+| `cancel()` | Cancel the future |
+| `co_await future` | Coroutine wait (via `operator co_await`) |
+
+### Sending Messages
+
+```cpp
+// Send message and get future for result
+auto future = actor_zeta::send(actor, sender_address, &Actor::method, args...);
+
+// Wait for result in coroutine
+int result = co_await std::move(future);
+```
+
+## Header-Only Mode
+
+To use as header-only, add this line in **exactly one** source file:
+
+```cpp
 #include <actor-zeta/src.hpp>
 ```
 
-## For Users
-
-Add the corresponding remote to your conan:
+## Build from Source
 
 ```bash
-    conan remote add duckstax http://conan.duckstax.com
+# Install dependencies
+conan profile detect --force
+conan install . -of build -s build_type=Debug --build=missing
+
+# Configure
+cmake -B build -GNinja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DALLOW_EXAMPLES=ON \
+  -DALLOW_TESTS=ON \
+  -DRTTI_DISABLE=ON \
+  -DEXCEPTIONS_DISABLE=ON \
+  -DCMAKE_TOOLCHAIN_FILE=./build/Debug/generators/conan_toolchain.cmake
+
+# Build
+cmake --build build
+
+# Test
+cd build && ctest --output-on-failure
 ```
 
-### Basic setup
-```bash
-    $ conan install actor-zeta/1.0.0a8@duckstax/stable
-```
-### Project setup
+## CMake Options
 
-If you handle multiple dependencies in your project is better to add a *conanfile.txt*
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ALLOW_EXAMPLES` | OFF | Build examples |
+| `ALLOW_TESTS` | OFF | Build tests |
+| `RTTI_DISABLE` | ON | Compile with `-fno-rtti` |
+| `EXCEPTIONS_DISABLE` | ON | Compile with `-fno-exceptions` |
 
-    [requires]
-    actor-zeta/1.0.0a8@duckstax/stable
+## Documentation
 
-    [generators]
-    cmake
-
-## Dependencies
-
-* CMake >= 3.0
+- [CLAUDE.md](CLAUDE.md) - Development guide
+- [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md) - Promise/Future patterns
+- [CHANGELOG.md](CHANGELOG.md) - Change history

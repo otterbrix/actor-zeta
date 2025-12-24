@@ -8,6 +8,19 @@
 #include <thread>
 #include <vector>
 
+// Helper: Poll-wait for future to become available (non-blocking get() requires this)
+template<typename T>
+void wait_for_ready(actor_zeta::unique_future<T>& future, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+    auto start = std::chrono::steady_clock::now();
+    while (!future.available()) {
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        if (elapsed > timeout) {
+            FAIL("Timeout waiting for future to become ready");
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+}
+
 // Simple test actor for shutdown testing
 class shutdown_test_actor final : public actor_zeta::basic_actor<shutdown_test_actor> {
 public:
@@ -106,7 +119,7 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
             // Some messages may have been processed before actor destruction
             // Note: get() may return error state - we just count successful completions
             auto result = std::move(future).get();
-            (void)result;
+            actor_zeta::detail::ignore_unused(result);
             ++successful;
         }
     }
@@ -163,6 +176,7 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
         // GRACEFUL SHUTDOWN: Wait for all futures before destroying actor
         int completed = 0;
         for (size_t i = 0; i < futures.size(); ++i) {
+            wait_for_ready(futures[i]);  // Poll until ready (non-blocking get() requires this)
             auto result = std::move(futures[i]).get();
             REQUIRE(result == static_cast<int>(i) * 2);  // Verify correct result
             ++completed;
@@ -302,6 +316,7 @@ TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
         }
 
         // Always wait for result before destroying actor
+        wait_for_ready(future);  // Poll until ready (non-blocking get() requires this)
         int result = std::move(future).get();
         REQUIRE(result == i * 2);
 

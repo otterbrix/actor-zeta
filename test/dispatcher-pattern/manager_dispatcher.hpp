@@ -617,6 +617,45 @@ public:
         co_return result;
     }
 
+    generator<std::string> create_row_stream(
+            session_id_t session,
+            std::string collection) {
+
+        auto tid = thread_id_str();
+        g_log.log("[%::create_row_stream] thread=% session=% collection=%",
+                  name_, tid, session.data(), collection);
+
+        if (collection.empty()) {
+            g_log.log("[%::create_row_stream] Error: empty collection name", name_);
+            co_yield stream_error{std::make_error_code(std::errc::invalid_argument)};
+            co_return;
+        }
+
+        auto storage_gen = send(
+            memory_storage_,
+            address(),
+            &memory_storage_t::stream_rows,
+            session,
+            collection_full_name_t("test_db", collection));
+
+        g_log.log("[%::create_row_stream] Got storage generator, forwarding rows...", name_);
+
+        while (co_await storage_gen) {
+            if (storage_gen.has_error()) {
+                g_log.log("[%::create_row_stream] Storage error: %",
+                          name_, storage_gen.error().message());
+                co_yield stream_error{storage_gen.error()};
+                co_return;
+            }
+
+            auto& row = storage_gen.current();
+            g_log.log("[%::create_row_stream] Forwarding: %", name_, row);
+            co_yield "[manager] " + row;
+        }
+
+        g_log.log("[%::create_row_stream] Stream exhausted", name_);
+    }
+
     // =========================================================================
     // dispatch_traits - compile-time method->ID mapping
     // =========================================================================
@@ -633,13 +672,15 @@ public:
         &manager_dispatcher_t::compute_with_lambda_and_state,
         &manager_dispatcher_t::async_transform_with_lambda,
         &manager_dispatcher_t::execute_with_coroutine_lambda,
-        // Extended database operations
+    
         &manager_dispatcher_t::create_cursor_from_query,
         &manager_dispatcher_t::validate_and_execute,
         &manager_dispatcher_t::get_database_statistics,
         &manager_dispatcher_t::process_batch_buffer,
         &manager_dispatcher_t::get_cached_value,
-        &manager_dispatcher_t::execute_with_retry
+        &manager_dispatcher_t::execute_with_retry,
+    
+        &manager_dispatcher_t::create_row_stream
     >;
 
     // =========================================================================
@@ -761,6 +802,12 @@ public:
                 if (!future.available()) pending_size_.push_back(std::move(future));
                 break;
             }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::create_row_stream>: {
+                auto gen = dispatch(this, &manager_dispatcher_t::create_row_stream, msg);
+                g_log.log("[%::behavior] create_row_stream() started, storing pending generator", name_);
+                pending_generators_.push_back(std::move(gen));
+                break;
+            }
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
@@ -857,6 +904,8 @@ private:
     std::vector<unique_future<aggregate_result_t>> pending_aggregate_;
     std::vector<unique_future<std::string>> pending_detail_;
     std::vector<unique_future<int>> pending_transform_;  // for transform_with_lambda
+    
+    std::vector<generator<std::string>> pending_generators_;
 
     // Cursor tracking by session
     std::unordered_map<session_id_t, cursor_t*, session_id_hash> result_storage_;

@@ -35,12 +35,10 @@ namespace actor_zeta { namespace detail {
 
 #endif
 
-    /// @brief Align value up to given alignment (compile-time)
     constexpr std::size_t align_up(std::size_t n, std::size_t align) noexcept {
         return (n + align - 1) & ~(align - 1);
     }
 
-    /// @brief Check memory resource is not nullptr
     inline std::pmr::memory_resource* check_resource(std::pmr::memory_resource* r) noexcept {
         assert(r && "memory_resource must not be nullptr");
         return r;
@@ -82,15 +80,11 @@ namespace actor_zeta { namespace detail {
 
         void clear() noexcept {
             auto tmp = data_;
-            // Destroy in reverse order (LIFO) - C++ convention
+            // Destroy in reverse order (LIFO)
             for (std::size_t i = objects_idx_; i-- > 0; ) {
                 objects_[i].destroyer(tmp + objects_[i].offset);
             }
 
-            // Note: capacity_ stores the actual data size, not aligned size
-            // So we need to recalculate aligned size for deallocation_
-            // However, the actual allocated size is implementation-defined
-            // For simplicity, we'll use the formula that matches allocation_
             if (allocation_) {
                 std::size_t aligned_capacity = align_up(capacity_, alignof(objects_t));
                 std::size_t allocated_size = aligned_capacity + objects_idx_ * sizeof(objects_t);
@@ -157,7 +151,6 @@ namespace actor_zeta { namespace detail {
             , objects_(nullptr)
             , objects_idx_(0) {
 
-            // Empty optimization - if no arguments, don't allocate
             if constexpr (sizeof...(Args) == 0) {
 #ifdef __ENABLE_TESTS_MEASUREMENTS__
                 rtt_test::templated_ctor_++;
@@ -227,12 +220,9 @@ namespace actor_zeta { namespace detail {
             , data_(nullptr)
             , objects_(nullptr)
             , objects_idx_(0) {
-            // Only same-arena move is supported for type-erased container
-            // Cross-arena migration would require copying non-trivial types which is not possible
-            // without knowing their actual types at runtime
+            // Only same-arena move is supported
             assert(resource == other.memory_resource_ && "Cross-arena RTT migration is not supported");
 
-            // Same arena - cheap move (just steal pointers)
             capacity_ = other.capacity_;
             volume_ = other.volume_;
             allocation_ = other.allocation_;
@@ -264,8 +254,6 @@ namespace actor_zeta { namespace detail {
         rtt& operator=(rtt&& other) noexcept {
             if (this == &other) return *this;
 
-            // Only same-arena move assignment is supported
-            // If different arenas, we require explicit handling by the user
             assert((memory_resource_ == other.memory_resource_ || memory_resource_ == nullptr)
                    && "Cross-arena RTT move assignment is not supported");
 
@@ -297,19 +285,16 @@ namespace actor_zeta { namespace detail {
         rtt& operator=(const rtt& other) = delete;
         rtt& operator=(rtt& other) = delete;
 
-        /// @brief Get element at index
         template<typename T>
         const T& get(std::size_t index) const {
             return get_by_offset<T>(offset(index));
         }
 
-        /// @brief Get element at index (mutable)
         template<typename T>
         T& get(std::size_t index) {
             return get_by_offset<T>(offset(index));
         }
 
-        /// @brief Get number of stored elements
         std::size_t size() const noexcept {
             return objects_idx_;
         }
@@ -326,31 +311,19 @@ namespace actor_zeta { namespace detail {
             return objects_idx_ == 0;
         }
 
-        /// @brief Get memory resource used by this rtt
-        /// @return Pointer to memory resource, or nullptr if rtt was moved-from
         std::pmr::memory_resource* memory_resource() const noexcept {
             return memory_resource_;
         }
     };
 
-    /// @brief Extract argument from rtt at index I according to type list List
-    ///
-    /// Handles different parameter types:
-    /// - const T&: return const reference to stored value (no copy, no move)
-    /// - T: use std::move to support move-only types (e.g., unique_ptr)
-    ///
-    /// Note: Non-const lvalue references (T&) are forbidden by dispatch() static_assert
     template<std::size_t I, class List>
     auto get(rtt& r) -> typename type_traits::type_list_at_t<List, I> {
         using requested_type = typename type_traits::type_list_at_t<List, I>;
         using decay_type = typename type_traits::decay_t<requested_type>;
 
         if constexpr (std::is_lvalue_reference_v<requested_type>) {
-            // For const T& (non-const T& is forbidden by dispatch static_assert)
-            // Return reference to stored value
             return r.get<decay_type>(I);
         } else {
-            // For value types: use std::move to support move-only types
             return std::move(r.get<decay_type>(I));
         }
     }

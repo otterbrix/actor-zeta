@@ -384,8 +384,223 @@ return future;
 
 ---
 
+---
+
+## [2025-12] - C++20 Coroutines & std::pmr Migration
+
+### PMR Migration
+**Date:** 2025-12
+
+**Change:** Migrated from custom `actor_zeta::pmr` to `std::pmr`.
+
+**API Changes:**
+```cpp
+// OLD API (removed)
+actor_zeta::pmr::memory_resource* resource;
+actor_zeta::pmr::get_default_resource();
+
+// NEW API (current)
+std::pmr::memory_resource* resource;
+std::pmr::get_default_resource();
+```
+
+**Files affected:**
+- All header files using memory resources
+- All examples and tests
+
+---
+
+### unique_future API Updates
+**Date:** 2025-12
+
+**Change:** Renamed `is_ready()` to `available()` for clearer semantics.
+
+**API Changes:**
+```cpp
+// OLD API
+if (future.is_ready()) { ... }
+
+// NEW API (current)
+if (future.available()) { ... }
+```
+
+**Additional API:**
+- `failed()` - Check if future has error
+- `error()` - Get error code
+- `valid()` - Check if future has valid state
+
+---
+
+### Coroutine-First Design
+**Date:** 2025-12
+
+**Change:** All actor methods returning `unique_future<T>` must now be coroutines.
+
+**Pattern:**
+```cpp
+// ALL handlers must use co_return
+unique_future<int> compute(int x) {
+    co_return x * 2;  // Required!
+}
+
+unique_future<void> process() {
+    co_return;  // Required for void!
+}
+```
+
+**Behavior dispatch with coroutines:**
+```cpp
+void behavior(mailbox::message* msg) {
+    switch (msg->command()) {
+        case msg_id<Actor, &Actor::compute>:
+            dispatch(this, &Actor::compute, msg);
+            break;
+        case msg_id<Actor, &Actor::async_method>: {
+            // CRITICAL: Store pending coroutine!
+            auto future = dispatch(this, &Actor::async_method, msg);
+            if (!future.available()) {
+                pending_.push_back(std::move(future));
+            }
+            break;
+        }
+    }
+}
+```
+
+---
+
+### Generator<T> - Streaming Data Between Actors
+**Date:** 2025-12
+
+**Feature:** Added `generator<T>` coroutine type for streaming data between actors.
+
+**Motivation:** Enable actor methods to yield multiple values over time, supporting efficient streaming patterns without buffering all data in memory.
+
+**Key Features:**
+- **Move-only** - generators cannot be copied
+- **Lazy evaluation** - producer runs on-demand
+- **PMR allocation** - uses actor's memory resource
+- **Integrated with send()** - works seamlessly with actor messaging
+- **Symmetric transfer** - efficient producer/consumer context switching
+- **CAS synchronization** - thread-safe state management
+
+**API:**
+```cpp
+class DataProducer : public basic_actor<DataProducer> {
+    // Generator method - yields values one by one
+    generator<int> stream_range(int start, int end) {
+        for (int i = start; i < end; ++i) {
+            co_yield i;  // Yield and suspend
+        }
+        // Implicit co_return at end
+    }
+
+    using dispatch_traits = dispatch_traits<&DataProducer::stream_range>;
+
+    void behavior(mailbox::message* msg) {
+        if (msg->command() == msg_id<DataProducer, &DataProducer::stream_range>) {
+            dispatch(this, &DataProducer::stream_range, msg);
+        }
+    }
+};
+
+// Usage via send() API
+auto gen = send(producer.get(), sender, &DataProducer::stream_range, 0, 10);
+producer->resume(1);  // Start generator
+
+// Generator lifecycle control
+gen.cancel();   // Stop producer early
+gen.detach();   // Release handle, let producer run
+```
+
+**Generator States:**
+| State | Description |
+|-------|-------------|
+| `created` | Producer not yet started |
+| `suspended` | Producer yielded a value |
+| `exhausted` | Producer finished (co_return) |
+| `cancelled` | Consumer cancelled |
+| `detached` | Consumer detached |
+
+**State Queries:**
+```cpp
+gen.valid()              // Has valid state (not moved-from)
+gen.exhausted()          // Producer finished
+gen.is_cancelled()       // Consumer cancelled
+gen.is_safe_to_destroy() // In terminal state
+```
+
+**Consumer Pattern (in coroutine context):**
+```cpp
+unique_future<void> consume_stream() {
+    auto gen = other_actor->stream_data();
+    while (co_await gen) {          // Wait for next value
+        auto& value = gen.current(); // Get reference to yielded value
+        process(value);
+    }
+    co_return;
+}
+```
+
+**Files Created:**
+- `header/actor-zeta/detail/generator.hpp` - Core implementation
+- `header/actor-zeta/generator.hpp` - Public API
+- `test/generator/main.cpp` - 16 test cases, 309 assertions
+- `test/generator/CMakeLists.txt`
+- `examples/generator/main.cpp` - Usage examples
+- `examples/generator/CMakeLists.txt`
+- `GENERATOR_GUIDE.md` - Documentation
+
+**Files Modified:**
+- `header/actor-zeta.hpp` - Added `#include <actor-zeta/generator.hpp>`
+- `header/actor-zeta/detail/type_traits.hpp` - Added `is_generator<T>`, `is_generator_v<T>`, `generator_type` concept
+- `header/actor-zeta/actor/cooperative_actor.hpp` - Generator path in `enqueue_impl`
+- `header/actor-zeta/actor/dispatch.hpp` - Generator dispatch and linking
+- `header/actor-zeta/actor/dispatch_traits.hpp` - `dispatch_result_t` for generator return types
+- `header/actor-zeta/send.hpp` - Returns `generator<T>` for generator methods
+- `test/CMakeLists.txt` - Added generator subdirectory
+- `examples/CMakeLists.txt` - Added generator subdirectory
+
+**Limitations:**
+- Requires coroutine context for `co_await gen` consumption
+- No synchronous `next()` API (by design)
+- Single consumer only (move-only)
+- No `generator<void>` support
+- No exception support (`-fno-exceptions`)
+
+**Testing:** 16 test cases with 309 assertions including:
+- Basic type traits and move-only semantics
+- co_yield functionality and exhaustion
+- Empty generator and cancellation
+- Detach behavior
+- send() API integration
+- Multi-threaded tests (concurrent send, cancel, stress)
+
+**See also:** `GENERATOR_GUIDE.md` for complete documentation.
+
+---
+
+### Examples Updated
+**Date:** 2025-12
+
+**Changes:**
+- `dataflow` example removed (commented out in CMakeLists.txt)
+- `coroutine` example added with `mixed_example.cpp`
+- `generator` example added demonstrating streaming patterns
+- All examples updated to use `std::pmr` and coroutine patterns
+
+**Current examples:**
+- `balancer` - Load balancing with coroutines
+- `broadcast` - Message broadcasting
+- `supervisor` - Supervisor pattern
+- `coroutine` - Mixed sync/async coroutine patterns
+- `generator` - Streaming data between actors
+
+---
+
 ## See Also
 
+- `GENERATOR_GUIDE.md` - Generator streaming patterns and usage
+- `PROMISE_FUTURE_GUIDE.md` - Promise/future patterns and usage
 - `MESSAGE_CREATION_REFACTORING.md` - Detailed message creation refactoring notes
-- `PROMISE_FUTURE_IMPLEMENTATION.md` - Promise/future architecture
 - `CLAUDE.md` - Development guide for this codebase

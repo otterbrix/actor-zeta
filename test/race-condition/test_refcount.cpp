@@ -205,7 +205,7 @@ TEST_CASE("Refcount Test 2.2: Stress test with 1000 concurrent futures") {
                         // Wait for ready then destroy
                         if (future.available()) {
                             auto result = std::move(future).get();
-                            (void)result;
+                            actor_zeta::detail::ignore_unused(result);
                         }
                         break;
                 }
@@ -331,11 +331,11 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
                             break;
                         case 1: // Consume
                             if (future.available()) {
-                                (void)std::move(future).get();
+                                actor_zeta::detail::ignore_unused(std::move(future).get());
                             }
                             break;
                         case 2: // Wait then destroy (with timeout)
-                            (void)wait_available_with_timeout(future, FUTURE_TIMEOUT);
+                            actor_zeta::detail::ignore_unused(wait_available_with_timeout(future, FUTURE_TIMEOUT));
                             break;
                         case 3: // Random delay
                             std::this_thread::sleep_for(std::chrono::microseconds(std::rand() % 10));

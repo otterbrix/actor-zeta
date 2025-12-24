@@ -4,13 +4,8 @@
 
 using namespace actor_zeta;
 
-// =====================================================================
-// OLD STYLE: Switch-based dispatch
-// =====================================================================
-
 class old_style_actor : public basic_actor<old_style_actor> {
 public:
-    // Declare methods first (needed by dispatch_traits)
     unique_future<void> method1(int x) {
         counter_ += x;
         co_return;
@@ -65,10 +60,6 @@ private:
     int counter_;
 };
 
-// =====================================================================
-// Benchmark: Old style dispatch
-// =====================================================================
-
 static void BM_OldStyleDispatch(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<old_style_actor>(resource);
@@ -80,31 +71,31 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
             case 0: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method1, 1);
                 while (!f.available()) { actor->resume(1); }
-                std::move(f).get();  // Wait for completion (returns void)
+                std::move(f).get();
                 break;
             }
             case 1: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method2, 2);
                 while (!f.available()) { actor->resume(1); }
-                std::move(f).get();  // Wait for completion (returns void)
+                std::move(f).get();
                 break;
             }
             case 2: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method3, 3);
                 while (!f.available()) { actor->resume(1); }
-                std::move(f).get();  // Wait for completion (returns void)
+                std::move(f).get();
                 break;
             }
             case 3: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method4, 4);
                 while (!f.available()) { actor->resume(1); }
-                std::move(f).get();  // Wait for completion (returns void)
+                std::move(f).get();
                 break;
             }
             case 4: {
                 auto f = send(actor.get(), actor->address(), &old_style_actor::method5, 5);
                 while (!f.available()) { actor->resume(1); }
-                std::move(f).get();  // Wait for completion (returns void)
+                std::move(f).get();
                 break;
             }
         }
@@ -116,13 +107,8 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
 
 BENCHMARK(BM_OldStyleDispatch)->DenseRange(0, 4)->Unit(benchmark::kNanosecond);
 
-// =====================================================================
-// Benchmark: Direct method call vs dispatch()
-// =====================================================================
-
 class coroutine_actor : public basic_actor<coroutine_actor> {
 public:
-    // Coroutine methods (no make_ready_future needed)
     unique_future<int> compute(int x) {
         co_return x * 2;
     }
@@ -163,7 +149,6 @@ public:
     }
 };
 
-// Direct method call (baseline - no dispatch overhead)
 static void BM_DirectCall_Coroutine(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
@@ -178,17 +163,13 @@ static void BM_DirectCall_Coroutine(benchmark::State& state) {
 }
 BENCHMARK(BM_DirectCall_Coroutine)->Unit(benchmark::kNanosecond);
 
-// dispatch() with 0 args
 static void BM_Dispatch_0Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
     // Create message once, reuse
-    auto [msg, future_unused] = detail::make_message(
-        resource,
-        actor->address(),
-        msg_id<coroutine_actor, &coroutine_actor::noop>
-    );
+    auto [msg, future_unused] = detail::make_message(resource, actor->address(),
+        msg_id<coroutine_actor, &coroutine_actor::noop>);
 
     for (auto _ : state) {
         auto future = dispatch(actor.get(), &coroutine_actor::noop, msg.get());
@@ -199,7 +180,6 @@ static void BM_Dispatch_0Args(benchmark::State& state) {
 }
 BENCHMARK(BM_Dispatch_0Args)->Unit(benchmark::kNanosecond);
 
-// Full cycle with 1 arg (send + resume + get)
 static void BM_FullCycle_1Arg(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
@@ -215,7 +195,6 @@ static void BM_FullCycle_1Arg(benchmark::State& state) {
 }
 BENCHMARK(BM_FullCycle_1Arg)->Unit(benchmark::kNanosecond);
 
-// Full cycle with 2 args (send + resume + get)
 static void BM_FullCycle_2Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
@@ -231,7 +210,6 @@ static void BM_FullCycle_2Args(benchmark::State& state) {
 }
 BENCHMARK(BM_FullCycle_2Args)->Unit(benchmark::kNanosecond);
 
-// Full cycle with 3 args (send + resume + get)
 static void BM_FullCycle_3Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
@@ -247,7 +225,6 @@ static void BM_FullCycle_3Args(benchmark::State& state) {
 }
 BENCHMARK(BM_FullCycle_3Args)->Unit(benchmark::kNanosecond);
 
-// Full send/dispatch/resume cycle for comparison
 static void BM_FullCycle_Coroutine(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);

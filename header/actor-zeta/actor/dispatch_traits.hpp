@@ -4,13 +4,14 @@
 #include <cstdint>
 
 #include <actor-zeta/detail/callable_trait.hpp>
+#include <actor-zeta/detail/generator.hpp>
+#include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 
 namespace actor_zeta {
 
-    /// @brief Compile-time map entry: (MethodPtr -> ActionId)
     template<auto MethodPtr>
     struct method_map_entry {};
 
@@ -18,20 +19,13 @@ namespace actor_zeta {
     using method = method_map_entry<MethodPtr>;
 
     namespace detail {
-        // =========================================================================
-        // Compile-time safety: detect const& parameters in coroutines
-        // Coroutines MUST NOT have const& parameters - they become dangling after co_await
-        // =========================================================================
 
-        /// @brief Concept: T is const lvalue reference (const U&)
         template<typename T>
         concept const_lvalue_ref = std::is_lvalue_reference_v<T> && std::is_const_v<std::remove_reference_t<T>>;
 
-        /// @brief Concept: Any type in parameter pack is const lvalue ref
         template<typename... Args>
         concept has_any_const_lvalue_ref = (const_lvalue_ref<Args> || ...);
 
-        /// @brief Helper to check const lvalue refs in type_list
         namespace type_list_check {
             template<typename ArgsList>
             struct has_const_ref_impl;
@@ -42,25 +36,19 @@ namespace actor_zeta {
             };
         }
 
-        /// @brief Concept: type_list contains const lvalue ref
         template<typename ArgsList>
         concept type_list_has_const_lvalue_ref = type_list_check::has_const_ref_impl<ArgsList>::value;
 
-        /// @brief Compile-time check: method must return unique_future<T>
-        /// @tparam MethodPtr Pointer to member function
-        /// All actor methods must be coroutines returning unique_future<T>
         template<auto MethodPtr>
         struct method_return_type_check {
             using trait = type_traits::callable_trait<decltype(MethodPtr)>;
             using result_type = typename trait::result_type;
 
             static constexpr bool returns_unique_future = type_traits::is_unique_future_v<result_type>;
+            static constexpr bool returns_generator = type_traits::is_generator_v<result_type>;
+            static constexpr bool is_valid = returns_unique_future || returns_generator;
         };
 
-        /// @brief Compile-time check: coroutines must not have const& parameters
-        /// @tparam MethodPtr Pointer to member function
-        /// After co_await, the message is destroyed, making const& parameters dangling.
-        /// This causes use-after-free bugs that are hard to debug.
         template<auto MethodPtr>
         struct coroutine_parameter_check {
             using trait = type_traits::callable_trait<decltype(MethodPtr)>;
@@ -69,43 +57,20 @@ namespace actor_zeta {
 
             static constexpr bool is_coroutine = type_traits::is_unique_future_v<result_type>;
             static constexpr bool has_const_ref = type_list_has_const_lvalue_ref<args_types>;
-
-            // Coroutines MUST NOT have const& parameters (use-after-free after co_await)
             static constexpr bool is_safe = !is_coroutine || !has_const_ref;
         };
     } // namespace detail
 
-    /// @brief Dispatch traits for actor methods
-    /// @tparam MethodPtrs Pointers to member functions
-    ///
-    /// REQUIREMENTS:
-    /// 1. All methods MUST return unique_future<T> (must be coroutines)
-    /// 2. Coroutine methods must NOT have const& parameters (dangling after co_await)
-    ///
-    /// @code
-    /// // WRONG - raw void return:
-    /// void process(std::string data);  // COMPILE ERROR!
-    ///
-    /// // WRONG - const& in coroutine causes use-after-free:
-    /// unique_future<int> process(const std::string& data);  // COMPILE ERROR!
-    ///
-    /// // CORRECT - coroutine with by-value parameters:
-    /// unique_future<int> process(std::string data) {
-    ///     co_return 42;
-    /// }
-    /// @endcode
     template<auto... MethodPtrs>
     struct dispatch_traits {
         using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
 
-        // Compile-time safety: all methods must return unique_future<T>
         static_assert(
-            (detail::method_return_type_check<MethodPtrs>::returns_unique_future && ...),
-            "All actor methods must return unique_future<T>. "
+            (detail::method_return_type_check<MethodPtrs>::is_valid && ...),
+            "All actor methods must return unique_future<T> or generator<T>. "
             "Raw void or value returns are not allowed. "
-            "All actor methods must be coroutines using co_return.");
+            "All actor methods must be coroutines using co_return or co_yield.");
 
-        // Compile-time safety: coroutines must not have const& parameters
         static_assert(
             (detail::coroutine_parameter_check<MethodPtrs>::is_safe && ...),
             "Coroutine methods must not have const& parameters. "
@@ -113,14 +78,25 @@ namespace actor_zeta {
     };
 
     namespace detail {
-        // Helper: unwrap unique_future<T> to T (for handler integration)
         template<typename T>
         using unwrap_future_t = typename std::conditional_t<
             type_traits::is_unique_future_v<T>,
             typename type_traits::is_unique_future<T>::value_type,
             T>;
 
-        /// @brief Check if SearchPtr matches CurrentPtr (true only if same type AND same value)
+        template<typename Actor, typename ResultType>
+        struct dispatch_result_type {
+            using type = typename Actor::template unique_future<unwrap_future_t<ResultType>>;
+        };
+
+        template<typename Actor, typename T>
+        struct dispatch_result_type<Actor, generator<T>> {
+            using type = generator<T>;
+        };
+
+        template<typename Actor, typename ResultType>
+        using dispatch_result_t = typename dispatch_result_type<Actor, ResultType>::type;
+
         template<auto SearchPtr, auto CurrentPtr>
         struct is_same_ptr {
             static constexpr bool value = false;
@@ -147,18 +123,6 @@ namespace actor_zeta {
         }
     } // namespace detail
 
-    /// @code
-    /// class MyActor {
-    ///     struct dispatch_traits {
-    ///         using methods = type_list<
-    ///             method<&MyActor::insert>,    // ActionId = 0
-    ///             method<&MyActor::remove>     // ActionId = 1
-    ///         >;
-    ///     };
-    /// };
-    ///
-    /// case msg_id<MyActor, &MyActor::insert>:
-    /// @endcode
     template<typename Actor, auto MethodPtr, typename MethodList>
     struct action_id_impl;
 
@@ -177,59 +141,44 @@ namespace actor_zeta {
     namespace detail {
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
         auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
-            -> typename Actor::template unique_future<
-                unwrap_future_t<typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>>;
+            -> dispatch_result_t<Actor, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
     }
 
     template<typename Actor, typename Method>
     struct runtime_dispatch_helper<Actor, Method, type_traits::type_list<>> {
         template<typename ActorPtr, typename Sender, typename... Args>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender, Args&&... args)
-            -> typename Actor::template unique_future<void> {
-            (void) method;
-            (void) actor;
-            (void) sender;
-            (void) sizeof...(args);
-            // Method not found - should not happen in correct code
+            -> detail::dispatch_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
+            detail::ignore_unused(method, actor, sender, sizeof...(args));
             assert(false && "Method not found in dispatch_traits");
-            // Return dummy future (never reached)
-            return typename Actor::template unique_future<void>{nullptr, nullptr};
+            std::abort();
         }
     };
 
     template<typename Actor, typename Method, typename ActorPtr, typename Sender, typename... Args>
     struct dispatch_one_impl {
-        // Base case - no methods left
+        using result_type = typename type_traits::callable_trait<Method>::result_type;
+        using dispatch_return_type = detail::dispatch_result_t<Actor, result_type>;
+
         template<std::size_t... Is>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender, std::index_sequence<>, Args&&... args)
-            -> typename Actor::template unique_future<
-                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>> {
-            using result_type = typename type_traits::callable_trait<Method>::result_type;
-            (void) method;
-            (void) actor;
-            (void) sender;
-            (void) sizeof...(args);
-            // Method not found - this should never happen in correct code
+            -> dispatch_return_type {
+            detail::ignore_unused(method, actor, sender, sizeof...(args));
             assert(false && "Method not found in dispatch_traits");
-            std::abort(); // Unreachable, but satisfies return type
+            std::abort();
         }
 
-        // Recursive case - try first method, if not found continue with rest
         template<auto FirstMethod, auto... RestMethods, std::size_t FirstIndex, std::size_t... RestIndices>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender,
                              std::index_sequence<FirstIndex, RestIndices...>, Args&&... args)
-            -> typename Actor::template unique_future<
-                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>> {
-            // Check if this method matches
+            -> dispatch_return_type {
             if constexpr (std::same_as<Method, decltype(FirstMethod)>) {
                 if (method == FirstMethod) {
-                    // Match! Dispatch and return
                     return detail::dispatch_method_impl<Actor, FirstMethod, FirstIndex>(
                         actor, sender, std::forward<Args>(args)...);
                 }
             }
 
-            // No match, try remaining methods
             return dispatch<RestMethods...>(
                 method, actor, sender,
                 std::index_sequence<RestIndices...>{},
@@ -239,8 +188,7 @@ namespace actor_zeta {
 
     template<typename Actor, typename Method, auto... MethodPtrs, typename ActorPtr, typename Sender, typename... Args, std::size_t... Is>
     static auto dispatch_impl(Method method, ActorPtr* actor, Sender sender, std::index_sequence<Is...>, Args&&... args)
-        -> typename Actor::template unique_future<
-            detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>> {
+        -> detail::dispatch_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
         return dispatch_one_impl<Actor, Method, ActorPtr, Sender, Args...>::template dispatch<MethodPtrs...>(
             method, actor, sender,
             std::index_sequence<Is...>{},
@@ -249,10 +197,12 @@ namespace actor_zeta {
 
     template<typename Actor, typename Method, auto... MethodPtrs>
     struct runtime_dispatch_helper<Actor, Method, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
+        using result_type = typename type_traits::callable_trait<Method>::result_type;
+        using dispatch_return_type = detail::dispatch_result_t<Actor, result_type>;
+
         template<typename ActorPtr, typename Sender, typename... Args>
         static auto dispatch(Method method, ActorPtr* actor, Sender sender, Args&&... args)
-            -> typename Actor::template unique_future<
-                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>> {
+            -> dispatch_return_type {
             return dispatch_impl<Actor, Method, MethodPtrs...>(
                 method, actor, sender,
                 std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
@@ -261,8 +211,7 @@ namespace actor_zeta {
 
         template<typename Sender, typename... Args>
         static auto dispatch(Method method, actor::address_t target, Sender sender, Args&&... args)
-            -> typename Actor::template unique_future<
-                detail::unwrap_future_t<typename type_traits::callable_trait<Method>::result_type>> {
+            -> dispatch_return_type {
             auto* actor = static_cast<Actor*>(target.get());
             return dispatch_impl<Actor, Method, MethodPtrs...>(
                 method, actor, sender,

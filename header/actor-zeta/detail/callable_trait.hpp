@@ -46,13 +46,11 @@ namespace actor_zeta { namespace type_traits {
     template<class R, class... Args>
     struct callable_trait<R (*)(Args...)> : callable_trait<R(Args...)> {};
 
-    /// @brief Concept to check if type has operator()
     template<typename T>
     concept has_call_operator = requires(T t) {
         { &T::operator() };
     };
 
-    /// @brief Type trait for has_apply_operator (using concept)
     template<class T>
     struct has_apply_operator final {
         static constexpr bool value = has_call_operator<T>;
@@ -90,25 +88,21 @@ namespace actor_zeta { namespace type_traits {
     template<class T>
     using get_callable_trait_t = typename get_callable_trait<T>::type;
 
-    /// @brief Concept to check if type is callable (has callable trait)
     template<typename T>
     concept callable_type = requires {
         typename get_callable_trait<T>::type;
     };
 
-    /// @brief Type trait for is_callable (using concept)
     template<class T>
     struct is_callable final {
         static constexpr bool value = callable_type<decay_t<T>>;
     };
 
-    /// @brief Concept to check if F is callable with given args
     template<typename F, typename... Args>
     concept callable_with = requires(F& f, Args... args) {
         { f(args...) };
     };
 
-    /// @brief Type trait for is_callable_with (using concept)
     template<class F, class... args>
     struct is_callable_with final {
         static constexpr bool value = callable_with<F, args...>;

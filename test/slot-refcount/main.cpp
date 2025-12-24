@@ -195,7 +195,7 @@ TEST_CASE("future_state<int> - thread safety") {
 
         // Release remaining 1 initial reference
         slot->release();
-        (void)total_refs;  // Suppress unused warning
+        actor_zeta::detail::ignore_unused(total_refs);
     }
 
     SECTION("concurrent add_ref and release") {

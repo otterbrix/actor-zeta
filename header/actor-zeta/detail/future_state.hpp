@@ -11,50 +11,44 @@
 
 #include <actor-zeta/config.hpp>
 #include <actor-zeta/detail/coroutine.hpp>
+#include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
 
 namespace actor_zeta { namespace detail {
 
-    /// @brief Trait for trivially movable and destructible types (memmove optimization)
     template<typename T>
     inline constexpr bool is_trivially_move_constructible_and_destructible_v =
         std::is_trivially_move_constructible_v<T> &&
         std::is_trivially_destructible_v<T>;
 
-    /// @brief Unified future state - replaces multiple atomic bools
-    /// Values are ordered to allow range checks:
-    ///   - Transient states (setting, consuming) < ready
-    ///   - Terminal states (ready, consumed, error, cancelled) >= ready
-    ///   - Error states >= error
-    /// This allows single-comparison checks: `state >= ready` instead of multiple ==
     enum class future_state_enum : uint8_t {
-        invalid = 0,   // Moved-from or uninitialized
-        pending = 1,   // Awaiting result (initial state)
-        setting = 2,   // set_result() in progress (transient)
-        consuming = 3, // take_result() in progress (transient)
-        // --- Terminal states (>= ready) ---
-        ready = 4,    // Result available (success)
-        consumed = 5, // get() called, result moved out
-        // --- Error states (>= error) ---
-        error = 6,     // Error occurred (broken promise, mailbox closed, etc.)
-        cancelled = 7, // Explicitly cancelled
+        invalid = 0,
+        pending = 1,
+        setting = 2,
+        consuming = 3,
+        ready = 4,
+        consumed = 5,
+        error = 6,
+        cancelled = 7,
     };
 
-    /// @brief Base class for future state (type-erased part)
-    /// Coroutine handles stored here (not type-dependent) to avoid virtual dispatch
+
+    namespace future_states {
+        constexpr uint8_t invalid   = 0;
+        constexpr uint8_t pending   = 1;
+        constexpr uint8_t setting   = 2;
+        constexpr uint8_t consuming = 3;
+        constexpr uint8_t ready     = 4;
+        constexpr uint8_t consumed  = 5;
+        constexpr uint8_t error     = 6;
+        constexpr uint8_t cancelled = 7;
+    } // namespace future_states
+
     class future_state_base {
     public:
         explicit future_state_base(std::pmr::memory_resource* res) noexcept
             : resource_(res)
             , state_(future_state_enum::pending)
-            // Initial refcount = 1:
-            //   Initial ref: Owned by message (released when message destroyed)
-            //   Future adds its own ref when created (future constructor calls add_ref())
-            //
-            // Lifetime scenarios:
-            //   Normal:    future.get() → ref 2→1, message destroyed → ref 1→0 → destroy
-            //   Orphaned:  future destroyed → ref 2→1, message destroyed → ref 1→0 → destroy
-            //   No future: message destroyed → ref 1→0 → destroy
             , refcount_(1)
             , owning_coro_handle_()
             , resume_coro_handle_()
@@ -70,9 +64,6 @@ namespace actor_zeta { namespace detail {
         future_state_base& operator=(const future_state_base&) = delete;
 
         virtual ~future_state_base() noexcept {
-            // Destroy coroutine if we own it (runs after derived destructor)
-            // CRITICAL: Must call destroy() regardless of done() status!
-            // A done coroutine (at final_suspend) still needs destroy() to free frame
             if (owns_coroutine_ && owning_coro_handle_) {
                 owning_coro_handle_.destroy();
             }
@@ -94,7 +85,6 @@ namespace actor_zeta { namespace detail {
         }
 
         void release() noexcept {
-            // CRITICAL: fetch_sub FIRST, then destroy. Same pattern as libstdc++ shared_ptr.
             int old_value = refcount_.fetch_sub(1, std::memory_order_release);
 #ifndef NDEBUG
             assert(old_value > 0 && "Refcount underflow!");
@@ -114,20 +104,16 @@ namespace actor_zeta { namespace detail {
             return state_.load(std::memory_order_acquire) >= future_state_enum::error;
         }
 
-        /// @brief Check if state is error (not cancelled)
         [[nodiscard]] bool is_error() const noexcept {
             return state_.load(std::memory_order_acquire) == future_state_enum::error;
         }
 
-        /// @brief Set error state with error code (only from pending state)
-        /// @param ec The error code describing the failure
-        /// @return true if successfully transitioned to error, false if already terminal
         bool error(std::error_code ec) noexcept {
             auto expected = future_state_enum::pending;
             if (state_.compare_exchange_strong(expected, future_state_enum::error,
                                                std::memory_order_acq_rel,
                                                std::memory_order_acquire)) {
-                error_code_ = ec; // Write AFTER successful CAS (no race)
+                error_code_ = ec;
 #if HAVE_ATOMIC_WAIT
                 state_.notify_one();
 #endif
@@ -136,14 +122,10 @@ namespace actor_zeta { namespace detail {
             return false;
         }
 
-        /// @brief Get stored error code
-        /// @return Error code (valid when is_failed() == true)
         [[nodiscard]] std::error_code error() const noexcept {
             return error_code_;
         }
 
-        /// @brief Wait until state becomes terminal (ready, consumed, error, or cancelled)
-        /// Uses atomic_wait (C++20) or spin-yield-backoff fallback
         void wait_until_ready() const noexcept {
 #if HAVE_ATOMIC_WAIT
             while (!is_available()) {
@@ -154,7 +136,6 @@ namespace actor_zeta { namespace detail {
                 }
             }
 #else
-            // Fallback: spin-yield-backoff
             int spin_count = 0;
             constexpr int yield_limit = 100;
             while (!is_available()) {
@@ -168,14 +149,10 @@ namespace actor_zeta { namespace detail {
 #endif
         }
 
-        /// @brief Check if cancelled
         [[nodiscard]] bool is_cancelled() const noexcept {
             return state_.load(std::memory_order_acquire) == future_state_enum::cancelled;
         }
 
-        /// @brief Set cancelled state (only from pending state)
-        /// @return true if successfully transitioned to cancelled, false if already terminal
-        /// @note Uses CAS to ensure atomic transition - consistent with error()
         bool cancelled() noexcept {
             auto expected = future_state_enum::pending;
             if (state_.compare_exchange_strong(expected, future_state_enum::cancelled,
@@ -190,7 +167,6 @@ namespace actor_zeta { namespace detail {
             return false;
         }
 
-        /// @brief Check if still pending (not yet set)
         [[nodiscard]] bool is_pending() const noexcept {
             auto s = state_.load(std::memory_order_acquire);
             return s == future_state_enum::pending ||
@@ -198,72 +174,43 @@ namespace actor_zeta { namespace detail {
                    s == future_state_enum::consuming;
         }
 
-        /// @brief Get memory resource
         [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept {
             return resource_;
         }
 
-        // =====================================================================
-        // Coroutine methods - NON-VIRTUAL (handles stored in base class)
-        // =====================================================================
-
-        /// @brief Resume stored coroutine (if any)
-        /// @note For coroutine's own state: resumes owning_coro_handle_ (set by promise)
-        /// @note For awaited state: resumes resume_coro_handle_ (set by awaiter)
         void resume_coroutine() noexcept {
-            // If we own a coroutine (from promise), resume it
             if (owns_coroutine_ && owning_coro_handle_ && !owning_coro_handle_.done()) {
                 owning_coro_handle_.resume();
                 return;
             }
-            // Otherwise, resume the awaiting coroutine (from awaiter)
             if (resume_coro_handle_ && !resume_coro_handle_.done()) {
                 resume_coro_handle_.resume();
             }
         }
 
-        /// @brief Store coroutine handle for resumption (non-owning, from awaiter)
         void set_coroutine(coroutine_handle<> handle) noexcept {
             resume_coro_handle_ = handle;
         }
 
-        /// @brief Store coroutine handle with ownership (from coroutine promise)
-        /// @note This state will destroy the coroutine in destructor
         void set_coroutine_owning(coroutine_handle<> handle) noexcept {
             owning_coro_handle_ = handle;
             owns_coroutine_ = true;
         }
 
-        /// @brief Set void forward target (type-erased for void chaining)
-        /// @param target The future_state_base to forward void readiness to
-        /// @note Only sets up void-to-void forwarding (calls set_ready on target)
-        /// @return true if target was set, false if state already changed
         virtual bool set_forward_target_void(future_state_base* target) noexcept = 0;
 
-        /// @brief Set which future this coroutine is awaiting on
-        /// @param target The future_state that this coroutine is waiting for
-        /// @note Called from awaiter::await_suspend() to enable manual polling
         void set_awaiting_on(future_state_base* target) noexcept {
-            awaiting_on_ = target; // intrusive_ptr assignment calls add_ref()
+            awaiting_on_ = target;
         }
 
-        /// @brief Get the future this coroutine is awaiting on
-        /// @return Pointer to awaited future_state, or nullptr if not awaiting
-        /// @note Used by supervisor/user code to poll and resume coroutines
         [[nodiscard]] future_state_base* get_awaiting_on() const noexcept {
             return awaiting_on_.get();
         }
 
-        /// @brief Clear awaiting_on after coroutine resumes
-        /// @note Called after resume_coroutine() to prevent stale references
         void clear_awaiting_on() noexcept {
             awaiting_on_ = nullptr;
         }
 
-        /// @brief Atomically take continuation handle for symmetric transfer
-        /// @return The stored continuation handle, or empty handle if none
-        /// @note Clears the stored handle after taking (single-shot)
-        /// @note Used by final_suspend to resume awaiting coroutine directly
         [[nodiscard]] coroutine_handle<> take_continuation() noexcept {
             auto h = resume_coro_handle_;
             resume_coro_handle_ = {};
@@ -271,21 +218,39 @@ namespace actor_zeta { namespace detail {
         }
 
     protected:
-        /// @brief Check if state is terminal (ready, consumed, error, or cancelled)
-        /// @note Internal helper for wait_until_ready()
         [[nodiscard]] bool is_available() const noexcept {
             return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
         }
 
-        /// @brief Try to resume awaiting continuation if conditions are met
-        /// @note Extracted common pattern from set_value() and set_ready()
-        /// @note Skips resume if we own a coroutine (let final_suspend do symmetric transfer)
         void try_resume_continuation() noexcept {
             if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
                 auto cont = resume_coro_handle_;
-                resume_coro_handle_ = {}; // Clear before resume (single-shot)
+                resume_coro_handle_ = {};
                 cont.resume();
             }
+        }
+
+
+        [[nodiscard]] uint8_t load_state_raw() const noexcept {
+            return static_cast<uint8_t>(state_.load(std::memory_order_acquire));
+        }
+
+        void store_state_raw(uint8_t s) noexcept {
+            state_.store(static_cast<future_state_enum>(s), std::memory_order_release);
+#if HAVE_ATOMIC_WAIT
+            state_.notify_one();
+#endif
+        }
+
+        bool cas_state_raw(uint8_t& expected, uint8_t desired) noexcept {
+            auto exp_enum = static_cast<future_state_enum>(expected);
+            bool result = state_.compare_exchange_strong(
+                exp_enum,
+                static_cast<future_state_enum>(desired),
+                std::memory_order_acq_rel,
+                std::memory_order_acquire);
+            expected = static_cast<uint8_t>(exp_enum);
+            return result;
         }
 
     public:
@@ -294,26 +259,21 @@ namespace actor_zeta { namespace detail {
 #endif
 
     protected:
-        /// @brief Virtual destruction - derived class implements actual deallocation
         virtual void destroy() noexcept = 0;
 
         std::pmr::memory_resource* resource_;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
-        intrusive_ptr<future_state_base> awaiting_on_; // Future this coroutine is waiting on
-
-        // Coroutine handles - stored in base class (not type-dependent)
-        coroutine_handle<void> owning_coro_handle_; // Coroutine that this state owns (from promise)
-        coroutine_handle<void> resume_coro_handle_; // Coroutine to resume when ready (from awaiter)
-        bool owns_coroutine_;                       // true: we own owning_coro_handle_ and must destroy it
-
-        // Error code - valid when state >= error
+        intrusive_ptr<future_state_base> awaiting_on_;
+        coroutine_handle<void> owning_coro_handle_;
+        coroutine_handle<void> resume_coro_handle_;
+        bool owns_coroutine_;
         std::error_code error_code_;
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
         static constexpr uint32_t kMagicDead = 0xDEADC0DE;
-        mutable std::atomic<uint32_t> magic_; // Atomic to prevent TSan warnings
+        mutable std::atomic<uint32_t> magic_;
         uint64_t generation_;
 
         static uint64_t next_generation() {
@@ -327,28 +287,19 @@ namespace actor_zeta { namespace detail {
 #endif
     };
 
-    /// @brief In-place storage for future result value
-    /// Uses union for lazy initialization. Non-copyable, move-only.
-    /// @tparam T Result type (non-void)
     template<typename T>
     struct result_storage {
-        // Union for lazy initialization (handles non-trivial T correctly)
         union storage_t {
-            char dummy_; // For default state (no value)
+            char dummy_;
             T value_;
-
-            // Default: initialize dummy (no T constructed yet)
             storage_t() noexcept
                 : dummy_() {}
-
-            // Destructor is trivial - manual destruction via result_storage
             ~storage_t() {}
         } storage_;
 
         bool has_value_ = false;
 
 #ifndef NDEBUG
-        // Debug: track if storage was ever used (catch use-after-move)
         bool was_moved_from_ = false;
 #endif
 
@@ -370,11 +321,9 @@ namespace actor_zeta { namespace detail {
             }
         }
 
-        // Non-copyable
         result_storage(const result_storage&) = delete;
         result_storage& operator=(const result_storage&) = delete;
 
-        // Move-only (with trivial move optimization)
         result_storage(result_storage&& other) noexcept
             : has_value_(false)
 #ifndef NDEBUG
@@ -384,8 +333,6 @@ namespace actor_zeta { namespace detail {
             assert(!other.was_moved_from_ && "Move from already moved-from storage!");
 
             if (other.has_value_) {
-                // Trivial Move Optimization: use memmove for trivially movable types
-                // This avoids constructor/destructor overhead for int, bool, pointers, etc.
                 if constexpr (is_trivially_move_constructible_and_destructible_v<T>) {
                     std::memmove(&storage_.value_, &other.storage_.value_, sizeof(T));
                 } else {
@@ -405,7 +352,6 @@ namespace actor_zeta { namespace detail {
             assert(!other.was_moved_from_ && "Move from already moved-from storage!");
 
             if (this != &other) {
-                // Destroy current value if any (for trivial types, no-op)
                 if (has_value_) {
                     if constexpr (!is_trivially_move_constructible_and_destructible_v<T>) {
                         storage_.value_.~T();
@@ -413,9 +359,7 @@ namespace actor_zeta { namespace detail {
                     has_value_ = false;
                 }
 
-                // Move from other
                 if (other.has_value_) {
-                    // Trivial Move Optimization: use memmove for trivially movable types
                     if constexpr (is_trivially_move_constructible_and_destructible_v<T>) {
                         std::memmove(&storage_.value_, &other.storage_.value_, sizeof(T));
                     } else {
@@ -432,9 +376,6 @@ namespace actor_zeta { namespace detail {
             return *this;
         }
 
-        /// @brief Construct value in-place
-        /// @pre Storage must be empty (!has_value_)
-        /// @post Storage contains value (has_value_ == true)
         template<typename... Args>
         void emplace(Args&&... args) noexcept(std::is_nothrow_constructible_v<T, Args...>) {
             assert(!was_moved_from_ && "emplace() on moved-from storage!");
@@ -444,19 +385,14 @@ namespace actor_zeta { namespace detail {
             has_value_ = true;
         }
 
-        /// @brief Move out value and destroy storage
-        /// @pre Storage must contain value (has_value_)
-        /// @post Storage is empty (has_value_ == false)
-        /// @return Moved value
         [[nodiscard]] T take() noexcept {
             assert(!was_moved_from_ && "take() on moved-from storage!");
             assert(has_value_ && "take() from empty storage!");
 
             has_value_ = false;
 
-            // Trivial Move Optimization: skip destructor for trivial types
             if constexpr (is_trivially_move_constructible_and_destructible_v<T>) {
-                return storage_.value_; // Trivial copy, no destructor needed
+                return storage_.value_;
             } else {
                 T result = std::move(storage_.value_);
                 storage_.value_.~T();
@@ -464,8 +400,6 @@ namespace actor_zeta { namespace detail {
             }
         }
 
-        /// @brief Access value by reference
-        /// @pre Storage must contain value (has_value_)
         [[nodiscard]] T& get() noexcept {
             assert(!was_moved_from_ && "get() on moved-from storage!");
             assert(has_value_ && "get() from empty storage!");
@@ -478,25 +412,21 @@ namespace actor_zeta { namespace detail {
             return storage_.value_;
         }
 
-        /// @brief Check if storage is empty
         [[nodiscard]] bool empty() const noexcept {
             assert(!was_moved_from_ && "empty() on moved-from storage!");
             return !has_value_;
         }
 
-        /// @brief Check if storage contains value
         [[nodiscard]] bool has_value() const noexcept {
             assert(!was_moved_from_ && "has_value() on moved-from storage!");
             return has_value_;
         }
     };
 
-    /// @brief Void specialization - no storage needed
     template<>
     struct result_storage<void> {
         explicit result_storage(std::pmr::memory_resource*) noexcept {}
 
-        // Void storage is trivially copyable/movable (empty struct)
         result_storage() noexcept = default;
         result_storage(const result_storage&) = default;
         result_storage(result_storage&&) noexcept = default;
@@ -504,9 +434,6 @@ namespace actor_zeta { namespace detail {
         result_storage& operator=(result_storage&&) noexcept = default;
     };
 
-    /// @brief Unified future_state<T> - works for both void and non-void types
-    /// Uses conditional storage and if constexpr for zero-overhead void handling
-    /// TYPED forward_target_ - no RTT needed for forwarding!
     template<typename T>
     class future_state final : public future_state_base {
     private:
@@ -519,91 +446,55 @@ namespace actor_zeta { namespace detail {
             , forward_target_(nullptr) {}
 
         ~future_state() noexcept override {
-            // Release forward target reference if set
             auto* target = forward_target_.load(std::memory_order_acquire);
             if (target) {
                 target->release();
             }
 
             if constexpr (has_result) {
-                // Wait for concurrent operations to complete before destroying result_
                 auto s = state_.load(std::memory_order_acquire);
                 if (s == future_state_enum::setting || s == future_state_enum::consuming) {
-                    // Use exponential backoff to avoid busy-waiting
                     int spin_count = 0;
                     constexpr int fast_spin_limit = 10;
-
-                    // Fast spin first (no syscall)
                     while ((s == future_state_enum::setting || s == future_state_enum::consuming) && spin_count < fast_spin_limit) {
                         ++spin_count;
                         s = state_.load(std::memory_order_acquire);
                     }
 
-                    // Then yield/backoff
                     while (s == future_state_enum::setting || s == future_state_enum::consuming) {
                         std::this_thread::yield();
                         s = state_.load(std::memory_order_acquire);
                     }
                 }
             }
-            // Coroutine destruction handled in ~future_state_base()
         }
 
-        /// @brief Set typed forward target for result chaining (NO RTT!)
-        /// @param target The future_state<T> to forward results to when this becomes ready
-        /// @note TYPED - no RTT needed for forwarding!
-        /// @note Thread-safe: uses CAS to prevent race with set_value()
-        /// @return true if target was set, false if state already changed (producer won race)
         bool set_forward_target(future_state<T>* target) noexcept {
             assert(target != nullptr && "Forward target cannot be null!");
             assert(target != this && "Self-forwarding creates infinite loop!");
 
-            // Add ref BEFORE CAS - if CAS fails, we release it
             target->add_ref();
-
-            // Atomically set forward_target only if currently nullptr
-            // This prevents race with concurrent set_value()
             future_state<T>* expected = nullptr;
             if (!forward_target_.compare_exchange_strong(expected, target,
                                                          std::memory_order_acq_rel,
                                                          std::memory_order_acquire)) {
-                // Another thread already set forward_target (shouldn't happen in normal use)
                 target->release();
                 return false;
             }
 
-            // Check if producer already completed while we were setting up
-            // If state is ready, the producer stored value locally (didn't see our target)
-            // We must forward the value now to complete the chain
-            //
-            // THREAD-SAFETY: This is safe because:
-            // 1. CAS on forward_target_ succeeded → we are the only forwarder
-            // 2. State is already ready/consumed → producer finished and won't touch storage_
-            // 3. take_value() uses state transition (ready→consuming→consumed) to prevent
-            //    concurrent access, but here state is already ready and we just forward
-            // 4. If state==consumed, another thread already took the value via take_value()
-            //    so storage_.has_value() will be false
             auto s = state_.load(std::memory_order_acquire);
             if (s == future_state_enum::ready || s == future_state_enum::consumed) {
-                // Producer finished - forward result now
                 if constexpr (has_result) {
-                    // Take value and forward (state already ready, so take_value won't work)
-                    // We need to get the value without state transition
                     if (storage_.has_value()) {
                         target->set_value(storage_.take());
                     }
                 } else {
-                    // Void - just set target ready
                     target->set_ready();
                 }
             }
-            // If state is pending/setting, producer will see our target and forward
-
             return true;
         }
 
-        /// @brief Set value directly in-place (ZERO ALLOCATION)
-        /// If forward_target_ is set, forwards directly (also ZERO ALLOCATION!)
         template<typename U = T>
             requires(!std::is_void_v<U>)
         void set_value(U&& value) noexcept {
@@ -619,10 +510,8 @@ namespace actor_zeta { namespace detail {
 
             auto* target = forward_target_.load(std::memory_order_acquire);
             if (target) {
-                // TYPED forwarding - ZERO ALLOCATION!
                 target->set_value(std::forward<U>(value));
             } else {
-                // Store in-place - ZERO ALLOCATION
                 storage_.emplace(std::forward<U>(value));
             }
 
@@ -631,11 +520,9 @@ namespace actor_zeta { namespace detail {
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
-            // Resume awaiting coroutine (if conditions are met)
             try_resume_continuation();
         }
 
-        /// @brief Get value reference (only for non-void) - returns T&
         template<typename U = T>
             requires(!std::is_void_v<U>)
         [[nodiscard]] U& get_value() noexcept {
@@ -647,7 +534,6 @@ namespace actor_zeta { namespace detail {
             return storage_.get();
         }
 
-        /// @brief Get const value reference (only for non-void) - returns const T&
         template<typename U = T>
             requires(!std::is_void_v<U>)
         [[nodiscard]] const U& get_value() const noexcept {
@@ -659,7 +545,6 @@ namespace actor_zeta { namespace detail {
             return storage_.get();
         }
 
-        /// @brief Take value and mark consumed (only for non-void) - returns T
         template<typename U = T>
             requires(!std::is_void_v<U>)
         [[nodiscard]] U take_value() noexcept {
@@ -667,22 +552,19 @@ namespace actor_zeta { namespace detail {
             bool transitioned = state_.compare_exchange_strong(expected, future_state_enum::consuming,
                                                                 std::memory_order_acq_rel, std::memory_order_acquire);
             assert(transitioned && "take_value() called on non-ready state!");
-            (void) transitioned;
+            ignore_unused(transitioned);
 
             U result = storage_.take();
             state_.store(future_state_enum::consumed, std::memory_order_release);
             return result;
         }
 
-        /// @brief Mark as ready (only for void)
-        /// @note Forwards to target BEFORE setting ready (same pattern as set_value)
         void set_ready() noexcept
             requires(std::is_void_v<T>)
         {
 #ifndef NDEBUG
             assert(is_alive() && "Use-after-free: set_ready() on deleted state!");
 #endif
-            // Use transient 'setting' state to match set_value() pattern
             auto expected = future_state_enum::pending;
             if (!state_.compare_exchange_strong(expected, future_state_enum::setting,
                                                 std::memory_order_acq_rel,
@@ -690,33 +572,22 @@ namespace actor_zeta { namespace detail {
                 return;
             }
 
-            // Forward FIRST (before setting ready) - prevents race where caller
-            // sees ready but chained target is still pending
             auto* target = forward_target_.load(std::memory_order_acquire);
             if (target) {
-                // TYPED forwarding for void - just set_ready()
                 target->set_ready();
             }
-
-            // Set ready AFTER forwarding completes
             state_.store(future_state_enum::ready, std::memory_order_release);
 
 #if HAVE_ATOMIC_WAIT
             state_.notify_one();
 #endif
-            // Resume awaiting coroutine (if conditions are met)
             try_resume_continuation();
         }
 
-        // Coroutine methods inherited from future_state_base (non-virtual)
-
         bool set_forward_target_void(future_state_base* target) noexcept override {
             if constexpr (std::is_void_v<T>) {
-                // RTTI disabled: static_cast is safe here because caller guarantees
-                // target is future_state<void>* when T is void
                 return set_forward_target(static_cast<future_state<void>*>(target));
             } else {
-                // For non-void: typed forwarding already happened via setup_result_chaining<T>
                 assert(target != nullptr);
                 assert(target != this);
                 return true;
@@ -731,12 +602,9 @@ namespace actor_zeta { namespace detail {
 
     private:
         [[no_unique_address]] result_storage<T> storage_;
-        std::atomic<future_state<T>*> forward_target_; // TYPED forward target
-        // Coroutine handles inherited from future_state_base (protected)
+        std::atomic<future_state<T>*> forward_target_;
     };
 
-    // intrusive_ptr support for future_state_base
-    // These free functions enable intrusive_ptr to manage future_state lifetime
     inline void intrusive_ptr_add_ref(const future_state_base* p) noexcept {
         const_cast<future_state_base*>(p)->add_ref();
     }

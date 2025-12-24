@@ -32,7 +32,7 @@ constexpr size_t NUM_WORKERS = 4;
             scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(NUM_WORKERS, 1000)); \
             scheduler_->start();                                                             \
             supervisor_ = actor_zeta::spawn<Supervisor>(resource_, scheduler_.get());       \
-            (void)actor_zeta::send(supervisor_.get(), actor_zeta::address_t::empty_address(), &Supervisor::prepare); \
+            actor_zeta::detail::ignore_unused(actor_zeta::send(supervisor_.get(), actor_zeta::address_t::empty_address(), &Supervisor::prepare)); \
         }                                                                                    \
                                                                                              \
         void TearDown(const benchmark::State&) override {                                   \
@@ -42,7 +42,7 @@ constexpr size_t NUM_WORKERS = 4;
         }                                                                                    \
                                                                                              \
         void DoPingPong() {                                                                 \
-            (void)actor_zeta::send(supervisor_.get(), actor_zeta::address_t::empty_address(), &Supervisor::send); \
+            actor_zeta::detail::ignore_unused(actor_zeta::send(supervisor_.get(), actor_zeta::address_t::empty_address(), &Supervisor::send)); \
             std::this_thread::sleep_for(std::chrono::microseconds(100));                    \
         }                                                                                    \
     };                                                                                       \

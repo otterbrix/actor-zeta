@@ -12,7 +12,8 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
+# TSan adds 10-50x overhead for race condition stress tests
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 300)
 
 # Phase 1 Critical Tests: Refcount Management
 set(CURRENT_TEST_NAME tests_race_refcount)
@@ -26,7 +27,8 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 180)
+# TSan adds 10-50x overhead; 1000 thread spawns in Test 2.1 needs extra time
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 600)
 
 # Phase 1 Critical Tests: Actor Shutdown
 set(CURRENT_TEST_NAME tests_race_shutdown)
@@ -40,7 +42,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 300)
 
 # Phase 1 Critical Tests: State Transitions
 set(CURRENT_TEST_NAME tests_race_state_transitions)
@@ -54,7 +56,8 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
+# TSan adds 10-50x overhead; state transition stress tests need extra time
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 600)
 
 # Aggressive Shutdown Tests: Race condition reproduction
 set(CURRENT_TEST_NAME tests_shutdown_aggressive)
@@ -68,7 +71,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 300)
 
 # ABA Problem Stress Tests: CAS operations and lock-free queue
 set(CURRENT_TEST_NAME tests_aba_problem)
@@ -82,7 +85,7 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 60)
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 300)
 
 # Intrusive Ptr Stress Tests: Refcount operations and pointer operations
 set(CURRENT_TEST_NAME tests_stress_intrusive_ptr)
@@ -96,3 +99,4 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 300)

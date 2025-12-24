@@ -512,7 +512,7 @@ TEST_CASE("Regression: is_pending() returns false for all terminal states", "[is
         intrusive_ptr<future_state_base> holder(state, false);
 
         state->set_value(42);
-        (void)state->take_value();
+        actor_zeta::detail::ignore_unused(state->take_value());
         REQUIRE(!state->is_pending());
     }
 }
