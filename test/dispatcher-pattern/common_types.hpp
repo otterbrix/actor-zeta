@@ -52,6 +52,10 @@ struct collection_full_name_t {
     collection_full_name_t() = default;
     collection_full_name_t(std::string db, std::string coll)
         : database(std::move(db)), collection(std::move(coll)) {}
+
+    std::string to_string() const {
+        return database + "." + collection;
+    }
 };
 
 // ============================================================================

@@ -4,13 +4,11 @@
 
 #include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/detail/future.hpp>
+#include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/mailbox/make_message.hpp>
 
 namespace actor_zeta::actor {
 
-    /// @brief Actor mixin - common functionality for all actor types
-    /// Provides: id_t, address(), placement operators, enqueue_sync_impl()
-    /// Used by: cooperative_actor, supervisor, and other actor types
     template<typename Derived>
     class actor_mixin {
     public:
@@ -76,7 +74,7 @@ namespace actor_zeta::actor {
 
         static void operator delete(void*, void*, placement_tag) noexcept {}
 
-        static void operator delete(void* ptr) noexcept { (void) ptr; }
+        static void operator delete(void* ptr) noexcept { detail::ignore_unused(ptr); }
 
         static void* operator new(size_t, void* ptr) = delete;
         static void* operator new(size_t) = delete;
@@ -88,23 +86,19 @@ namespace actor_zeta::actor {
         actor_mixin(actor_mixin&&) = delete;
         actor_mixin& operator=(actor_mixin&&) = delete;
 
-        /// @brief Get address of this actor
         address_t address() noexcept {
             return address_t(static_cast<Derived*>(this));
         }
 
-        /// @brief Get unique ID of this actor (based on pointer)
         id_t id() const {
             return id_t(const_cast<actor_mixin*>(this));
         }
 
-        /// @brief Get polymorphic allocator for type T
         template<class T>
         std::pmr::polymorphic_allocator<T> allocator() const noexcept {
             return {static_cast<const Derived*>(this)->resource()};
         }
 
-        /// @brief Sync enqueue for supervisors - calls behavior synchronously, returns ready future
         template<typename R, typename BehaviorFunc, typename... Args>
         unique_future<R> enqueue_sync_impl(
             actor::address_t sender,
@@ -114,17 +108,14 @@ namespace actor_zeta::actor {
             auto* derived = static_cast<Derived*>(this);
             auto* res = derived->resource();
 
-            // Create message + promise in one call (cleaner API)
             auto [msg, future] = detail::make_message<R>(
                 res,
                 std::move(sender),
                 cmd,
                 std::forward<Args>(args)...);
 
-            // Call behavior function with message pointer (synchronous execution)
             behavior_func(msg.get());
 
-            // Slot is now ready (behavior already executed)
             return std::move(future);
         }
 

@@ -12,5 +12,6 @@ namespace actor_zeta {
     using actor_zeta::actor::actor_mixin;
 
     using actor_zeta::unique_future;
+    using actor_zeta::generator;
 
 } // namespace actor_zeta

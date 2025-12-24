@@ -92,13 +92,69 @@ public:
         co_return result;
     }
 
+    /// @brief Consume stream from dispatcher
+    ///
+    /// Demonstrates: Generator consumption pattern
+    /// - Request generator from dispatcher
+    /// - co_await inside unique_future to consume each value
+    /// - Collect all rows
+    /// - Handle errors via stream_error
+    ///
+    /// @param session Session ID (BY VALUE)
+    /// @param collection Collection name (BY VALUE)
+    /// @return unique_future<std::vector<std::string>> with all rows
+    unique_future<std::vector<std::string>> consume_stream(
+            session_id_t session,
+            std::string collection) {
+
+        auto tid = thread_id_str();
+        g_log.log("[%::consume_stream] thread=% session=% collection=%",
+                  name_, tid, session.data(), collection);
+
+        std::vector<std::string> rows;
+
+        // Get generator from dispatcher
+        auto gen = send(
+            dispatcher_,
+            address(),
+            &manager_dispatcher_t::create_row_stream,
+            session,
+            collection);
+
+        g_log.log("[%::consume_stream] Got generator, consuming rows...", name_);
+
+        // Consume generator using co_await
+        while (co_await gen) {
+            // Check for error
+            if (gen.has_error()) {
+                g_log.log("[%::consume_stream] Stream error: %",
+                          name_, gen.error().message());
+                last_stream_error_ = gen.error();
+                co_return rows;  // Return partial results
+            }
+
+            // Get current value
+            auto& row = gen.current();
+            g_log.log("[%::consume_stream] Received row: %", name_, row);
+
+            // Transform: add client prefix
+            rows.push_back("[client] " + row);
+        }
+
+        g_log.log("[%::consume_stream] Stream exhausted, got % rows", name_, rows.size());
+        last_streamed_rows_ = rows;
+
+        co_return rows;
+    }
+
     // =========================================================================
     // dispatch_traits
     // =========================================================================
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &client_t::poll,
-        &client_t::request_collection_size
+        &client_t::request_collection_size,
+        &client_t::consume_stream
     >;
 
     // =========================================================================
@@ -121,6 +177,14 @@ public:
                 }
                 break;
             }
+            case msg_id<client_t, &client_t::consume_stream>: {
+                auto future = dispatch(this, &client_t::consume_stream, msg);
+                if (!future.available()) {
+                    g_log.log("[%::behavior] consume_stream() suspended, storing pending", name_);
+                    pending_stream_.push_back(std::move(future));
+                }
+                break;
+            }
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
@@ -134,15 +198,25 @@ public:
     // Pending coroutine management
     // =========================================================================
 
-    bool has_pending() const { return !pending_.empty(); }
+    bool has_pending() const {
+        return !pending_.empty() || !pending_stream_.empty();
+    }
 
     /// @brief Clean up completed pending futures
     /// With auto-resume in set_value(), coroutines resume automatically
     void poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
             if (it->available()) {
-                g_log.log("[%::poll_pending] coroutine completed", name_);
+                g_log.log("[%::poll_pending] size coroutine completed", name_);
                 it = pending_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = pending_stream_.begin(); it != pending_stream_.end();) {
+            if (it->available()) {
+                g_log.log("[%::poll_pending] stream coroutine completed", name_);
+                it = pending_stream_.erase(it);
             } else {
                 ++it;
             }
@@ -154,6 +228,8 @@ public:
     // =========================================================================
 
     const size_result_t& last_result() const { return last_result_; }
+    const std::vector<std::string>& last_streamed_rows() const { return last_streamed_rows_; }
+    std::error_code last_stream_error() const { return last_stream_error_; }
     const std::string& name() const { return name_; }
 
     ~client_t() = default;
@@ -162,7 +238,10 @@ private:
     address_t dispatcher_;
     std::string name_;
     std::vector<unique_future<size_result_t>> pending_;
+    std::vector<unique_future<std::vector<std::string>>> pending_stream_;
     size_result_t last_result_;
+    std::vector<std::string> last_streamed_rows_;
+    std::error_code last_stream_error_;
 };
 
 } // namespace dispatcher_test

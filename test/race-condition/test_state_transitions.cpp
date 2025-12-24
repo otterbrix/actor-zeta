@@ -175,7 +175,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
         // Consume future to clean up
         if (future.available()) {
             auto result = std::move(future).get();
-            (void)result;
+            actor_zeta::detail::ignore_unused(result);
         }
     }
 

@@ -80,13 +80,12 @@ namespace actor_zeta { namespace scheduler {
                 std::condition_variable cv;
                 std::atomic<size_t> completed_count;
             };
-            // Use a set to keep track of remaining workers.
             shutdown_helper sh;
             std::set<worker_type*> alive_workers;
             auto num = num_workers();
             for (size_t i = 0; i < num; ++i) {
                 alive_workers.insert(worker_by_id(i));
-                sh.ref(); // Make sure reference count is high enough.
+                sh.ref();
             }
             while (!alive_workers.empty()) {
                 auto it = alive_workers.begin();
@@ -96,20 +95,16 @@ namespace actor_zeta { namespace scheduler {
             }
 
             for (auto& w : workers_) {
-                w->get_thread().join(); /// wait until all workers finish working
+                w->get_thread().join();
             }
 
-            /// Clear remaining job_ptr from queues (actor lifetime managed by unique_ptr)
-            auto clear_job = [](job_ptr) { /* NO-OP: job_ptr does not own actor */ };
+            auto clear_job = [](job_ptr) {};
             for (auto& w : workers_) {
                 policy_.foreach_resumable(w.get(), clear_job);
             }
             policy_.foreach_central_resumable(this, clear_job);
         }
 
-        /// @brief Enqueue an actor for execution
-        /// @tparam T Actor type with resume(size_t) method
-        /// @param actor Pointer to actor to schedule
         template<typename T>
         void enqueue(T* actor) {
             policy_.central_enqueue(this, actor);

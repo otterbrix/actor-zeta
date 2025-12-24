@@ -9,8 +9,6 @@ using std::pmr::memory_resource;
 
 class worker_t final : public actor_zeta::basic_actor<worker_t> {
 public:
-    // Request-response methods (return results automatically via promise)
-    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
     actor_zeta::unique_future<std::size_t> download_with_result(std::string url, std::string /*user*/, std::string /*password*/);
     actor_zeta::unique_future<std::size_t> work_data_with_result(std::string data, std::string /*operatorName*/);
 
@@ -25,12 +23,9 @@ public:
 
     void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
-        std::cerr << "[Worker " << id() << "] behavior() called, cmd=" << cmd << std::endl;
-
         switch (cmd) {
             case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>:
                 actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
-                std::cerr << "[Worker " << id() << "] After handler" << std::endl;
                 break;
             case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>:
                 actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
@@ -42,20 +37,16 @@ private:
     std::string tmp_;
 };
 
-// Request-response implementations - all methods must be coroutines
 inline actor_zeta::unique_future<std::size_t> worker_t::download_with_result(std::string url, std::string /*user*/, std::string /*password*/) {
-    std::cerr << "[Worker " << id() << "] Processing download_with_result: " << url << std::endl;
     tmp_ = std::move(url);
-    std::cerr << "[Worker " << id() << "] Returning size: " << tmp_.size() << std::endl;
-    co_return tmp_.size(); // Return downloaded size
+    co_return tmp_.size();
 }
 
 inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(std::string data, std::string /*operatorName*/) {
     tmp_ = std::move(data);
-    co_return tmp_.size(); // Return processed size
+    co_return tmp_.size();
 }
 
-/// non thread safe
 class supervisor_lite final : public actor_zeta::actor::actor_mixin<supervisor_lite> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
@@ -92,7 +83,6 @@ public:
         &supervisor_lite::create
     >;
 
-    // Public access to workers for direct send() with futures
     worker_t* get_worker(std::size_t index) {
         return index < actors_.size() ? actors_[index].get() : nullptr;
     }
@@ -101,20 +91,19 @@ public:
         return size_actors_.load();
     }
 
-    // Schedule worker for execution
     void schedule_worker(std::size_t index) {
         if (index < actors_.size()) {
             e_->enqueue(actors_[index].get());
         }
     }
 
-    // NEW API: Forward arguments to enqueue_sync_impl (message created in receiver's resource)
-    template<typename R, typename... Args>
-    unique_future<R> enqueue_impl(
+    template<typename ReturnType, typename... Args>
+    ReturnType enqueue_impl(
         actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
+        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
         return enqueue_sync_impl<R>(
             sender,
             cmd,
@@ -143,27 +132,18 @@ int main() {
 
     int const actors = 5;
 
-    // Create actors using new send() API (supervisor processes messages synchronously)
-    // Collect futures from create() calls and wait for completion
     std::vector<supervisor_lite::unique_future<void>> create_futures;
     create_futures.reserve(actors);
     for (auto i = actors; i > 0; --i) {
         create_futures.push_back(actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &supervisor_lite::create));
     }
 
-    // Wait for all actors to be created
     for (auto& future : create_futures) {
         std::move(future).get();
     }
 
-    std::cerr << "=== Created " << actors << " worker actors ===" << std::endl;
-
-    // Demonstrate request-response pattern with futures
-    std::cerr << "\n=== REQUEST-RESPONSE PATTERN WITH FUTURES ===" << std::endl;
-    std::cerr << "Collecting futures from multiple workers..." << std::endl;
-
     std::vector<worker_t::unique_future<std::size_t>> futures;
-    futures.reserve(supervisor->worker_count()); // CRITICAL: Reserve to avoid reallocation!
+    futures.reserve(supervisor->worker_count());
     for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
         auto* worker = supervisor->get_worker(i);
         if (worker) {
@@ -183,19 +163,13 @@ int main() {
         }
     }
 
-    std::cerr << "  Sent " << futures.size() << " requests, calling get() on each..." << std::endl;
-
-    // Collect results using blocking get()
     std::size_t total_size = 0;
     for (std::size_t i = 0; i < futures.size(); ++i) {
         std::size_t result = std::move(futures[i]).get();
         total_size += result;
-        std::cerr << "  Worker " << i << " returned: " << result << std::endl;
     }
 
-    std::cerr << "  Total size from all workers: " << total_size << std::endl;
-
-    std::cerr << "\n=== Request-response test: PASSED ✓ ===" << std::endl;
+    std::cerr << "Total size from all workers: " << total_size << std::endl;
 
     return 0;
 }

@@ -1,25 +1,7 @@
-/**
- * @file main.cpp
- * @brief Benchmark for coroutine frame allocation performance
- *
- * This benchmark measures the performance of coroutine frame allocation
- * with different memory resources to establish a baseline before
- * implementing custom allocator support in promise_type.
- *
- * Benchmarks:
- * 1. BM_CoroCreation_* - Coroutine creation with different allocators
- * 2. BM_RawAllocation - Raw allocation for comparison
- * 3. BM_FutureStateOnly - future_state allocation only (no coroutine)
- */
-
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
 #include <memory_resource>
 #include <vector>
-
-// =============================================================================
-// Test Actor for benchmarks
-// =============================================================================
 
 class BenchActor : public actor_zeta::basic_actor<BenchActor> {
 public:
@@ -29,22 +11,18 @@ public:
         : base_type(res)
         , call_count_(0) {}
 
-    // Simple void coroutine - minimal overhead
     actor_zeta::unique_future<void> noop() {
         co_return;
     }
 
-    // Coroutine with int result
     actor_zeta::unique_future<int> compute(int x) {
         co_return x * 2;
     }
 
-    // Coroutine with string result (heap allocation inside)
     actor_zeta::unique_future<std::string> format(int x) {
         co_return std::string("Result: ") + std::to_string(x);
     }
 
-    // Counter for verification
     actor_zeta::unique_future<void> increment() {
         ++call_count_;
         co_return;
@@ -66,10 +44,6 @@ private:
     int call_count_;
 };
 
-// =============================================================================
-// Benchmark: Coroutine Creation Baseline
-// =============================================================================
-
 static void BM_CoroCreation_Void(benchmark::State& state) {
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
@@ -77,7 +51,6 @@ static void BM_CoroCreation_Void(benchmark::State& state) {
     for (auto _ : state) {
         auto future = actor->noop();
         benchmark::DoNotOptimize(future);
-        // Future destroyed here - coroutine cleanup
     }
 
     state.SetItemsProcessed(state.iterations());
@@ -114,10 +87,6 @@ static void BM_CoroCreation_String(benchmark::State& state) {
 }
 BENCHMARK(BM_CoroCreation_String);
 
-// =============================================================================
-// Benchmark: Multiple coroutines in sequence
-// =============================================================================
-
 static void BM_CoroSequence(benchmark::State& state) {
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
@@ -134,10 +103,6 @@ static void BM_CoroSequence(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * count);
 }
 BENCHMARK(BM_CoroSequence)->Range(1, 1024);
-
-// =============================================================================
-// Benchmark: Raw allocation comparison
-// =============================================================================
 
 static void BM_RawAlloc_New(benchmark::State& state) {
     const size_t size = state.range(0);
@@ -167,10 +132,6 @@ static void BM_RawAlloc_PMR(benchmark::State& state) {
     state.SetBytesProcessed(state.iterations() * size);
 }
 BENCHMARK(BM_RawAlloc_PMR)->Range(64, 1024);
-
-// =============================================================================
-// Benchmark: future_state allocation only (no coroutine frame)
-// =============================================================================
 
 static void BM_FutureState_Int(benchmark::State& state) {
     auto* resource =std::pmr::get_default_resource();
@@ -203,10 +164,6 @@ static void BM_FutureState_Void(benchmark::State& state) {
 }
 BENCHMARK(BM_FutureState_Void);
 
-// =============================================================================
-// Benchmark: Simple coroutine (via actor methods)
-// =============================================================================
-
 static void BM_SimpleCoroutine_Int(benchmark::State& state) {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
@@ -236,12 +193,6 @@ static void BM_SimpleCoroutine_Void(benchmark::State& state) {
 }
 BENCHMARK(BM_SimpleCoroutine_Void);
 
-// =============================================================================
-// Benchmark: Estimate coroutine frame overhead
-// =============================================================================
-
-// This measures the DIFFERENCE between coroutine and make_ready_future
-// to estimate pure coroutine frame allocation cost
 static void BM_CoroOverhead_Estimate(benchmark::State& state) {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
@@ -264,11 +215,6 @@ static void BM_CoroOverhead_Estimate(benchmark::State& state) {
 }
 BENCHMARK(BM_CoroOverhead_Estimate);
 
-// =============================================================================
-// Benchmark: Different allocators comparison
-// =============================================================================
-
-// Monotonic buffer - fastest (bump allocator, no individual deallocation)
 static void BM_Coro_MonotonicBuffer(benchmark::State& state) {
     constexpr size_t buffer_size = 1024 * 1024;  // 1MB
     std::vector<std::byte> buffer(buffer_size);
@@ -280,7 +226,7 @@ static void BM_Coro_MonotonicBuffer(benchmark::State& state) {
 
     for (auto _ : state) {
         state.PauseTiming();
-        mono_resource.release();  // Reset buffer for next iteration batch
+        mono_resource.release();
         actor = actor_zeta::spawn<BenchActor>(&mono_resource);
         state.ResumeTiming();
 
@@ -296,7 +242,6 @@ static void BM_Coro_MonotonicBuffer(benchmark::State& state) {
 }
 BENCHMARK(BM_Coro_MonotonicBuffer);
 
-// Unsynchronized pool - fast for single-threaded
 static void BM_Coro_UnsyncPool(benchmark::State& state) {
     std::pmr::unsynchronized_pool_resource pool_resource;
     auto actor = actor_zeta::spawn<BenchActor>(&pool_resource);
@@ -312,7 +257,6 @@ static void BM_Coro_UnsyncPool(benchmark::State& state) {
 }
 BENCHMARK(BM_Coro_UnsyncPool);
 
-// Synchronized pool - thread-safe
 static void BM_Coro_SyncPool(benchmark::State& state) {
     std::pmr::synchronized_pool_resource pool_resource;
     auto actor = actor_zeta::spawn<BenchActor>(&pool_resource);
@@ -328,7 +272,6 @@ static void BM_Coro_SyncPool(benchmark::State& state) {
 }
 BENCHMARK(BM_Coro_SyncPool);
 
-// Default resource (new_delete_resource) - baseline
 static void BM_Coro_NewDelete(benchmark::State& state) {
     auto* resource = std::pmr::new_delete_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
@@ -343,10 +286,6 @@ static void BM_Coro_NewDelete(benchmark::State& state) {
     state.SetLabel("new_delete");
 }
 BENCHMARK(BM_Coro_NewDelete);
-
-// =============================================================================
-// Benchmark: Raw allocation with different allocators
-// =============================================================================
 
 static void BM_RawAlloc_Monotonic(benchmark::State& state) {
     constexpr size_t buffer_size = 1024 * 1024;
@@ -364,7 +303,6 @@ static void BM_RawAlloc_Monotonic(benchmark::State& state) {
         for (int i = 0; i < 1000; ++i) {
             void* p = mono_resource.allocate(size, alignof(std::max_align_t));
             benchmark::DoNotOptimize(p);
-            // No dealloc for monotonic - just bump
         }
     }
 

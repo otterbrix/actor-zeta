@@ -7,10 +7,8 @@
 
 #include <actor-zeta.hpp>
 
-// Simple worker actor that processes tasks
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
-    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
     actor_zeta::unique_future<void> process_task(std::string task);
     actor_zeta::unique_future<void> get_status();
 
@@ -54,7 +52,6 @@ actor_zeta::unique_future<void> worker_actor::get_status() {
     co_return;
 }
 
-// Supervisor that manages worker actors with manual scheduling
 class supervisor_actor final : public actor_zeta::actor::actor_mixin<supervisor_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
@@ -67,7 +64,6 @@ public:
 
     std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
-    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
     actor_zeta::unique_future<void> create_worker(std::string name) {
         auto worker = actor_zeta::spawn<worker_actor>(resource_, name);
         std::cerr << "[Supervisor] Created worker: " << name << std::endl;
@@ -81,16 +77,12 @@ public:
             co_return;
         }
 
-        // Round-robin task distribution
         auto& worker = workers_[next_worker_];
         next_worker_ = (next_worker_ + 1) % workers_.size();
 
         std::cerr << "[Supervisor] Assigning task '" << task << "' to " << worker->name() << std::endl;
 
-        // Send task to worker (returns future with needs_scheduling flag)
         auto future = actor_zeta::send(worker.get(), address(), &worker_actor::process_task, task);
-
-        // Manual scheduling - only if actor was unblocked (check needs_scheduling)
         if (future.needs_scheduling()) {
             scheduler_->enqueue(worker.get());
         }
@@ -99,18 +91,13 @@ public:
 
     actor_zeta::unique_future<void> stop_workers() {
         std::cerr << "[Supervisor] Stopping all workers..." << std::endl;
-        // Workers will be automatically destroyed when supervisor is destroyed
-        // In real system, you'd send shutdown messages and wait
         co_return;
     }
 
     actor_zeta::unique_future<void> check_status() {
         std::cerr << "[Supervisor] Status check - " << workers_.size() << " workers:" << std::endl;
         for (auto& worker : workers_) {
-            // Send status request to worker (returns future with needs_scheduling flag)
             auto future = actor_zeta::send(worker.get(), address(), &worker_actor::get_status);
-
-            // Manual scheduling - only if actor was unblocked (check needs_scheduling)
             if (future.needs_scheduling()) {
                 scheduler_->enqueue(worker.get());
             }
@@ -140,13 +127,13 @@ public:
         &supervisor_actor::check_status
     >;
 
-    // NEW API: Forward arguments to enqueue_sync_impl (message created in receiver's resource)
-    template<typename R, typename... Args>
-    unique_future<R> enqueue_impl(
+    template<typename ReturnType, typename... Args>
+    ReturnType enqueue_impl(
         actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
+        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
         return enqueue_sync_impl<R>(
             sender,
             cmd,
@@ -168,18 +155,15 @@ private:
 int main() {
     auto* resource =std::pmr::get_default_resource();
 
-    // Create scheduler with 2 threads and throughput of 1000 messages per resume
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(2, 1000));
     scheduler->start();
 
-    // Create supervisor
     auto supervisor = actor_zeta::spawn<supervisor_actor>(resource, scheduler.get());
 
     std::cerr << "=== Supervisor Example: Manual Scheduling ===" << std::endl;
     std::cerr << std::endl;
 
-    // Create workers
     std::cerr << "--- Creating Workers ---" << std::endl;
     for (int i = 1; i <= 3; ++i) {
         actor_zeta::send(
@@ -190,7 +174,6 @@ int main() {
     }
     std::cerr << std::endl;
 
-    // Assign tasks
     std::cerr << "--- Assigning Tasks ---" << std::endl;
     std::vector<std::string> tasks = {
         "Parse config file",
@@ -210,10 +193,8 @@ int main() {
     }
     std::cerr << std::endl;
 
-    // Give workers time to process
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Check status
     std::cerr << "--- Checking Status ---" << std::endl;
     {
         actor_zeta::send(
@@ -222,10 +203,8 @@ int main() {
             &supervisor_actor::check_status);
     }
 
-    // Give time for status check
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    // Stop
     std::cerr << std::endl;
     std::cerr << "--- Stopping ---" << std::endl;
     {

@@ -33,23 +33,18 @@ public:
     }
 
     actor_zeta::unique_future<void> prepare() {
-        // Spawn two actors
         actor_0_ = actor_zeta::spawn<Actor>(resource_);
         actor_1_ = actor_zeta::spawn<Actor>(resource_);
-
-        // Set partners
         actor_0_->set_partner(actor_1_.get());
         actor_1_->set_partner(actor_0_.get());
         co_return;
     }
 
     actor_zeta::unique_future<void> send() {
-        // Start ping-pong - send start message to actor0
         if (actor_0_ && scheduler_) {
             actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
             scheduler_->enqueue(actor_0_.get());
         } else if (actor_0_) {
-            // Synchronous mode (no scheduler)
             actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
             actor_0_->resume(1);
             actor_1_->resume(1);
@@ -75,13 +70,13 @@ public:
         &simple_supervisor::send
     >;
 
-    /// @brief Override enqueue_impl для supervisor - используем helper
-    template<typename R, typename... Args>
-    unique_future<R> enqueue_impl(
+    template<typename ReturnType, typename... Args>
+    ReturnType enqueue_impl(
         actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
+        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
         return this->template enqueue_sync_impl<R>(
             sender,
             cmd,

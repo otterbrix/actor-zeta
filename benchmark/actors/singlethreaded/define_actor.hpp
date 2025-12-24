@@ -2,7 +2,6 @@
 
 #include <actor-zeta.hpp>
 
-// Simple ping-pong actor for synchronous benchmark
 template<typename... Args>
 class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Args...>> {
     using base_type = actor_zeta::basic_actor<ping_pong_actor<Args...>>;
@@ -22,7 +21,6 @@ public:
     }
 
     actor_zeta::unique_future<void> start() {
-        // Send ping to partner
         if (partner_) {
             actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
         }
@@ -30,7 +28,6 @@ public:
     }
 
     actor_zeta::unique_future<void> ping(Args...) {
-        // Receive ping, send pong back
         if (partner_) {
             actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
         }
@@ -38,7 +35,6 @@ public:
     }
 
     actor_zeta::unique_future<void> pong(Args...) {
-        // Receive pong, do nothing (end of exchange)
         co_return;
     }
 

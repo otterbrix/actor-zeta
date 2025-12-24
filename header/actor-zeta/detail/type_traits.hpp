@@ -25,16 +25,17 @@ namespace actor_zeta { namespace type_traits {
 
 }} // namespace actor_zeta::type_traits
 
-// Forward declaration for is_unique_future
+// Forward declarations for type traits
 namespace actor_zeta {
     template<typename T>
     class unique_future;
+
+    template<typename T>
+    class generator;
 }
 
 namespace actor_zeta { namespace type_traits {
 
-    /// @brief Type trait to detect unique_future<T>
-    /// @note Used for handler integration to detect methods returning futures
     template<typename T>
     struct is_unique_future : std::false_type {};
 
@@ -43,12 +44,37 @@ namespace actor_zeta { namespace type_traits {
         using value_type = T;
     };
 
-    /// @brief Helper variable template (C++17)
     template<typename T>
     constexpr bool is_unique_future_v = is_unique_future<T>::value;
 
-    /// @brief Concept to detect unique_future<T>
     template<typename T>
     concept unique_future_type = is_unique_future_v<T>;
+
+    template<typename T>
+    struct is_generator : std::false_type {};
+
+    template<typename T>
+    struct is_generator<generator<T>> : std::true_type {
+        using value_type = T;
+    };
+
+    template<typename T>
+    constexpr bool is_generator_v = is_generator<T>::value;
+
+    template<typename T>
+    concept generator_type = is_generator_v<T>;
+
+    template<typename T>
+    struct unwrap_generator {
+        using type = T;
+    };
+
+    template<typename T>
+    struct unwrap_generator<generator<T>> {
+        using type = T;
+    };
+
+    template<typename T>
+    using unwrap_generator_t = typename unwrap_generator<T>::type;
 
 }} // namespace actor_zeta::type_traits

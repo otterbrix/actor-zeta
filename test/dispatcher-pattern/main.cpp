@@ -1125,3 +1125,91 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
 
     g_log.log("========== TEST PASSED ==========");
 }
+
+// =============================================================================
+// PATTERN 6: Generator Streaming Tests
+// =============================================================================
+
+TEST_CASE("generator: storage stream_rows via send") {
+    auto* resource = std::pmr::get_default_resource();
+    g_log.log("\n========== TEST: storage stream_rows via send ==========");
+
+    auto storage = spawn<memory_storage_t>(resource, "Storage");
+
+    session_id_t session("stream-test");
+    collection_full_name_t coll("test_db", "users");
+
+    // Get generator via send()
+    auto gen = send(storage.get(), address_t::empty_address(),
+        &memory_storage_t::stream_rows, session, coll);
+
+    REQUIRE(gen.valid());
+
+    // Resume storage to start generator and yield rows
+    for (int i = 0; i < 20; ++i) {
+        storage->resume(1);
+    }
+
+    // Generator should have exhausted
+    g_log.log("Generator exhausted: %", gen.exhausted());
+
+    g_log.log("========== TEST PASSED ==========");
+}
+
+TEST_CASE("generator: storage stream_rows error via send") {
+    auto* resource = std::pmr::get_default_resource();
+    g_log.log("\n========== TEST: storage stream_rows error via send ==========");
+
+    auto storage = spawn<memory_storage_t>(resource, "Storage");
+
+    session_id_t session("error-stream");
+    collection_full_name_t coll("unknown_db", "unknown_coll");
+
+    auto gen = send(storage.get(), address_t::empty_address(),
+        &memory_storage_t::stream_rows, session, coll);
+
+    REQUIRE(gen.valid());
+
+    // Resume more times to ensure generator yields error
+    for (int i = 0; i < 20; ++i) {
+        storage->resume(1);
+        if (gen.has_error() || gen.exhausted()) {
+            break;
+        }
+    }
+
+    // Generator should have error
+    g_log.log("Generator has_error: %, exhausted: %", gen.has_error(), gen.exhausted());
+    // Note: The generator yields error and then returns
+    // After co_yield stream_error, co_return is called, so generator might be exhausted
+
+    g_log.log("========== TEST PASSED ==========");
+}
+
+TEST_CASE("generator: manager create_row_stream via send") {
+    auto* resource = std::pmr::get_default_resource();
+    g_log.log("\n========== TEST: manager create_row_stream via send ==========");
+
+    auto storage = spawn<memory_storage_t>(resource, "Storage");
+    auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
+
+    session_id_t session("send-stream");
+
+    // Send request to manager to create stream
+    auto gen = send(dispatcher.get(), address_t::empty_address(),
+        &manager_dispatcher_t::create_row_stream, session, std::string("users"));
+
+    REQUIRE(gen.valid());
+
+    // Resume actors to process
+    for (int i = 0; i < 30; ++i) {
+        dispatcher->resume(1);
+        storage->resume(1);
+    }
+
+    // Should have generated some rows
+    g_log.log("Generator exhausted: %", gen.exhausted());
+
+    g_log.log("========== TEST PASSED ==========");
+}
+

@@ -100,6 +100,37 @@ public:
         co_return std::move(cursor);
     }
 
+    /// @brief Stream rows from collection as generator
+    /// @param session Session identifier for logging
+    /// @param name Full collection name (database.collection)
+    /// @return generator<std::string> yielding rows one by one
+    generator<std::string> stream_rows(
+            session_id_t session,
+            collection_full_name_t name) {
+
+        auto tid = thread_id_str();
+        g_log.log("[%::stream_rows] thread=% session=% collection=%",
+                  name_, tid, session.data(), name.to_string());
+
+        std::string key = name.to_string();
+        auto it = collections_.find(key);
+
+        if (it == collections_.end()) {
+            g_log.log("[%::stream_rows] Collection not found: %", name_, key);
+            co_yield stream_error{std::make_error_code(std::errc::no_such_file_or_directory)};
+            co_return;
+        }
+
+        std::size_t count = std::min(it->second, std::size_t(10));
+        for (std::size_t i = 0; i < count; ++i) {
+            std::string row = "row_" + std::to_string(i) + "_from_" + key;
+            g_log.log("[%::stream_rows] yielding: %", name_, row);
+            co_yield row;
+        }
+
+        g_log.log("[%::stream_rows] exhausted", name_);
+    }
+
     // =========================================================================
     // dispatch_traits - compile-time message ID mapping
     // =========================================================================
@@ -112,7 +143,8 @@ public:
     /// The type system from make_message.hpp validates argument types.
     using dispatch_traits = actor_zeta::dispatch_traits<
         &memory_storage_t::size,
-        &memory_storage_t::execute_plan
+        &memory_storage_t::execute_plan,
+        &memory_storage_t::stream_rows
     >;
 
     // =========================================================================
@@ -129,12 +161,17 @@ public:
                 // dispatch() unpacks message arguments and calls method
                 // Returns future that chains result to sender's result_slot
                 auto future = dispatch(this, &memory_storage_t::size, msg);
-                (void)future;  // Result chaining handled by dispatch()
+                actor_zeta::detail::ignore_unused(future);  // Result chaining handled by dispatch()
                 break;
             }
             case msg_id<memory_storage_t, &memory_storage_t::execute_plan>: {
                 auto future = dispatch(this, &memory_storage_t::execute_plan, msg);
-                (void)future;
+                actor_zeta::detail::ignore_unused(future);
+                break;
+            }
+            case msg_id<memory_storage_t, &memory_storage_t::stream_rows>: {
+                auto gen = dispatch(this, &memory_storage_t::stream_rows, msg);
+                actor_zeta::detail::ignore_unused(gen);
                 break;
             }
             default:

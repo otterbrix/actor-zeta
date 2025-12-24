@@ -14,6 +14,8 @@ namespace actor_zeta { namespace actor {
 }} // namespace actor_zeta::actor
 namespace actor_zeta { namespace detail {
     class future_state_base;
+    template<typename T>
+    class generator_state;
 }} // namespace actor_zeta::detail
 namespace actor_zeta {
     template<typename T>
@@ -21,8 +23,6 @@ namespace actor_zeta {
 }
 
 namespace actor_zeta { namespace mailbox {
-
-    /// @brief Message with optional async result support
 
     class message final : public actor_zeta::detail::singly_linked<message> {
     public:
@@ -52,12 +52,13 @@ namespace actor_zeta { namespace mailbox {
         template<typename T>
         [[nodiscard]] actor_zeta::promise<T> get_result_promise() const noexcept;
 
+        template<typename T>
+        [[nodiscard]] actor_zeta::detail::generator_state<T>* get_generator_state() const noexcept;
+
     private:
         void* sender_;
         message_id command_;
         actor_zeta::detail::rtt body_;
-
-        // Future state for request-response pattern (automatic lifetime management via intrusive_ptr)
         intrusive_ptr<actor_zeta::detail::future_state_base> result_slot_;
     };
 

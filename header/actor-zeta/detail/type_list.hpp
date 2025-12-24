@@ -19,7 +19,6 @@ namespace actor_zeta { namespace type_traits {
         }
     };
 
-    // A list of types.
     template<class... args>
     struct type_list {
         constexpr type_list() = default;
@@ -35,19 +34,14 @@ namespace actor_zeta { namespace type_traits {
         struct is_type_list_impl<type_list<args...>> : std::true_type {};
     }
 
-    /// @brief Concept to check if T is a type_list
     template<typename T>
     concept type_list_type = detail::is_type_list_impl<T>::value;
 
-    /// @brief Legacy type trait (using concept)
     template<class T>
     struct is_type_list {
         static constexpr bool value = type_list_type<T>;
     };
 
-    // size_t size(type_list)
-
-    /// Gets the number of template parameters of `List`.
     template<class List>
     struct type_list_size;
 
@@ -56,11 +50,8 @@ namespace actor_zeta { namespace type_traits {
         static constexpr size_t value = sizeof...(args);
     };
 
-    /// @brief Helper variable template for type_list_size
     template<class List>
     inline constexpr size_t type_list_size_v = type_list_size<List>::value;
-
-    // type at(size_t)
 
     template<size_t N, class... E>
     struct type_list_at_impl;
@@ -78,7 +69,6 @@ namespace actor_zeta { namespace type_traits {
     template<class List, size_t N>
     struct type_list_at;
 
-    /// Gets element at index `N` of `List`.
     template<size_t N, class... E>
     struct type_list_at<type_list<E...>, N> {
         using type = typename type_list_at_impl<N, E...>::type;
@@ -87,7 +77,6 @@ namespace actor_zeta { namespace type_traits {
     template<class List, size_t N>
     using type_list_at_t = typename type_list_at<List, N>::type;
 
-    /// Gets the first element of `List`.
     template<class List>
     struct tl_head;
 
@@ -131,11 +120,8 @@ namespace actor_zeta { namespace type_traits {
     template<class... args>
     constexpr size_t tl_size<type_list<args...>>::value;
 
-    /// @brief Helper variable template for tl_size (alias for type_list_size_v)
     template<class List>
     inline constexpr size_t tl_size_v = tl_size<List>::value;
-
-    // list slice(size_t, size_t)
 
     template<size_t LeftOffset, size_t Remaining, typename PadType, class List, class... args>
     struct tl_slice_impl {
@@ -177,7 +163,6 @@ namespace actor_zeta { namespace type_traits {
         using type = List;
     };
 
-    /// Creates a new list from range (First, Last].
     template<class List, size_t First, size_t Last>
     struct tl_slice {
         using type = typename tl_slice_<List, type_list_size_v<List>,

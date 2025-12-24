@@ -119,7 +119,7 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
             // Some messages may have been processed before actor destruction
             // Note: get() may return error state - we just count successful completions
             auto result = std::move(future).get();
-            (void)result;
+            actor_zeta::detail::ignore_unused(result);
             ++successful;
         }
     }

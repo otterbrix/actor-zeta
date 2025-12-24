@@ -74,12 +74,13 @@ public:
         &coro_supervisor::send
     >;
 
-    template<typename R, typename... Args>
-    unique_future<R> enqueue_impl(
+    template<typename ReturnType, typename... Args>
+    ReturnType enqueue_impl(
         actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
+        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
         return this->template enqueue_sync_impl<R>(
             sender,
             cmd,

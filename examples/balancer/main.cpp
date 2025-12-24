@@ -27,9 +27,6 @@ public:
         : actor_zeta::basic_actor<collection_part_t>(ptr) {
         ++count_collection_part;
     }
-    
-    
-    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
     actor_zeta::unique_future<void> insert(std::string key, std::string value) {
         data_.emplace(std::move(key), std::move(value));
         std::cerr << id() << " insert" << std::endl;
@@ -108,8 +105,6 @@ public:
         actors_.emplace_back(std::move(ptr));
     }
 
-    // Dummy methods - just for dispatch_traits, never actually called
-    // NOTE: By-value parameters required for coroutines (const& becomes dangling after co_await)
     actor_zeta::unique_future<void> insert(std::string, std::string) { co_return; }
     actor_zeta::unique_future<void> remove(std::string) { co_return; }
     actor_zeta::unique_future<void> update(std::string, std::string) { co_return; }
@@ -122,52 +117,46 @@ public:
         &collection_t::find
     >;
 
-    // NEW API: Forward arguments to child actor (message created in child's resource)
-    template<typename R, typename... Args>
-    unique_future<R> enqueue_impl(
+    template<typename ReturnType, typename... Args>
+    ReturnType enqueue_impl(
         actor_zeta::actor::address_t sender,
         actor_zeta::mailbox::message_id cmd,
         Args&&... args
     ) {
-        // Check if we have any child actors
+        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
+
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
             return actor_zeta::make_error<R>(resource_, std::make_error_code(std::errc::no_child_process));
         }
 
-        // Balancer logic: forward to child actor using round-robin
         auto index = cursor_ % actors_.size();
         ++cursor_;
         ++count_balancer;
 
-        // Forward arguments to child actor (child creates message in its own resource)
-        auto child_future = actors_[index]->template enqueue_impl<R>(
+        auto child_future = actors_[index]->template enqueue_impl<ReturnType>(
             sender,
             cmd,
             std::forward<Args>(args)...
         );
 
-        // Execute child immediately if needed (inline execution to avoid deadlock)
         if (child_future.needs_scheduling()) {
             auto& child = actors_[index];
             while (!child_future.available()) {
-                child->resume(1);  // Process one message
+                child->resume(1);
             }
         }
 
-        // Create result via promise (clean API)
         actor_zeta::promise<R> p(resource_);
 
-        // Extract result from child and set immediately
         if constexpr (std::is_same_v<R, void>) {
-            std::move(child_future).get();  // Wait for completion
-            p.set_value();  // Mark as ready for void
+            std::move(child_future).get();
+            p.set_value();
         } else {
-            R result = std::move(child_future).get();  // Get result from child
-            p.set_value(std::move(result));  // Set value
+            R result = std::move(child_future).get();
+            p.set_value(std::move(result));
         }
 
-        // Return ready future from promise
         return p.get_future();
     }
 
@@ -221,7 +210,6 @@ int main() {
     std::cerr << "Count Remove : " << count_remove << std::endl;
     std::cerr << "\nExpected: 6 messages balanced across 3 actors (round-robin)" << std::endl;
 
-    // Verify round-robin distribution
     bool success = (count_balancer == 6) && (count_insert == 3) && (count_update == 2) && (count_remove == 1);
     std::cerr << "\nTest result: " << (success ? "PASSED" : "FAILED") << std::endl;
 

@@ -21,6 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - [Common Mistakes](#common-mistakes-to-avoid)
 - [Recent Changes](#recent-changes)
 - [Promise/Future System](#promisefuture-system)
+- [Generator System](#generator-system)
 
 ---
 
@@ -116,12 +117,14 @@ actor-zeta/
 │   │   ├── spawn.hpp               # Actor allocation: spawn<T>(memory_resource, args...)
 │   │   ├── make_message.hpp        # Message creation
 │   │   ├── send.hpp                # Message sending
-│   │   ├── base/                   # Actor base classes
-│   │   │   ├── actor_abstract.hpp  # Abstract actor interface
-│   │   │   ├── cooperative_actor.hpp # Cooperative actor implementation
+│   │   ├── actor/                  # Actor implementation
+│   │   │   ├── actor_mixin.hpp     # Actor mixin pattern
 │   │   │   ├── address.hpp         # Actor addressing
-│   │   │   ├── behavior.hpp        # Message handlers
-│   │   │   └── handler.hpp         # Handler registration
+│   │   │   ├── basic_actor.hpp     # Basic actor alias
+│   │   │   ├── cooperative_actor.hpp # Cooperative actor implementation
+│   │   │   ├── dispatch.hpp        # Message dispatch
+│   │   │   ├── dispatch_traits.hpp # Dispatch traits
+│   │   │   └── forwards.hpp        # Forward declarations
 │   │   ├── mailbox/                # Message system
 │   │   │   ├── message.hpp         # Core message type
 │   │   │   ├── message_id.hpp      # Message identification
@@ -134,9 +137,9 @@ actor-zeta/
 │   │   ├── detail/                 # Internal implementation
 │   │   │   ├── future.hpp          # Promise/Future with coroutine support
 │   │   │   ├── future_state.hpp    # Future state management
+│   │   │   ├── generator.hpp       # Generator with co_yield support
 │   │   │   ├── rtt.hpp             # Custom RTTI (no typeid)
 │   │   │   ├── intrusive_ptr.hpp   # Reference counting
-│   │   │   ├── unique_function.hpp # Move-only function wrapper
 │   │   │   ├── type_list.hpp       # Metaprogramming
 │   │   │   └── queue/              # Lock-free queues
 │   │   └── impl/                   # Implementation files (.ipp)
@@ -161,7 +164,6 @@ actor-zeta/
 The library implements **cooperative actors** with custom memory management:
 
 - **basic_actor** - Alias for `cooperative_actor<Actor, traits, actor_type::classic>`
-- **actor_abstract_t** - Abstract base interface for all actors
 - **address_t** - Actor addressing and identification
 - **behavior_t** - Message handler collection
 
@@ -212,7 +214,6 @@ Since RTTI is disabled:
 - **rtt.hpp** - Custom runtime type information (replaces `typeid`)
 - **type_list** - Compile-time type lists for metaprogramming
 - **type_traits** - Custom type trait utilities
-- **unique_function** - Move-only function wrapper (like `std::function` but move-only)
 - **intrusive_ptr** - Reference-counted smart pointer with custom ref counting
 
 ### Reference Counting
@@ -407,6 +408,7 @@ Located in `examples/`:
 - **broadcast** - Broadcasting messages to multiple actors
 - **supervisor** - Supervisor pattern for actor management
 - **coroutine** - Mixed sync/async coroutine patterns
+- **generator** - Streaming data between actors with `co_yield`
 
 Build with `-DALLOW_EXAMPLES=ON`, run from `build/bin/`.
 
@@ -487,7 +489,6 @@ Switch between profiles using the dropdown in CLion's toolbar.
 - ❌ Using alignment < `sizeof(void*)` with `posix_memalign`
 
 ### Standard Library Replacements
-- ❌ `std::function` → Use `actor_zeta::detail::unique_function` instead
 - ❌ `std::shared_ptr` → Use `actor_zeta::detail::intrusive_ptr` instead
 - ❌ `std::optional` → Use custom optional or raw pointers with null checks (C++11 compatibility)
 
@@ -755,9 +756,171 @@ int main() {
 
 ---
 
+## Generator System
+
+**For complete guide with patterns and examples, see [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md).**
+
+### Quick Overview
+
+Actor-zeta supports **streaming data** via `generator<T>` - an async generator with `co_yield`:
+
+**Define a generator method:**
+```cpp
+class DataProducer : public basic_actor<DataProducer> {
+    // Generator method - yields values one by one
+    generator<int> stream_range(int start, int end) {
+        for (int i = start; i < end; ++i) {
+            co_yield i;  // Yield and suspend
+        }
+        // Implicit co_return at end
+    }
+
+    using dispatch_traits = dispatch_traits<&DataProducer::stream_range>;
+
+    void behavior(mailbox::message* msg) {
+        if (msg->command() == msg_id<DataProducer, &DataProducer::stream_range>) {
+            dispatch(this, &DataProducer::stream_range, msg);
+        }
+    }
+};
+```
+
+**Use via send() API:**
+```cpp
+auto gen = send(producer.get(), sender, &DataProducer::stream_range, 0, 10);
+producer->resume(1);  // Start generator
+```
+
+### Key Features
+
+- **Move-only** - generators cannot be copied
+- **Lazy evaluation** - producer runs on-demand
+- **PMR allocation** - uses actor's memory resource
+- **Zero-copy yield** - `current()` returns reference to value in coroutine frame
+- **CAS synchronization** - thread-safe producer/consumer coordination
+
+### Generator States
+
+| State | Description |
+|-------|-------------|
+| `created` | Producer not yet started |
+| `suspended` | Producer yielded a value |
+| `exhausted` | Producer finished (co_return) |
+| `cancelled` | Consumer cancelled |
+| `detached` | Consumer detached |
+
+### State Queries
+
+```cpp
+gen.valid()              // Has valid state (not moved-from)
+gen.exhausted()          // Producer finished
+gen.is_cancelled()       // Consumer cancelled
+gen.is_safe_to_destroy() // In terminal state
+```
+
+### Consumer Pattern (in coroutine context)
+
+```cpp
+unique_future<void> consume_stream() {
+    auto gen = other_actor->stream_data();
+    while (co_await gen) {          // Wait for next value
+        auto& value = gen.current(); // Get reference to yielded value
+        process(value);
+    }
+    co_return;
+}
+```
+
+### Lifecycle Control
+
+```cpp
+// Cancel - stops producer
+gen.cancel();
+assert(gen.is_cancelled());
+
+// Detach - release handle, let producer run
+gen.detach();
+assert(!gen.valid());  // Handle invalid after detach
+```
+
+### Comparison: unique_future vs generator
+
+| Aspect | `unique_future<T>` | `generator<T>` |
+|--------|-------------------|----------------|
+| Pattern | Request-response | Streaming |
+| Values | Single | Multiple |
+| Keyword | `co_return` | `co_yield` |
+| Consumer | `co_await future` | `co_await gen` + `current()` |
+
+### Limitations
+
+- Requires coroutine context for `co_await gen` consumption
+- No synchronous `next()` API (by design)
+- Single consumer only (move-only)
+- No `generator<void>` support
+- No exception support (`-fno-exceptions`)
+
+### Complete Example
+
+```cpp
+#include <actor-zeta.hpp>
+#include <iostream>
+
+class DataProducer : public actor_zeta::basic_actor<DataProducer> {
+public:
+    actor_zeta::generator<int> stream_fibonacci(int count) {
+        int a = 0, b = 1;
+        for (int i = 0; i < count; ++i) {
+            co_yield a;
+            int next = a + b;
+            a = b;
+            b = next;
+        }
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<&DataProducer::stream_fibonacci>;
+
+    explicit DataProducer(std::pmr::memory_resource* ptr)
+        : actor_zeta::basic_actor<DataProducer>(ptr) {}
+
+    void behavior(actor_zeta::mailbox::message* msg) {
+        if (msg->command() == actor_zeta::msg_id<DataProducer, &DataProducer::stream_fibonacci>) {
+            actor_zeta::dispatch(this, &DataProducer::stream_fibonacci, msg);
+        }
+    }
+};
+
+int main() {
+    auto* resource = std::pmr::get_default_resource();
+    auto producer = actor_zeta::spawn<DataProducer>(resource);
+
+    auto gen = actor_zeta::send(
+        producer.get(),
+        actor_zeta::address_t::empty_address(),
+        &DataProducer::stream_fibonacci,
+        10
+    );
+
+    producer->resume(1);  // Start generator
+
+    std::cout << "Generator valid: " << gen.valid() << "\n";
+
+    return 0;
+}
+```
+
+**See [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md) for:**
+- Detailed patterns and examples
+- Memory management details
+- Best practices
+- Use cases (streaming, pagination, real-time feeds)
+
+---
+
 ## Additional Resources
 
 - **[CHANGELOG.md](CHANGELOG.md)** - Detailed change history and migration guides
+- **[GENERATOR_GUIDE.md](GENERATOR_GUIDE.md)** - Complete generator streaming documentation
 - **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Complete promise/future documentation
 - **[MESSAGE_CREATION_REFACTORING.md](MESSAGE_CREATION_REFACTORING.md)** - Message creation refactoring notes
 - **Examples:** `examples/` directory for working code samples

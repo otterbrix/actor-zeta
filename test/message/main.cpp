@@ -14,6 +14,7 @@
 #include <type_traits>
 
 
+#include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/mailbox/make_message.hpp>
 
 using actor_zeta::actor::address_t;
@@ -151,7 +152,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         auto [msg, future] = actor_zeta::detail::make_message(resource, address_t::empty_address(), one);
         REQUIRE( static_cast<bool>(msg) ); // message_ptr has operator bool
         REQUIRE( msg->command() == actor_zeta::mailbox::make_message_id(1) );
-        (void)future; // unused in this test
+        actor_zeta::detail::ignore_unused(future); // unused in this test
 
         // 2) separate payload - use specialized rtt move constructor
         rtt body(resource, int(1));
@@ -184,7 +185,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         REQUIRE( msg->body().get<int>(0) == 42 );
         REQUIRE( msg->body().get<std::string>(1) == "test" );
         REQUIRE( msg->body().get<double>(2) == 3.14 );
-        (void)future2;
+        actor_zeta::detail::ignore_unused(future2);
     }
 
     SECTION("sender access") {

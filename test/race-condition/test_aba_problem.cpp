@@ -105,7 +105,7 @@ TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
                     auto [success, result] = wait_with_timeout(std::move(future), FUTURE_TIMEOUT);
                     // NOTE: Can't use REQUIRE here - Catch2 not thread-safe!
                     // Just verify we didn't timeout
-                    (void)result;  // Suppress unused warning
+                    actor_zeta::detail::ignore_unused(result);  // Suppress unused warning
                     if (!success) {
                         // Signal timeout occurred - will be caught after thread join
                         total_processed.store(-1, std::memory_order_relaxed);

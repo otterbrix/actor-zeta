@@ -178,7 +178,7 @@ TEST_CASE("Refcount Stress 2: Future move and copy operations") {
 
         // Get result from final future
         int result = smart_get<int>(std::move(future3), actor.get(), scheduler.get());
-        (void)result;
+        actor_zeta::detail::ignore_unused(result);
 
         move_count.fetch_add(1, std::memory_order_relaxed);
     }
@@ -222,7 +222,7 @@ TEST_CASE("Refcount Stress 3: Concurrent message enqueue and future get") {
             }
 
             int result = smart_get<int>(std::move(future), actor.get(), scheduler.get());
-            (void)result;
+            actor_zeta::detail::ignore_unused(result);
             results_received.fetch_add(1, std::memory_order_relaxed);
         }
     });
@@ -307,7 +307,7 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                             scheduler->enqueue(actor.get());
                         }
                         int result = smart_get<int>(std::move(future), actor.get(), scheduler.get());
-                        (void)result;
+                        actor_zeta::detail::ignore_unused(result);
                         break;
                     }
                     case 2: {
@@ -329,7 +329,7 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                         }
                         auto future2 = std::move(future1);
                         int result = smart_get<int>(std::move(future2), actor.get(), scheduler.get());
-                        (void)result;
+                        actor_zeta::detail::ignore_unused(result);
                         break;
                     }
                     case 4: {
@@ -399,7 +399,7 @@ TEST_CASE("Refcount Stress 5: Actor destruction with pending messages") {
         // Wait for all futures to complete
         for (auto& future : futures) {
             int result = smart_get<int>(std::move(future), actor.get(), scheduler.get());
-            (void)result;
+            actor_zeta::detail::ignore_unused(result);
         }
 
         // Actor destroyed here - verifies refcount cleanup

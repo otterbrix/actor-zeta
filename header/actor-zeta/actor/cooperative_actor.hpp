@@ -1,12 +1,15 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
 #include <actor-zeta/actor/actor_mixin.hpp>
 #include <actor-zeta/config.hpp>
+#include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/future.hpp>
 #include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/detail/generator.hpp>
 #include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
@@ -77,21 +80,14 @@ namespace actor_zeta { namespace actor {
         return ptr;
     }
 
-    /// @brief Maximum CAS retry attempts before declaring livelock
     inline constexpr int kMaxCasAttempts = 1000;
 
-    /// @brief Exponential backoff for CAS loops
-    /// @param attempt Current retry attempt (0-based)
-    /// @note Phase 1 (0-3):   Pure spin (fast path, ~10-40 CPU cycles)
-    /// @note Phase 2 (4-9):   yield() - let other threads run
-    /// @note Phase 3 (10+):   sleep(2^(attempt-10) us), capped at 1ms
     inline void exponential_backoff(int attempt) noexcept {
         constexpr int kSpinPhaseEnd = 4;
         constexpr int kYieldPhaseEnd = 10;
         constexpr int kMaxSleepMicroseconds = 1000;
 
         if (attempt < kSpinPhaseEnd) {
-            // Pure spin - fastest for short contention
         } else if (attempt < kYieldPhaseEnd) {
             std::this_thread::yield();
         } else {
@@ -106,7 +102,7 @@ namespace actor_zeta { namespace actor {
     private:
         static constexpr bool check_dispatch_traits_exists() {
             using dispatch_traits_check = typename Actor::dispatch_traits;
-            (void) sizeof(dispatch_traits_check);
+            detail::ignore_unused(sizeof(dispatch_traits_check));
             return true;
         }
 
@@ -123,92 +119,94 @@ namespace actor_zeta { namespace actor {
         template<typename T>
         using unique_future = actor_zeta::unique_future<T>;
 
-        template<typename R, typename... Args>
+        template<typename ReturnType, typename... Args>
         [[nodiscard("Check needs_scheduling() and call schedule() if needed")]]
-        unique_future<R> enqueue_impl(
+        ReturnType enqueue_impl(
             actor::address_t sender,
             mailbox::message_id cmd,
             Args&&... args) {
-            // Create message + promise in one call (cleaner API)
-            auto [msg, future] = detail::make_message<R>(
-                this->resource(),
-                std::move(sender),
-                cmd,
-                std::forward<Args>(args)...);
 
-            // Save result_promise before msg is moved (for error handling)
-            auto result_promise = msg->template get_result_promise<R>();
+            if constexpr (type_traits::is_generator_v<ReturnType>) {
+                using value_type = typename type_traits::is_generator<ReturnType>::value_type;
 
-            if (is_destroying(state_.load(std::memory_order_acquire))) {
-                result_promise.error(std::make_error_code(std::errc::operation_canceled));
-                return std::move(future);
-            }
+                auto [msg, gen] = detail::make_generator_message<value_type>(
+                    this->resource(),
+                    std::move(sender),
+                    cmd,
+                    std::forward<Args>(args)...);
 
-            auto result = mailbox().push_back(std::move(msg));
-            bool needs_sched = false;
-
-            switch (result) {
-                case detail::enqueue_result::unblocked_reader: {
-                    auto current = state_.load(std::memory_order_acquire);
-                    actor_state desired;
-
-                    int cas_attempts = 0;
-
-                    while (true) {
-                        exponential_backoff(cas_attempts);
-                        ++cas_attempts;
-
-#ifndef NDEBUG
-                        assert(cas_attempts < kMaxCasAttempts && "enqueue_impl: CAS loop - possible livelock!");
-#else
-                        if (cas_attempts >= kMaxCasAttempts) {
-                            std::terminate();
-                        }
-#endif
-
-                        if (is_running(current) || is_destroying(current)) {
-                            needs_sched = false;
-                            break;
-                        }
-
-                        if (is_scheduled(current)) {
-                            needs_sched = false;
-                            break;
-                        }
-
-                        assert((current == actor_state::idle || current == actor_state::idle_destroying) &&
-                               "enqueue_impl: expected idle or idle_destroying!");
-
-                        desired = set_scheduled(current, true);
-                        assert(desired == actor_state::scheduled && "enqueue_impl: invalid desired state!");
-
-                        if (state_.compare_exchange_weak(current, desired,
-                                                         std::memory_order_acq_rel,
-                                                         std::memory_order_acquire)) {
-                            needs_sched = true;
-                            break;
-                        }
-                    }
-                    break;
+                if (is_destroying(state_.load(std::memory_order_acquire))) {
+                    return generator<value_type>{};
                 }
 
-                case detail::enqueue_result::success:
-                    needs_sched = false;
-                    break;
+                auto result = mailbox().push_back(std::move(msg));
+                bool needs_sched = false;
 
-                case detail::enqueue_result::queue_closed:
-                    result_promise.error(std::make_error_code(std::errc::broken_pipe));
-                    needs_sched = false;
-                    break;
+                switch (result) {
+                    case detail::enqueue_result::unblocked_reader:
+                        needs_sched = try_schedule_after_enqueue("enqueue_impl(generator)");
+                        break;
 
-                default:
-                    assert(false && "enqueue_result: unreachable");
-                    needs_sched = false;
-                    break;
+                    case detail::enqueue_result::success:
+                    case detail::enqueue_result::queue_closed:
+                        needs_sched = false;
+                        break;
+
+                    default:
+                        assert(false && "enqueue_result: unreachable");
+                        needs_sched = false;
+                        break;
+                }
+
+                detail::ignore_unused(needs_sched);
+                return std::move(gen);
+
+            } else {
+
+                static_assert(type_traits::is_unique_future_v<ReturnType>,
+                              "ReturnType must be unique_future<T>");
+                using R = typename type_traits::is_unique_future<ReturnType>::value_type;
+                static_assert(!type_traits::is_unique_future_v<R>,
+                              "R should not be unique_future (double wrapping)");
+                auto [msg, future] = detail::make_message<R>(
+                    this->resource(),
+                    std::move(sender),
+                    cmd,
+                    std::forward<Args>(args)...);
+
+                auto result_promise = msg->template get_result_promise<R>();
+
+                if (is_destroying(state_.load(std::memory_order_acquire))) {
+                    result_promise.error(std::make_error_code(std::errc::operation_canceled));
+                    return std::move(future);
+                }
+
+                auto result = mailbox().push_back(std::move(msg));
+                bool needs_sched = false;
+
+                switch (result) {
+                    case detail::enqueue_result::unblocked_reader:
+                        needs_sched = try_schedule_after_enqueue("enqueue_impl(future)");
+                        break;
+
+                    case detail::enqueue_result::success:
+                        needs_sched = false;
+                        break;
+
+                    case detail::enqueue_result::queue_closed:
+                        result_promise.error(std::make_error_code(std::errc::broken_pipe));
+                        needs_sched = false;
+                        break;
+
+                    default:
+                        assert(false && "enqueue_result: unreachable");
+                        needs_sched = false;
+                        break;
+                }
+
+                future.set_needs_scheduling(needs_sched);
+                return std::move(future);
             }
-
-            future.set_needs_scheduling(needs_sched);
-            return std::move(future);
         }
 
         scheduler::resume_info resume(size_t max_throughput) noexcept {
@@ -223,7 +221,6 @@ namespace actor_zeta { namespace actor {
                     , keep_scheduled_(false) {
                     auto current = state_ref_.load(std::memory_order_acquire);
                     actor_state desired;
-
                     int cas_attempts = 0;
 
                     while (true) {
@@ -231,7 +228,7 @@ namespace actor_zeta { namespace actor {
                         ++cas_attempts;
 
 #ifndef NDEBUG
-                        assert(cas_attempts < kMaxCasAttempts && "resume_guard: CAS loop - possible livelock!");
+                        assert(cas_attempts < kMaxCasAttempts && "resume_guard: CAS livelock!");
 #else
                         if (cas_attempts >= kMaxCasAttempts) {
                             std::terminate();
@@ -251,18 +248,10 @@ namespace actor_zeta { namespace actor {
                                 current == actor_state::scheduled ||
                                 current == actor_state::idle_destroying ||
                                 current == actor_state::scheduled_destroying) &&
-                               "resume_guard: unexpected entry state!");
+                               "resume_guard: unexpected state!");
 #endif
 
                         desired = set_running(current, true);
-
-#ifndef NDEBUG
-                        assert((desired == actor_state::running ||
-                                desired == actor_state::running_scheduled ||
-                                desired == actor_state::running_destroying ||
-                                desired == actor_state::running_scheduled_destroying) &&
-                               "resume_guard: invalid desired state!");
-#endif
 
                         if (state_ref_.compare_exchange_weak(current, desired,
                                                              std::memory_order_acq_rel,
@@ -275,7 +264,6 @@ namespace actor_zeta { namespace actor {
                 ~resume_guard() {
                     auto current = state_ref_.load(std::memory_order_acquire);
                     actor_state desired;
-
                     int cas_attempts = 0;
 
                     while (true) {
@@ -283,7 +271,7 @@ namespace actor_zeta { namespace actor {
                         ++cas_attempts;
 
 #ifndef NDEBUG
-                        assert(cas_attempts < kMaxCasAttempts && "resume_guard destructor: CAS loop!");
+                        assert(cas_attempts < kMaxCasAttempts && "~resume_guard: CAS livelock!");
 #else
                         if (cas_attempts >= kMaxCasAttempts) {
                             std::terminate();
@@ -305,9 +293,7 @@ namespace actor_zeta { namespace actor {
                     }
                 }
 
-                void keep_scheduled() {
-                    keep_scheduled_ = true;
-                }
+                void keep_scheduled() { keep_scheduled_ = true; }
             };
             resume_guard guard(state_);
 
@@ -377,7 +363,6 @@ namespace actor_zeta { namespace actor {
                         }
 
                         ~message_guard() noexcept {
-                            // Refcount managed by promise/future - message_guard only restores state
                             actor_->current_message_ = prev_message_;
                         }
 
@@ -424,7 +409,7 @@ namespace actor_zeta { namespace actor {
 
         std::pmr::memory_resource* resource() const noexcept {
 #ifndef NDEBUG
-            assert(magic_ == kMagicAlive && "Use-after-free: resource() called on destroyed actor!");
+            assert(magic_ == kMagicAlive && "Use-after-free!");
 #endif
             return resource_;
         }
@@ -436,8 +421,18 @@ namespace actor_zeta { namespace actor {
             assert(magic_ == kMagicAlive && "Double-delete!");
 #endif
             auto current = state_.load(std::memory_order_acquire);
+            int cas_attempts = 0;
 
             while (!is_destroying(current)) {
+                exponential_backoff(cas_attempts);
+                ++cas_attempts;
+#ifndef NDEBUG
+                assert(cas_attempts < kMaxCasAttempts && "~cooperative_actor: CAS livelock (1)!");
+#else
+                if (cas_attempts >= kMaxCasAttempts) {
+                    std::terminate();
+                }
+#endif
                 auto desired = set_destroying(current);
                 if (state_.compare_exchange_weak(current, desired,
                                                  std::memory_order_acq_rel,
@@ -446,10 +441,20 @@ namespace actor_zeta { namespace actor {
                 }
             }
 
-            wait_for_resume_to_complete("Destructor");
+            wait_for_resume_to_complete();
 
             current = state_.load(std::memory_order_acquire);
+            cas_attempts = 0;
             while (true) {
+                exponential_backoff(cas_attempts);
+                ++cas_attempts;
+#ifndef NDEBUG
+                assert(cas_attempts < kMaxCasAttempts && "~cooperative_actor: CAS livelock (2)!");
+#else
+                if (cas_attempts >= kMaxCasAttempts) {
+                    std::terminate();
+                }
+#endif
                 assert(!is_running(current) && "Destructor: still running!");
                 auto desired = make_state(false, false, true);
                 if (state_.compare_exchange_weak(current, desired,
@@ -463,7 +468,7 @@ namespace actor_zeta { namespace actor {
     protected:
         explicit cooperative_actor(std::pmr::memory_resource* in_resource)
             : actor_mixin<Actor>()
-            , shutdown_guard_(this) // Initialize FIRST (destroyed LAST!)
+            , shutdown_guard_(this)
             , resource_(check_ptr(in_resource))
             , current_message_(nullptr)
             , mailbox_()
@@ -472,14 +477,64 @@ namespace actor_zeta { namespace actor {
 #endif
         {
             static_assert(check_dispatch_traits_exists(),
-                          "Actor must define nested 'struct dispatch_traits { using methods = type_list<...>; }'");
+                          "Actor must define nested 'dispatch_traits'");
             mailbox().try_block();
         }
 
     private:
+        bool try_schedule_after_enqueue(const char* context) noexcept {
+            auto current = state_.load(std::memory_order_acquire);
+            actor_state desired;
+            int cas_attempts = 0;
+
+            while (true) {
+                exponential_backoff(cas_attempts);
+                ++cas_attempts;
+
+#ifndef NDEBUG
+                assert(cas_attempts < kMaxCasAttempts && context);
+#else
+                detail::ignore_unused(context);
+                if (cas_attempts >= kMaxCasAttempts) {
+                    std::terminate();
+                }
+#endif
+
+                if (is_running(current) || is_destroying(current)) {
+                    return false;
+                }
+
+                if (is_scheduled(current)) {
+                    return false;
+                }
+
+                assert((current == actor_state::idle || current == actor_state::idle_destroying) &&
+                       "try_schedule_after_enqueue: unexpected state!");
+
+                desired = set_scheduled(current, true);
+
+                if (state_.compare_exchange_weak(current, desired,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+                    return true;
+                }
+            }
+        }
+
         void begin_shutdown() noexcept {
             auto current = state_.load(std::memory_order_acquire);
+            int cas_attempts = 0;
+
             while (!is_destroying(current)) {
+                exponential_backoff(cas_attempts);
+                ++cas_attempts;
+#ifndef NDEBUG
+                assert(cas_attempts < kMaxCasAttempts && "begin_shutdown: CAS livelock!");
+#else
+                if (cas_attempts >= kMaxCasAttempts) {
+                    std::terminate();
+                }
+#endif
                 auto desired = set_destroying(current);
                 if (state_.compare_exchange_weak(current, desired,
                                                  std::memory_order_release,
@@ -488,7 +543,7 @@ namespace actor_zeta { namespace actor {
                 }
             }
 
-            wait_for_resume_to_complete("begin_shutdown");
+            wait_for_resume_to_complete();
         }
 
         struct shutdown_guard_t {
@@ -507,7 +562,7 @@ namespace actor_zeta { namespace actor {
             shutdown_guard_t& operator=(shutdown_guard_t&&) = delete;
         };
 
-        void wait_for_resume_to_complete(const char* context) noexcept {
+        void wait_for_resume_to_complete() noexcept {
             std::atomic_thread_fence(std::memory_order_seq_cst);
 
             auto start_time = std::chrono::steady_clock::now();
@@ -525,10 +580,8 @@ namespace actor_zeta { namespace actor {
                 auto elapsed = std::chrono::steady_clock::now() - start_time;
                 if (elapsed > timeout) {
 #ifndef NDEBUG
-                    (void) context;
                     assert(false && "wait_for_resume_to_complete: timeout!");
 #else
-                    (void) context;
                     std::terminate();
 #endif
                 }
@@ -560,7 +613,6 @@ namespace actor_zeta { namespace actor {
 
 #ifndef NDEBUG
         static constexpr uint32_t kMagicAlive = 0xFEEDFACE;
-
         uint32_t magic_;
 #endif
     };
