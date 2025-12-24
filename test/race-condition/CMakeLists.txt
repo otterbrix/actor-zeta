@@ -26,7 +26,8 @@ set_target_properties(${CURRENT_TEST_NAME}
         CXX_EXTENSIONS NO
         )
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 180)
+# TSan adds 10-50x overhead; 1000 thread spawns in Test 2.1 needs extra time
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 600)
 
 # Phase 1 Critical Tests: Actor Shutdown
 set(CURRENT_TEST_NAME tests_race_shutdown)
