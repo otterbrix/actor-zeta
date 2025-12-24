@@ -24,8 +24,8 @@ std::pair<bool, T> wait_with_timeout(actor_zeta::unique_future<T>&& future,
     return {true, std::move(future).get()};
 }
 
-// Timeout constant for CI/CD (should complete much faster normally)
-constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(10);
+// Timeout constant for CI/CD (TSan adds 10-50x overhead)
+constexpr auto FUTURE_TIMEOUT = std::chrono::seconds(60);
 
 // Test actor for ABA problem testing
 class aba_test_actor final : public actor_zeta::basic_actor<aba_test_actor> {
@@ -135,7 +135,7 @@ TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
     // Verification - check for timeout first
     int processed = total_processed.load();
     if (processed == -1) {
-        FAIL("TIMEOUT: Future.get() took longer than 10 seconds - possible deadlock");
+        FAIL("TIMEOUT: Future.get() took longer than 60 seconds - possible deadlock");
     }
     REQUIRE(processed == NUM_THREADS * MESSAGES_PER_THREAD);
     // If we reach here without TSan/ASan errors or assert failures, ABA problem not detected!
