@@ -57,7 +57,7 @@ private:
 
 thread_logger g_log;
 
-/// @brief Worker актор - обрабатывает запросы
+/// @brief Worker actor - handles requests
 class worker_actor final : public basic_actor<worker_actor> {
 public:
     explicit worker_actor(std::pmr::memory_resource* resource, const std::string& name)
@@ -108,8 +108,8 @@ private:
 };
 
 
-/// @brief Client актор - как balancer, но на корутинах
-/// Использует только address_t для связи с worker
+/// @brief Client actor - like balancer, but with coroutines
+/// Uses only address_t for communication with worker
 class client_actor final : public basic_actor<client_actor> {
 public:
     explicit client_actor(std::pmr::memory_resource* resource, address_t worker_address, const std::string& name)
@@ -137,19 +137,19 @@ public:
 
     bool has_pending() const { return !pending_.empty(); }
 
-    /// @brief Корутина - отправляет запрос и ждёт результат
-    /// Resume управляется снаружи (тестом или scheduler)
+    /// @brief Coroutine - sends request and waits for result
+    /// Resume is controlled externally (by test or scheduler)
     unique_future<int> process(int x) {
         auto tid_start = thread_id_str();
         g_log.log("\n[%::process] === START === thread=% x=%", name_, tid_start, x);
         process_start_thread_ = tid_start;
 
-        // Отправляем запрос worker'у через address_t
+        // Send request to worker via address_t
         g_log.log("[%::process] Sending to worker...", name_);
         auto future = send(worker_address_, address(), &worker_actor::compute, x);
         g_log.log("[%::process] future.available()=%", name_, future.available());
 
-        // co_await - suspend если не готово, продолжит когда готово
+        // co_await - suspend if not ready, continue when ready
         auto tid_before_await = thread_id_str();
         g_log.log("[%::process] Before co_await, thread=%", name_, tid_before_await);
 
@@ -190,12 +190,12 @@ public:
 
         switch (msg->command()) {
             case msg_id<client_actor, &client_actor::process>: {
-                // dispatch() настраивает chaining автоматически:
+                // dispatch() sets up chaining automatically:
                 // method_future -> msg->result_slot() (caller's future)
                 auto future = dispatch(this, &client_actor::process, msg);
                 if (!future.available()) {
-                    // Корутина suspended - сохраняем для polling
-                    // Никаких promise не нужно - chaining уже настроен!
+                    // Coroutine suspended - store for polling
+                    // No promises needed - chaining is already set up!
                     g_log.log("[%::behavior] process() suspended, storing pending", name_);
                     pending_.push_back(std::move(future));
                 }
@@ -222,7 +222,7 @@ private:
     std::string process_start_thread_;
     std::string process_after_await_thread_;
     std::string process_end_thread_;
-    std::vector<unique_future<int>> pending_;  // Просто храним futures для resume
+    std::vector<unique_future<int>> pending_;  // Just store futures for resume
 };
 
 
@@ -262,23 +262,23 @@ TEST_CASE("single-thread: client-worker") {
 
     auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
 
-    // Тест управляет resume снаружи (ПОЛЬЗОВАТЕЛЬСКИЙ КОД):
-    // 1. Resume client - process() отправит сообщение worker'у, suspend на co_await
-    //    behavior() сохраняет pending корутину
+    // Test controls resume externally (USER CODE):
+    // 1. Resume client - process() sends message to worker, suspend on co_await
+    //    behavior() stores pending coroutine
     client->resume(1);
     g_log.log("[TEST] After client resume, has_pending=%", client->has_pending());
-    REQUIRE(client->has_pending());  // Корутина должна быть pending
+    REQUIRE(client->has_pending());  // Coroutine should be pending
 
-    // 2. Resume worker - обработает compute(), inner_future станет ready
+    // 2. Resume worker - processes compute(), inner_future becomes ready
     worker->resume(1);
     g_log.log("[TEST] After worker resume");
 
-    // 3. Poll pending - проверяет awaiting ready, resume'ит корутину, копирует результат
+    // 3. Poll pending - checks awaiting ready, resumes coroutine, copies result
     client->poll_pending();
     g_log.log("[TEST] After poll_pending, has_pending=%, future.available()=%",
               client->has_pending(), future.available());
 
-    REQUIRE(!client->has_pending());  // Корутина должна завершиться
+    REQUIRE(!client->has_pending());  // Coroutine should complete
     REQUIRE(future.available());
     int result = std::move(future).get();
 
@@ -321,15 +321,15 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
         auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
-        // 1. Resume client - suspend на co_await
+        // 1. Resume client - suspend on co_await
         client->resume(1);
         g_log.log("[CLIENT_THREAD] After client resume, has_pending=%", client->has_pending());
 
-        // 2. Resume worker - обработает compute
+        // 2. Resume worker - processes compute
         worker->resume(1);
         g_log.log("[CLIENT_THREAD] After worker resume");
 
-        // 3. Poll pending - resume корутину
+        // 3. Poll pending - resume coroutine
         client->poll_pending();
         g_log.log("[CLIENT_THREAD] After poll_pending, future.available()=%", future.available());
 

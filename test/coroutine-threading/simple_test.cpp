@@ -8,7 +8,7 @@
 
 using namespace actor_zeta;
 
-/// @brief Worker актор - обрабатывает запросы
+/// @brief Worker actor - handles requests
 class worker_actor final : public basic_actor<worker_actor> {
 public:
     explicit worker_actor(std::pmr::memory_resource* resource)
@@ -36,8 +36,8 @@ public:
 };
 
 
-/// @brief Client актор - использует только address_t для связи с worker
-/// Resume управляется supervisor'ом снаружи
+/// @brief Client actor - uses only address_t for communication with worker
+/// Resume is controlled by supervisor externally
 class client_actor final : public basic_actor<client_actor> {
 public:
     explicit client_actor(std::pmr::memory_resource* resource, address_t worker_address)
@@ -46,16 +46,16 @@ public:
         , final_result_(0) {
     }
 
-    /// @brief Корутина - отправляет запрос и ждёт результат
-    /// Suspend/resume управляется supervisor'ом
+    /// @brief Coroutine - sends request and waits for result
+    /// Suspend/resume is controlled by supervisor
     unique_future<int> process(int x) {
         std::cerr << "[client::process] START x=" << x << std::endl;
 
-        // Отправляем запрос worker'у через address_t (только адрес!)
+        // Send request to worker via address_t (only address!)
         auto future = send(worker_address_, address(), &worker_actor::compute, x);
 
-        // co_await - suspend если не готово
-        // Supervisor возобновит корутину когда future станет ready
+        // co_await - suspend if not ready
+        // Supervisor will resume coroutine when future becomes ready
         int result = co_await std::move(future);
         std::cerr << "[client::process] Got result: " << result << std::endl;
 
@@ -118,9 +118,9 @@ private:
 };
 
 
-/// @brief Простой supervisor - управляет resume() акторов
-/// Это отдельная сущность которая знает о всех акторах
-/// Для теста: принимает конкретные типы акторов
+/// @brief Simple supervisor - controls resume() of actors
+/// This is a separate entity that knows about all actors
+/// For test: accepts concrete actor types
 class simple_supervisor {
 public:
     void set_actors(worker_actor* w, client_actor* c = nullptr) {
@@ -128,7 +128,7 @@ public:
         client_ = c;
     }
 
-    /// @brief Запускает акторов пока future не станет ready
+    /// @brief Runs actors until future becomes ready
     template<typename T>
     void run_until_ready(unique_future<T>& future, int max_iterations = 1000) {
         int iterations = 0;
@@ -138,7 +138,7 @@ public:
         }
     }
 
-    /// @brief Запускает один цикл resume для всех акторов
+    /// @brief Runs one resume cycle for all actors
     void run_once() {
         if (client_) client_->resume(1);
         if (worker_) worker_->resume(1);
@@ -156,13 +156,13 @@ TEST_CASE("worker only") {
     auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource);
 
-    // Supervisor управляет resume
+    // Supervisor controls resume
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get());
 
     auto future = send(worker.get(), address_t::empty_address(), &worker_actor::compute, 21);
 
-    // Supervisor запускает акторов
+    // Supervisor runs actors
     supervisor.run_until_ready(future);
 
     REQUIRE(future.available());
@@ -175,20 +175,20 @@ TEST_CASE("client-worker coroutine with supervisor") {
     auto worker = spawn<worker_actor>(resource);
     auto client = spawn<client_actor>(resource, worker->address());
 
-    // Supervisor знает о всех акторах и управляет их resume
+    // Supervisor knows about all actors and controls their resume
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get(), client.get());
 
-    // Отправляем сообщение client'у
+    // Send message to client
     auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
 
-    // Supervisor управляет resume всех акторов
+    // Supervisor controls resume of all actors
     supervisor.run_until_ready(future);
 
     REQUIRE(future.available());
     REQUIRE(std::move(future).get() == 52);  // 21 * 2 + 10 = 52
 
-    // Проверяем через get_result()
+    // Verify via get_result()
     auto result_future = send(client.get(), address_t::empty_address(), &client_actor::get_result);
     supervisor.run_until_ready(result_future);
 

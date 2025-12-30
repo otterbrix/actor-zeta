@@ -6,7 +6,7 @@ namespace actor_zeta {
 
     namespace detail {
 
-        // Проверка совместимости сигнатур контракта и актора
+        // Check signature compatibility between contract and actor
         template<typename ContractMethods, typename ActorMethods>
         struct signatures_match;
 
@@ -26,7 +26,7 @@ namespace actor_zeta {
             static constexpr bool value = (check_one<ContractPtrs, ActorPtrs>() && ...);
         };
 
-        // Специализация для пустых списков
+        // Specialization for empty lists
         template<>
         struct signatures_match<
             type_traits::type_list<>,
@@ -36,26 +36,26 @@ namespace actor_zeta {
         };
 
         // =====================================================================
-        // C++20 Concepts для валидации implements<>
+        // C++20 Concepts for implements<> validation
         // =====================================================================
 
-        // Количество методов должно совпадать
+        // Method count must match
         template<typename Contract, auto... ActorMethods>
         concept methods_count_matches =
             type_traits::type_list_size_v<typename dispatch_traits_parser<ActorMethods...>::methods>
             == type_traits::type_list_size_v<typename Contract::dispatch_traits::methods>;
 
-        // Все методы актора должны возвращать unique_future<T> или generator<T>
+        // All actor methods must return unique_future<T> or generator<T>
         template<auto... ActorMethods>
         concept all_methods_valid =
             dispatch_traits_parser<ActorMethods...>::all_valid;
 
-        // Корутины не должны иметь const& параметры
+        // Coroutines must not have const& parameters
         template<auto... ActorMethods>
         concept all_methods_safe =
             dispatch_traits_parser<ActorMethods...>::all_safe;
 
-        // Сигнатуры должны совпадать с контрактом
+        // Signatures must match contract
         template<typename Contract, auto... ActorMethods>
         concept signatures_compatible =
             signatures_match<
@@ -63,8 +63,8 @@ namespace actor_zeta {
                 typename dispatch_traits_parser<ActorMethods...>::methods
             >::value;
 
-        // Объединённый concept для всех проверок
-        // Contract должен быть interface (has dispatch_traits, no mailbox)
+        // Combined concept for all checks
+        // Contract must be interface (has dispatch_traits, no mailbox)
         template<typename Contract, auto... ActorMethods>
         concept valid_implementation =
             is_interface<Contract> &&
@@ -75,9 +75,9 @@ namespace actor_zeta {
 
     } // namespace detail
 
-    /// implements<> - расширение dispatch_traits с привязкой к контракту
+    /// implements<> - dispatch_traits extension with contract binding
     ///
-    /// Использование:
+    /// Usage:
     ///   struct my_contract {
     ///       unique_future<int> method1(int);
     ///       using dispatch_traits = actor_zeta::dispatch_traits<&my_contract::method1>;
@@ -100,10 +100,10 @@ namespace actor_zeta {
         using parser = detail::dispatch_traits_parser<ActorMethods...>;
 
     public:
-        // === Совместимость с dispatch_traits ===
+        // === Compatibility with dispatch_traits ===
         using methods = typename parser::methods;
 
-        // === Дополнительно для контракта ===
+        // === Additional for contract ===
         using contract_type = Contract;
     };
 
