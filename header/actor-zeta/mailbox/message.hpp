@@ -5,6 +5,7 @@
 #include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
 #include <actor-zeta/detail/rtt.hpp>
+#include <actor-zeta/mailbox/forwards.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 #include <actor-zeta/mailbox/priority.hpp>
 
@@ -94,20 +95,16 @@ namespace actor_zeta { namespace mailbox {
 
     } // namespace detail
 
-    // Custom deleter for heap-allocated messages
-    struct message_deleter {
-        void operator()(message* p) const noexcept {
-            if (!p)
-                return;
-            detail::BlockHdr* hdr = detail::hdr_from_message(p);
-            p->~message();
-            hdr->r->deallocate(detail::base_from_message(p), hdr->total, detail::kAllocAlign);
-        }
-    };
+    // Implementation of message_deleter::operator() (declared in forwards.hpp)
+    inline void message_deleter::operator()(message* p) const noexcept {
+        if (!p)
+            return;
+        detail::BlockHdr* hdr = detail::hdr_from_message(p);
+        p->~message();
+        hdr->r->deallocate(detail::base_from_message(p), hdr->total, detail::kAllocAlign);
+    }
 
     static_assert(std::is_empty_v<message_deleter>, "EBO expected");
-
-    using message_ptr = std::unique_ptr<message, message_deleter>;
 
     // Factory function for heap-allocated messages with PMR
     template<class... Args>

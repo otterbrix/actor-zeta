@@ -2,6 +2,8 @@
 
 #include <actor-zeta/actor/basic_actor.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
+#include <actor-zeta/actor/dispatch_traits.hpp>
+#include <actor-zeta/actor/implements.hpp>
 
 namespace actor_zeta {
 
@@ -13,5 +15,11 @@ namespace actor_zeta {
 
     using actor_zeta::unique_future;
     using actor_zeta::generator;
+    using actor_zeta::promise;
+    using actor_zeta::make_ready_future;
+    using actor_zeta::make_error;
+
+    // Contract-based actor interfaces
+    using actor_zeta::implements;
 
 } // namespace actor_zeta

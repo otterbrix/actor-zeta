@@ -42,30 +42,13 @@ public:
 
     void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
-            dispatch(this, &dummy_supervisor::check, msg);
+            actor_zeta::dispatch(this, &dummy_supervisor::check, msg);
         }
-    }
-
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &dummy_supervisor::check
     >;
-
-protected:
 
 private:
     std::pmr::memory_resource* resource_;

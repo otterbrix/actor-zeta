@@ -58,6 +58,7 @@ namespace actor_zeta { namespace detail {
             , generation_(next_generation())
 #endif
         {
+            assert(res != nullptr && "future_state_base: resource must not be null");
         }
 
         future_state_base(const future_state_base&) = delete;
@@ -261,7 +262,7 @@ namespace actor_zeta { namespace detail {
     protected:
         virtual void destroy() noexcept = 0;
 
-        std::pmr::memory_resource* resource_;
+        std::pmr::memory_resource* resource_ = nullptr;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
         intrusive_ptr<future_state_base> awaiting_on_;
@@ -597,7 +598,13 @@ namespace actor_zeta { namespace detail {
     protected:
         void destroy() noexcept override {
             this->~future_state();
-            resource_->deallocate(this, sizeof(future_state<T>), alignof(future_state<T>));
+            // Note: null check added to satisfy GCC static analyzer which cannot
+            // prove resource_ is always initialized through complex coroutine
+            // transformations and move semantics (false positive -Wmaybe-uninitialized).
+            // See docs/gcc-maybe-uninitialized-false-positive.md
+            if (resource_) {
+                resource_->deallocate(this, sizeof(future_state<T>), alignof(future_state<T>));
+            }
         }
 
     private:

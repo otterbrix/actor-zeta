@@ -283,8 +283,10 @@ struct next_awaiter {
         if (state_->is_created()) {
             auto producer = state_->take_producer_handle();
             if (producer && !producer.done()) {
-                state_->try_set_consumer_waiting();
-                return producer;
+                if (state_->try_set_consumer_waiting()) {
+                    return producer;
+                }
+                // CAS failed - fallthrough to general logic below
             }
         }
 

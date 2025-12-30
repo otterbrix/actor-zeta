@@ -570,7 +570,7 @@ public:
             }
             g_log.log("[%::process_batch_buffer] Processing % items", name_, b->size());
             result.committed = true;
-            result.total_rows = static_cast<int>(b->size());
+            result.total_rows = b->size();
             co_return result;
         };
         co_return co_await process(resource());

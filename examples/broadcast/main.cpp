@@ -97,23 +97,6 @@ public:
         }
     }
 
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
-    }
-
-protected:
-
 private:
     std::size_t size_actor() noexcept {
         return size_actors_.load();
@@ -122,7 +105,7 @@ private:
     std::pmr::memory_resource* resource_;
     actor_zeta::sharing_scheduler* e_;
     std::vector<std::unique_ptr<worker_t, actor_zeta::pmr::deleter_t>> actors_;
-    std::atomic<int64_t> size_actors_{0};
+    std::atomic<std::size_t> size_actors_{0};
     std::mutex mutex_;
 };
 

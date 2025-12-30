@@ -27,7 +27,7 @@ namespace actor_zeta { namespace type_traits {
 
 // Forward declarations for type traits
 namespace actor_zeta {
-    template<typename T>
+    template<typename T = void>
     class unique_future;
 
     template<typename T>

@@ -284,7 +284,7 @@ TEST_CASE("Coroutine allocation patterns") {
         {
             auto future = actor->int_coro(1);
             first_peak = tracker.peak_allocated();
-            std::move(future).get();
+            actor_zeta::detail::ignore_unused(std::move(future).get());
         }
 
         tracker.reset();
@@ -293,7 +293,7 @@ TEST_CASE("Coroutine allocation patterns") {
         {
             auto future = actor->int_coro(2);
             second_peak = tracker.peak_allocated();
-            std::move(future).get();
+            actor_zeta::detail::ignore_unused(std::move(future).get());
         }
 
         // Memory pattern should be similar

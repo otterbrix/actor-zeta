@@ -61,20 +61,12 @@ public:
         return storages_.size()+test_handlers_.size();
     }
 
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
+    /// Type-erased enqueue for address_t polymorphism
+    [[nodiscard]]
+    std::pair<actor_zeta::detail::enqueue_result, bool> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
         enqueue_base_counter++;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
+        behavior(msg.get());
+        return {actor_zeta::detail::enqueue_result::success, false};
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<

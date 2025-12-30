@@ -505,7 +505,9 @@ TEST_CASE("Move semantics correctness") {
         rtt r(resource, 42);
 
         // Self-assignment should be a no-op
-        r = std::move(r);
+        // Use intermediate reference to avoid compiler self-move warning
+        rtt& r_ref = r;
+        r = std::move(r_ref);
 
         // Object should still be valid (implementation-defined state)
         // At minimum, shouldn't crash

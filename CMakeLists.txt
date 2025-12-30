@@ -84,7 +84,37 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
             -Wredundant-decls
             -Wsign-conversion
             -Wsign-promo
+
+            # Additional warnings
+            -Wshadow
+            -Wdouble-promotion
+            -Wformat=2
+            -Wundef
+            -Wunused
+            -Wimplicit-fallthrough
+
+            # Errors for critical issues
+            -Werror=return-type
+            -Werror=init-self
     )
+
+    # GCC-specific flags
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        add_compile_options(
+                -Wlogical-op
+                -Wduplicated-cond
+                -Wduplicated-branches
+                -Wnull-dereference
+        )
+    endif()
+
+    # Clang-specific flags
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(
+                -Wmost
+        )
+    endif()
+
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     add_compile_options(/W4 /WX)
 endif()

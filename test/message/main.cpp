@@ -184,7 +184,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
                                            int(42), std::string("test"), double(3.14));
         REQUIRE( msg->body().get<int>(0) == 42 );
         REQUIRE( msg->body().get<std::string>(1) == "test" );
-        REQUIRE( msg->body().get<double>(2) == 3.14 );
+        REQUIRE( msg->body().get<double>(2) == Approx(3.14) );
         actor_zeta::detail::ignore_unused(future2);
     }
 
@@ -213,7 +213,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         rtt rtt1(arena, int(42), std::string("test"), double(3.14));
         REQUIRE( rtt1.get<int>(0) == 42 );
         REQUIRE( rtt1.get<std::string>(1) == "test" );
-        REQUIRE( rtt1.get<double>(2) == 3.14 );
+        REQUIRE( rtt1.get<double>(2) == Approx(3.14) );
 
         // Same-arena migration via allocator-extended move constructor
         rtt rtt2(std::allocator_arg, arena, std::move(rtt1));
@@ -221,7 +221,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         // Verify data is preserved after migration
         REQUIRE( rtt2.get<int>(0) == 42 );
         REQUIRE( rtt2.get<std::string>(1) == "test" );
-        REQUIRE( rtt2.get<double>(2) == 3.14 );
+        REQUIRE( rtt2.get<double>(2) == Approx(3.14) );
     }
 
 }

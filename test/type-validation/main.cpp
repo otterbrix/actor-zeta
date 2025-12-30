@@ -46,6 +46,7 @@ struct test_response_t {
 
 // Abstract type (should NOT be valid)
 struct abstract_type_t {
+    virtual ~abstract_type_t() = default;
     virtual void foo() = 0;
 };
 

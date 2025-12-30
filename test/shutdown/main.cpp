@@ -32,10 +32,9 @@ class balancer_actor final : public actor_zeta::actor::actor_mixin<balancer_acto
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    balancer_actor(std::pmr::memory_resource* resource, actor_zeta::scheduler::sharing_scheduler* scheduler)
+    explicit balancer_actor(std::pmr::memory_resource* resource)
         : actor_zeta::actor::actor_mixin<balancer_actor>()
-        , resource_(resource)
-        , scheduler_(scheduler) {
+        , resource_(resource) {
     }
 
     ~balancer_actor() {
@@ -52,27 +51,8 @@ public:
     void behavior(actor_zeta::mailbox::message* /*msg*/) {
     }
 
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
-    }
-
-protected:
-
 private:
     std::pmr::memory_resource* resource_;
-    actor_zeta::scheduler::sharing_scheduler* scheduler_;
-    size_t cursor_ = 0;
     std::vector<worker_actor::unique_actor> workers_;
 };
 

@@ -694,6 +694,43 @@ private:
 - Store futures indefinitely
 - Use exceptions for error handling
 
+### Type Erasure
+
+`unique_future<void>` (or `unique_future<>`) serves as a type-erased base. Any `unique_future<T>` can be converted to it:
+
+```cpp
+std::vector<unique_future<>> futures;  // <> = <void>
+
+// Collect futures of different types
+futures.push_back(actor1->compute_int(42));     // int -> void
+futures.push_back(actor2->compute_string("x")); // string -> void
+
+// Wait for all
+for (auto& f : futures) {
+    while (!f.available()) { /* wait */ }
+}
+```
+
+**Note:** After type erasure, you can only check `available()` and `failed()` - the value is lost.
+
+### Custom promise_type (Advanced)
+
+For advanced use cases, actors can define custom `promise_type`:
+
+```cpp
+class MyActor : public basic_actor<MyActor> {
+    // Custom promise_type for all coroutines in this actor
+    template<typename T>
+    using promise_type = my_custom_promise<T>;
+};
+```
+
+Requirements for custom `promise_type`:
+- `get_return_object()` must return `unique_future<T>`
+- Use `unique_future<T>::from_state()` to construct from raw state
+
+See `detail/promise_concepts.hpp` for validation concepts.
+
 ### Performance
 
 Current implementation uses **exponential backoff** in `get()`:

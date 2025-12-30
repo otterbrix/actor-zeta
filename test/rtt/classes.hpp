@@ -177,6 +177,7 @@ struct movable_only {
         alive = other.alive;
         other.alive = false;
         assert(alive);
+        return *this;
     }
 
     bool alive {true};

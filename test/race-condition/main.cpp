@@ -65,7 +65,7 @@ TEST_CASE("Race condition stress test - future destruction timing") {
 
     // Worker threads - send messages and destroy futures at random times
     auto worker = [&](int thread_id) {
-        std::mt19937 rng(thread_id);
+        std::mt19937 rng(static_cast<unsigned int>(thread_id));
         std::uniform_int_distribution<int> dist(0, 100);
 
         while (!stop.load(std::memory_order_acquire)) {

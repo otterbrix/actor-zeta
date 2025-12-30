@@ -265,6 +265,19 @@ namespace actor_zeta {
             return state_ && state_->is_cancelled();
         }
 
+        /// Factory method for custom promise_type implementations.
+        /// Creates unique_future from raw state pointer.
+        /// @param state Pointer to future_state (takes ownership if add_ref=false)
+        /// @param res Memory resource associated with the state
+        /// @param add_ref If true, increments refcount; if false, assumes ownership
+        [[nodiscard]] static unique_future from_state(
+            detail::future_state_base* state,
+            std::pmr::memory_resource* res,
+            bool add_ref
+        ) noexcept {
+            return unique_future(static_cast<state_type*>(state), res, add_ref);
+        }
+
         void forward_to(promise<T>& target)
             requires(!std::is_void_v<T>)
         {
@@ -530,6 +543,33 @@ namespace actor_zeta {
     [[nodiscard]] unique_future<T> make_error(std::pmr::memory_resource* res, std::error_code ec) {
         promise<T> p(res);
         p.error(ec);
+        return p.get_future();
+    }
+
+    /// Create a ready future with the given value.
+    template<typename T>
+    [[nodiscard]] unique_future<T> make_ready_future(std::pmr::memory_resource* res, T&& value) {
+        assert(res && "make_ready_future: resource must not be null");
+        promise<T> p(res);
+        p.set_value(std::forward<T>(value));
+        return p.get_future();
+    }
+
+    /// Create a ready void future.
+    [[nodiscard]] inline unique_future<void> make_ready_future(std::pmr::memory_resource* res) {
+        assert(res && "make_ready_future: resource must not be null");
+        promise<void> p(res);
+        p.set_value();
+        return p.get_future();
+    }
+
+    /// Create a ready future with default-constructed value.
+    template<typename T>
+        requires(!std::is_void_v<T> && std::is_default_constructible_v<T>)
+    [[nodiscard]] unique_future<T> make_ready_future(std::pmr::memory_resource* res) {
+        assert(res && "make_ready_future: resource must not be null");
+        promise<T> p(res);
+        p.set_value(T{});
         return p.get_future();
     }
 

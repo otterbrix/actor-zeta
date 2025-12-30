@@ -83,23 +83,6 @@ public:
         // Empty behavior
     }
 
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
-    }
-
-protected:
-
 private:
     std::pmr::memory_resource* resource_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
@@ -156,23 +139,6 @@ public:
         &dummy_supervisor::create_supervisor,
         &dummy_supervisor::create_supervisor_custom_resource
     >;
-
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
-    }
-
-protected:
 
 private:
     std::pmr::memory_resource* resource_;
