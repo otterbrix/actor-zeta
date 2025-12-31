@@ -90,7 +90,7 @@ BENCHMARK(BM_CoroCreation_String);
 static void BM_CoroSequence(benchmark::State& state) {
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<BenchActor>(resource);
-    const int count = state.range(0);
+    const auto count = static_cast<int>(state.range(0));
 
     for (auto _ : state) {
         for (int i = 0; i < count; ++i) {
@@ -105,7 +105,7 @@ static void BM_CoroSequence(benchmark::State& state) {
 BENCHMARK(BM_CoroSequence)->Range(1, 1024);
 
 static void BM_RawAlloc_New(benchmark::State& state) {
-    const size_t size = state.range(0);
+    const auto size = static_cast<size_t>(state.range(0));
 
     for (auto _ : state) {
         void* p = ::operator new(size);
@@ -114,13 +114,13 @@ static void BM_RawAlloc_New(benchmark::State& state) {
     }
 
     state.SetItemsProcessed(state.iterations());
-    state.SetBytesProcessed(state.iterations() * size);
+    state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(size));
 }
 BENCHMARK(BM_RawAlloc_New)->Range(64, 1024);
 
 static void BM_RawAlloc_PMR(benchmark::State& state) {
     auto* resource =std::pmr::get_default_resource();
-    const size_t size = state.range(0);
+    const auto size = static_cast<size_t>(state.range(0));
 
     for (auto _ : state) {
         void* p = resource->allocate(size, alignof(std::max_align_t));
@@ -129,7 +129,7 @@ static void BM_RawAlloc_PMR(benchmark::State& state) {
     }
 
     state.SetItemsProcessed(state.iterations());
-    state.SetBytesProcessed(state.iterations() * size);
+    state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(size));
 }
 BENCHMARK(BM_RawAlloc_PMR)->Range(64, 1024);
 
@@ -200,7 +200,7 @@ static void BM_CoroOverhead_Estimate(benchmark::State& state) {
     // Warm up
     for (int i = 0; i < 100; ++i) {
         auto f1 = actor->compute(i);
-        std::move(f1).get();
+        actor_zeta::detail::ignore_unused(std::move(f1).get());
     }
 
     for (auto _ : state) {

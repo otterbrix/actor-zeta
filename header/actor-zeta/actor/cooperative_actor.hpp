@@ -44,7 +44,7 @@ namespace actor_zeta { namespace actor {
         if (value) {
             bits |= 0b001;
         } else {
-            bits &= ~0b001;
+            bits &= static_cast<uint8_t>(~0b001);
         }
         return static_cast<actor_state>(bits);
     }
@@ -54,7 +54,7 @@ namespace actor_zeta { namespace actor {
         if (value) {
             bits |= 0b010;
         } else {
-            bits &= ~0b010;
+            bits &= static_cast<uint8_t>(~0b010);
         }
         return static_cast<actor_state>(bits);
     }
