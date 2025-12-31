@@ -415,7 +415,12 @@ namespace actor_zeta {
             template<typename First, typename... Args>
             promise_type_base(First&& first, Args&&... args) noexcept
                 : resource_(extract_resource_from_args(std::forward<First>(first), std::forward<Args>(args)...))
-                , state_(nullptr) {}
+                , state_(nullptr) {
+                assert(resource_ != nullptr && "Coroutine must be actor member function with resource() method");
+                if (!resource_) {
+                    std::abort();
+                }
+            }
 
             ~promise_type_base() noexcept = default;
 
