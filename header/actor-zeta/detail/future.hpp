@@ -1,19 +1,15 @@
 #pragma once
 
 #include <cassert>
-#include <chrono>
 #include <concepts>
 #include <memory_resource>
 #include <new>
-#include <thread>
 #include <type_traits>
 #include <utility>
 
-#include <actor-zeta/config.hpp>
 #include <actor-zeta/detail/coro_frame_header.hpp>
-#include <actor-zeta/detail/coroutine.hpp>
 #include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/intrusive_ptr.hpp>
+#include <actor-zeta/detail/type_traits.hpp>
 
 namespace actor_zeta {
 

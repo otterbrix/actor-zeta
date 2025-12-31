@@ -1,17 +1,11 @@
 #pragma once
 
-#include <algorithm>
 #include <chrono>
 #include <thread>
 
 #include <actor-zeta/actor/actor_mixin.hpp>
-#include <actor-zeta/config.hpp>
-#include <actor-zeta/detail/ignore_unused.hpp>
-#include <actor-zeta/detail/future.hpp>
-#include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/generator.hpp>
+#include <actor-zeta/detail/forwards.hpp>
 #include <actor-zeta/detail/memory.hpp>
-#include <actor-zeta/detail/queue/enqueue_result.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
 
 namespace actor_zeta { namespace actor {
@@ -91,7 +85,8 @@ namespace actor_zeta { namespace actor {
         } else if (attempt < kYieldPhaseEnd) {
             std::this_thread::yield();
         } else {
-            auto sleep_us = std::min(1 << (attempt - kYieldPhaseEnd), kMaxSleepMicroseconds);
+            int computed = 1 << (attempt - kYieldPhaseEnd);
+            auto sleep_us = computed < kMaxSleepMicroseconds ? computed : kMaxSleepMicroseconds;
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
         }
     }

@@ -3,11 +3,10 @@
 #include <concepts>
 #include <cstdint>
 
+#include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
-#include <actor-zeta/detail/generator.hpp>
+#include <actor-zeta/detail/forwards.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
-#include <actor-zeta/detail/type_list.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 
 namespace actor_zeta {

@@ -78,3 +78,18 @@ namespace actor_zeta { namespace type_traits {
     using unwrap_generator_t = typename unwrap_generator<T>::type;
 
 }} // namespace actor_zeta::type_traits
+
+namespace actor_zeta { namespace detail {
+
+    // Type must be storable in RTT: not reference, not abstract, move or copy constructible
+    template<typename T>
+    concept valid_rtt_type =
+        !std::is_reference_v<T> &&
+        !std::is_abstract_v<std::decay_t<T>> &&
+        (std::is_copy_constructible_v<std::decay_t<T>> ||
+         std::is_move_constructible_v<std::decay_t<T>>);
+
+    template<typename T>
+    inline constexpr bool is_valid_rtt_type_v = valid_rtt_type<T>;
+
+}} // namespace actor_zeta::detail

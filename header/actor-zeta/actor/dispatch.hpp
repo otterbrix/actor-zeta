@@ -1,13 +1,6 @@
 #pragma once
 
-#include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
-#include <actor-zeta/detail/future.hpp>
-#include <actor-zeta/detail/generator.hpp>
-#include <actor-zeta/detail/rtt.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/mailbox/make_message.hpp>
-#include <actor-zeta/mailbox/message.hpp>
 #include <actor-zeta/mailbox/message_result.hpp>
 
 namespace actor_zeta {

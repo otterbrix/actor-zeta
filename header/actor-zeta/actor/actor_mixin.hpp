@@ -3,12 +3,7 @@
 #include <memory_resource>
 
 #include <actor-zeta/actor/address.hpp>
-#include <actor-zeta/detail/future.hpp>
-#include <actor-zeta/detail/generator.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
-#include <actor-zeta/detail/queue/enqueue_result.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
-#include <actor-zeta/mailbox/make_message.hpp>
 
 namespace actor_zeta::actor {
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <actor-zeta/detail/queue/enqueue_result.hpp>
 #include <actor-zeta/detail/queue/lifo_inbox.hpp>
 #include <actor-zeta/detail/queue/linked_list.hpp>
 #include <actor-zeta/mailbox/message.hpp>
