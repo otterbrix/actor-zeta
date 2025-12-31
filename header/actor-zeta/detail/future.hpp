@@ -521,7 +521,7 @@ namespace actor_zeta {
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
-                auto* res = promise_type_base::extract_resource_from_args(args...);
+                auto* res = promise_type_base::extract_resource_or_abort(args...);
                 return detail::allocate_coro_frame(res, size);
             }
 
