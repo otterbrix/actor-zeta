@@ -463,6 +463,11 @@ namespace actor_zeta {
 
             /// Helper that guarantees non-null return or aborts.
             /// This eliminates GCC's -Wnull-dereference false positives.
+            RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
+                assert(false && "Coroutine must be actor member function with resource() method");
+                std::abort();
+            }
+
             template<typename First, typename... Rest>
             RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
                 auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
