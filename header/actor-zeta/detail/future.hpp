@@ -355,8 +355,15 @@ namespace actor_zeta {
             unique_future<T> get_return_object() {
                 assert(resource_ != nullptr &&
                        "Coroutine must be actor member function with resource() method");
+                if (!resource_) {
+                    std::abort();
+                }
 
                 void* mem = resource_->allocate(sizeof(coroutine_state_type), alignof(coroutine_state_type));
+                assert(mem != nullptr && "allocation failed");
+                if (!mem) {
+                    std::abort();
+                }
                 state_ = new (mem) coroutine_state_type(resource_);
 
                 auto handle = detail::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));

@@ -109,9 +109,9 @@ namespace actor_zeta { namespace detail {
 
         template<typename T>
         [[nodiscard]] char* force_align() {
-            auto creation_place = try_to_align<T>();
-            assert(creation_place != nullptr && "force_align: insufficient capacity");
-            return creation_place;
+            char* result = try_to_align<T>();
+            assert(result && "force_align: insufficient capacity");
+            return result ? result : (std::abort(), nullptr);
         }
 
         template<typename T>
