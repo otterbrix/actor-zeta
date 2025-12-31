@@ -463,17 +463,15 @@ namespace actor_zeta {
 
             /// Helper that guarantees non-null return or aborts.
             /// This eliminates GCC's -Wnull-dereference false positives.
-            RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
-                assert(false && "Coroutine must be actor member function with resource() method");
-                std::abort();
-            }
-
             template<typename First, typename... Rest>
             RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
                 auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
                 assert(res != nullptr && "Coroutine must be actor member function with resource() method");
                 if (!res) {
                     std::abort();
+#if defined(__GNUC__)
+                    __builtin_unreachable();
+#endif
                 }
                 return res;
             }
@@ -521,6 +519,13 @@ namespace actor_zeta {
         using promise_type_selected = std::conditional_t<is_void_type, promise_type_void, promise_type_non_void>;
 
     public:
+        // GCC's -Wnull-dereference produces false positives for coroutine promise types.
+        // The warning triggers on the coroutine frame allocation path even though
+        // extract_resource_or_abort() guarantees non-null return or aborts.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnull-dereference"
+#endif
         struct promise_type : promise_type_selected {
             using promise_type_selected::promise_type_selected;
 
@@ -543,6 +548,9 @@ namespace actor_zeta {
                 detail::deallocate_coro_frame_unsized(ptr);
             }
         };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     private:
         intrusive_ptr<state_type> state_;
