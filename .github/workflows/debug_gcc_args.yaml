@@ -76,12 +76,24 @@ jobs:
             -DCMAKE_C_COMPILER=${CC} \
             -DCMAKE_CXX_COMPILER=${CXX} \
             -DALLOW_TESTS=ON \
+            -DALLOW_BENCHMARK=ON \
             -DEXCEPTIONS_DISABLE=ON \
             -DRTTI_DISABLE=ON \
             -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_PATH}
 
       - name: Build debug test
         run: cmake --build build/Debug --target tests_gcc_args_check
+
+      - name: Build dispatch_overhead benchmark (check warnings)
+        run: |
+          echo "========================================"
+          echo "=== Building benchmark_dispatch_overhead ==="
+          echo "========================================"
+          cmake --build build/Debug --target benchmark_dispatch_overhead 2>&1 | tee build_dispatch_overhead.log
+          echo "========================================"
+          echo "=== Warnings from build: ==="
+          grep -i "warning" build_dispatch_overhead.log || echo "No warnings found"
+          echo "========================================"
 
       - name: Run debug test with verbose output
         working-directory: build/Debug

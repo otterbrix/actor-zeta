@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -19,17 +20,14 @@ namespace actor_zeta::detail {
     };
 
     // Allocate coroutine frame with header, returns pointer after header
+    // Requires: res != nullptr (coroutines must be actor member functions)
     inline void* allocate_coro_frame(std::pmr::memory_resource* res, std::size_t frame_size) noexcept {
+        assert(res != nullptr && "allocate_coro_frame: resource must not be null");
+
         const std::size_t total_size = coro_frame_header::padded_size() + frame_size;
         const std::size_t align = alignof(std::max_align_t);
 
-        void* raw = nullptr;
-        if (res) {
-            raw = res->allocate(total_size, align);
-        } else {
-            raw = ::operator new(total_size, std::align_val_t{align}, std::nothrow);
-        }
-
+        void* raw = res->allocate(total_size, align);
         if (!raw) {
             return nullptr;
         }
@@ -50,14 +48,12 @@ namespace actor_zeta::detail {
         void* raw = static_cast<char*>(frame) - coro_frame_header::padded_size();
         auto* header = static_cast<coro_frame_header*>(raw);
 
+        assert(header->resource != nullptr && "deallocate_coro_frame: stored resource is null");
+
         const std::size_t total_size = coro_frame_header::padded_size() + frame_size;
         const std::size_t align = alignof(std::max_align_t);
 
-        if (header->resource) {
-            header->resource->deallocate(raw, total_size, align);
-        } else {
-            ::operator delete(raw, std::align_val_t{align}, std::nothrow);
-        }
+        header->resource->deallocate(raw, total_size, align);
     }
 
     // Deallocate coroutine frame (unsized version for GCC - recovers size from header)
@@ -69,15 +65,13 @@ namespace actor_zeta::detail {
         void* raw = static_cast<char*>(frame) - coro_frame_header::padded_size();
         auto* header = static_cast<coro_frame_header*>(raw);
 
+        assert(header->resource != nullptr && "deallocate_coro_frame_unsized: stored resource is null");
+
         const std::size_t frame_size = header->frame_size;
         const std::size_t total_size = coro_frame_header::padded_size() + frame_size;
         const std::size_t align = alignof(std::max_align_t);
 
-        if (header->resource) {
-            header->resource->deallocate(raw, total_size, align);
-        } else {
-            ::operator delete(raw, std::align_val_t{align}, std::nothrow);
-        }
+        header->resource->deallocate(raw, total_size, align);
     }
 
 } // namespace actor_zeta::detail
