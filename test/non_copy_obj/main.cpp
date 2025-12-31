@@ -38,7 +38,13 @@ public:
         return executor_.get();
     }
 
-    actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
+    actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data) {
+        REQUIRE(data != nullptr);
+        REQUIRE(data->number == expected_data.number);
+        REQUIRE(data->name.size() == expected_data.name.size());
+        REQUIRE(data->name == expected_data.name);
+        co_return;
+    }
 
     void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
@@ -55,14 +61,6 @@ private:
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::set<int64_t> ids_;
 };
-
-actor_zeta::unique_future<void> dummy_supervisor::check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data) {
-    REQUIRE(data != nullptr);
-    REQUIRE(data->number == expected_data.number);
-    REQUIRE(data->name.size() == expected_data.name.size());
-    REQUIRE(data->name == expected_data.name);
-    co_return;
-}
 
 TEST_CASE("base move test") {
     auto* mr_ptr =std::pmr::get_default_resource();

@@ -471,6 +471,12 @@ namespace actor_zeta {
 
             /// Helper that guarantees non-null return or aborts.
             /// This eliminates GCC's -Wnull-dereference false positives.
+            /// Empty args overload - aborts (out-of-line coroutine methods are not supported).
+            [[noreturn]] static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
+                assert(false && "Coroutine must be defined inline (GCC doesn't pass 'this' for out-of-line methods)");
+                std::abort();
+            }
+
             template<typename First, typename... Rest>
             RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
                 auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
@@ -539,8 +545,7 @@ namespace actor_zeta {
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
-                auto* res = promise_type_base::extract_resource_from_args(args...);
-                assert(res != nullptr && "Coroutine must be actor member function with resource() method");
+                auto* res = promise_type_base::extract_resource_or_abort(args...);
                 return detail::allocate_coro_frame(res, size);
             }
 
