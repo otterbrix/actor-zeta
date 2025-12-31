@@ -414,12 +414,8 @@ namespace actor_zeta {
 
             template<typename First, typename... Args>
             promise_type_base(First&& first, Args&&... args) noexcept
-                : resource_(extract_resource_from_args(std::forward<First>(first), std::forward<Args>(args)...))
+                : resource_(extract_resource_or_abort(std::forward<First>(first), std::forward<Args>(args)...))
                 , state_(nullptr) {
-                assert(resource_ != nullptr && "Coroutine must be actor member function with resource() method");
-                if (!resource_) {
-                    std::abort();
-                }
             }
 
             ~promise_type_base() noexcept = default;
@@ -462,6 +458,18 @@ namespace actor_zeta {
                     return extract_resource_from_args(std::forward<Rest>(rest)...);
                 }
                 return nullptr;
+            }
+
+            /// Helper that guarantees non-null return or aborts.
+            /// This eliminates GCC's -Wnull-dereference false positives.
+            template<typename First, typename... Rest>
+            static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
+                auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
+                assert(res != nullptr && "Coroutine must be actor member function with resource() method");
+                if (!res) {
+                    std::abort();
+                }
+                return res;
             }
 
             std::pmr::memory_resource* resource_;

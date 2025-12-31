@@ -578,7 +578,7 @@ public:
 
     /// @brief Get cached value - ready immediately via promise
     unique_future<std::size_t> get_cached_value(
-            session_id_t session,
+            [[maybe_unused]] session_id_t session,
             std::string collection) {
         // Simulate cache hit - value is ready immediately
         promise<std::size_t> cache_promise(resource());

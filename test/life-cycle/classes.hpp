@@ -109,8 +109,8 @@ public:
     static uint64_t create_table_counter;
 
 public:
-    explicit storage_t(std::pmr::memory_resource* resource_)
-        : actor_zeta::basic_actor<storage_t>(resource_) {
+    explicit storage_t(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<storage_t>(res) {
         constructor_counter++;
     }
 
