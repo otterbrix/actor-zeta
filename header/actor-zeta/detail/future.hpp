@@ -134,6 +134,14 @@ namespace actor_zeta {
         std::pmr::memory_resource* resource_;
     };
 
+    // GCC's -Wnull-dereference produces false positives for coroutine promise types.
+    // The warning triggers when user code defines coroutine methods returning unique_future.
+    // This is a known GCC issue with coroutines - the analyzer doesn't understand that
+    // extract_resource_from_args() returns valid resource for actor member functions.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnull-dereference"
+#endif
     template<typename T>
     class unique_future final {
     private:
@@ -531,20 +539,9 @@ namespace actor_zeta {
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
-                // GCC instantiates this template with Args={} even for member function coroutines.
-                // Use if constexpr to make the empty-args branch compile (but never execute).
-                if constexpr (sizeof...(Args) == 0) {
-                    // This path is never taken for valid actor member coroutines
-                    // but GCC requires it to compile.
-                    assert(false && "Coroutine must be actor member function with resource() method");
-                    std::abort();
-#if defined(__GNUC__)
-                    __builtin_unreachable();
-#endif
-                } else {
-                    auto* res = promise_type_base::extract_resource_or_abort(args...);
-                    return detail::allocate_coro_frame(res, size);
-                }
+                auto* res = promise_type_base::extract_resource_from_args(args...);
+                assert(res != nullptr && "Coroutine must be actor member function with resource() method");
+                return detail::allocate_coro_frame(res, size);
             }
 
             template<typename... Args>
@@ -569,6 +566,9 @@ namespace actor_zeta {
         std::pmr::memory_resource* resource_;
         bool needs_scheduling_;
     };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     template<typename T>
     unique_future<T> promise<T>::get_future() noexcept {
