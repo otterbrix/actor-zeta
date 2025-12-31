@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <utility>
 
+#include <actor-zeta/config.hpp>
 #include <actor-zeta/detail/coro_frame_header.hpp>
 #include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
@@ -463,7 +464,7 @@ namespace actor_zeta {
             /// Helper that guarantees non-null return or aborts.
             /// This eliminates GCC's -Wnull-dereference false positives.
             template<typename First, typename... Rest>
-            static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
+            RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
                 auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
                 assert(res != nullptr && "Coroutine must be actor member function with resource() method");
                 if (!res) {
