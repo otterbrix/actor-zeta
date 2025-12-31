@@ -359,10 +359,8 @@ struct generator_future_awaiter {
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
-        // Store generator coroutine for resumption
         gen_state_->set_producer_handle(caller);
 
-        // Set continuation on future's state
         auto* future_state = future_.internal_state();
         if (future_state) {
             future_state->set_coroutine(caller);

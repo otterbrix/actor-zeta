@@ -11,9 +11,7 @@
 
 namespace actor_zeta {
 
-    // ============================================================================
     // Method map entry
-    // ============================================================================
 
     template<auto MethodPtr>
     struct method_map_entry {};
@@ -63,9 +61,7 @@ namespace actor_zeta {
             static constexpr bool is_safe = !is_coroutine || !has_const_ref;
         };
 
-        // ============================================================================
         // Actor/Interface detection concepts
-        // ============================================================================
 
         template<typename T>
         concept has_dispatch_traits = requires {
@@ -88,9 +84,7 @@ namespace actor_zeta {
 
     } // namespace detail
 
-    // ============================================================================
     // dispatch_traits implementation
-    // ============================================================================
 
     namespace detail {
         // Helper to extract methods from variadic pack
@@ -104,7 +98,6 @@ namespace actor_zeta {
                 (coroutine_parameter_check<MethodPtrs>::is_safe && ...);
         };
 
-        // Specialization for single method
         template<auto First>
         struct dispatch_traits_parser<First> {
             using methods = type_traits::type_list<method_map_entry<First>>;
@@ -290,9 +283,7 @@ namespace actor_zeta {
         }
     };
 
-    // ============================================================================
     // runtime_dispatch_helper_address - for interface polymorphism via address_t
-    // ============================================================================
 
     template<typename Interface, typename Method, typename MethodList>
     struct runtime_dispatch_helper_address;

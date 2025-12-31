@@ -13,9 +13,7 @@ namespace actor_zeta {
 
     namespace detail {
 
-        // ================================================================
         // Concept for valid future value type
-        // ================================================================
 
         template<typename T>
         concept valid_future_value_type =
@@ -27,9 +25,7 @@ namespace actor_zeta {
                 !std::is_const_v<T>
             );
 
-        // ================================================================
         // Basic promise_type requirements
-        // ================================================================
 
         template<typename P, typename T>
         concept promise_has_get_return_object = requires(P p) {
@@ -66,9 +62,7 @@ namespace actor_zeta {
             { p.return_value(std::move(val)) } -> std::same_as<void>;
         };
 
-        // ================================================================
         // Combined concept for non-void promise_type
-        // ================================================================
 
         template<typename P, typename T>
         concept valid_promise_type =
@@ -80,9 +74,7 @@ namespace actor_zeta {
             promise_has_allocation<P> &&
             promise_has_return_value<P, T>;
 
-        // ================================================================
         // Combined concept for void promise_type
-        // ================================================================
 
         template<typename P>
         concept valid_promise_type_void =
@@ -93,18 +85,14 @@ namespace actor_zeta {
             promise_has_allocation<P> &&
             promise_has_return_void<P>;
 
-        // ================================================================
         // Check if actor has custom promise_type
-        // ================================================================
 
         template<typename Actor>
         concept has_custom_promise_type = requires {
             typename Actor::template promise_type<int>;
         };
 
-        // ================================================================
         // Selector for promise_type
-        // ================================================================
 
         template<typename Actor, typename T>
         struct promise_type_selector {

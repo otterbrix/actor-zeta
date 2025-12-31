@@ -7,9 +7,7 @@ namespace actor_zeta {
 
     namespace detail {
 
-        // ============================================================================
         // Compile-time argument validation
-        // ============================================================================
 
         template<typename Actor, auto MethodPtr, typename... Args>
         struct validate_send_args {
@@ -35,14 +33,11 @@ namespace actor_zeta {
                 "(move/copy constructible, not abstract)");
         };
 
-        // ============================================================================
         // Dispatch implementation - creates message and calls enqueue_impl
-        // ============================================================================
 
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
         inline auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
             -> dispatch_result_t<Actor, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type> {
-            // Validate at compile time
             (void)validate_send_args<Actor, MethodPtr, Args...>{};
 
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
@@ -51,7 +46,6 @@ namespace actor_zeta {
             auto cmd = mailbox::make_message_id(ActionId);
 
             if constexpr (type_traits::is_unique_future_v<method_result_type>) {
-                // === unique_future<T> path ===
                 using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
                 auto [msg, future] = detail::make_message<value_type>(
@@ -68,7 +62,6 @@ namespace actor_zeta {
                 return std::move(future);
 
             } else if constexpr (type_traits::is_generator_v<method_result_type>) {
-                // === generator<T> path ===
                 using value_type = typename method_result_type::value_type;
 
                 auto [msg, gen] = detail::make_generator_message<value_type>(
@@ -85,14 +78,11 @@ namespace actor_zeta {
             }
         }
 
-        // ============================================================================
         // Dispatch for address_t (interface polymorphism)
-        // ============================================================================
 
         template<typename Interface, auto MethodPtr, uint64_t ActionId, typename Sender, typename... Args>
         inline auto dispatch_method_impl_address(actor::address_t target, Sender sender, Args&&... args)
             -> dispatch_result_t<Interface, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type> {
-            // Validate at compile time
             (void)validate_send_args<Interface, MethodPtr, Args...>{};
 
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
@@ -101,7 +91,6 @@ namespace actor_zeta {
             auto cmd = mailbox::make_message_id(ActionId);
 
             if constexpr (type_traits::is_unique_future_v<method_result_type>) {
-                // === unique_future<T> path ===
                 using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
                 auto [msg, future] = detail::make_message<value_type>(
@@ -118,7 +107,6 @@ namespace actor_zeta {
                 return std::move(future);
 
             } else if constexpr (type_traits::is_generator_v<method_result_type>) {
-                // === generator<T> path ===
                 using value_type = typename method_result_type::value_type;
 
                 auto [msg, gen] = detail::make_generator_message<value_type>(
@@ -137,9 +125,7 @@ namespace actor_zeta {
 
     } // namespace detail
 
-    // ============================================================================
     // send() for Actor* (direct actor pointer)
-    // ============================================================================
 
     template<typename ActorPtr, typename Sender, typename Method, typename... Args,
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
@@ -157,9 +143,7 @@ namespace actor_zeta {
             method, actor, sender, std::forward<Args>(args)...);
     }
 
-    // ============================================================================
     // send() for address_t (interface polymorphism)
-    // ============================================================================
 
     template<typename Sender, typename Method, typename... Args,
              typename Interface = typename type_traits::callable_trait<Method>::class_type>
@@ -180,9 +164,7 @@ namespace actor_zeta {
             method, target, sender, std::forward<Args>(args)...);
     }
 
-    // ============================================================================
     // Optional send - no target, returns ready future with default value
-    // ============================================================================
 
     template<typename Sender, typename Method, typename... Args,
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
@@ -196,14 +178,11 @@ namespace actor_zeta {
                       "Actor methods must not return bool. "
                       "Use void or other types - all return results via promise/future.");
 
-        // Unused parameters - this overload just returns ready future
         detail::ignore_unused(method, std::forward<Args>(args)...);
 
-        // Get resource from sender for creating ready future
         auto* resource = sender.resource();
         assert(resource && "sender must have valid resource for optional send");
 
-        // Handle void and non-void return types differently
         if constexpr (std::is_void_v<value_type>) {
             return make_ready_future(resource);
         } else {

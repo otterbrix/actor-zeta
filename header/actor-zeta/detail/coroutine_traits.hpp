@@ -25,9 +25,7 @@ namespace actor_zeta::detail {
 
 } // namespace actor_zeta::detail
 
-// ============================================================================
 // std::coroutine_traits specialization for actors WITH custom promise_type
-// ============================================================================
 
 template<typename T, typename Actor, typename... Args>
     requires actor_zeta::detail::is_actor_type<std::remove_pointer_t<Actor>>
@@ -45,12 +43,3 @@ struct std::coroutine_traits<actor_zeta::unique_future<T>, Actor, Args...> {
         "Check that get_return_object() returns unique_future<T>."
     );
 };
-
-// ============================================================================
-// std::coroutine_traits specialization for actors WITHOUT custom promise_type
-// Uses the default promise_type from unique_future<T>
-// ============================================================================
-
-// Note: This is actually not needed because the default behavior
-// (using unique_future<T>::promise_type) already handles this case.
-// The specialization above only overrides when a custom promise_type exists.

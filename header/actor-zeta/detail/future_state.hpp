@@ -429,10 +429,7 @@ namespace actor_zeta { namespace detail {
     protected:
         void destroy() noexcept override {
             this->~future_state();
-            // Note: null check added to satisfy GCC static analyzer which cannot
-            // prove resource_ is always initialized through complex coroutine
-            // transformations and move semantics (false positive -Wmaybe-uninitialized).
-            // See docs/gcc-maybe-uninitialized-false-positive.md
+            // GCC static analyzer false positive: -Wmaybe-uninitialized
             if (resource_) {
                 resource_->deallocate(this, sizeof(future_state<T>), alignof(future_state<T>));
             }

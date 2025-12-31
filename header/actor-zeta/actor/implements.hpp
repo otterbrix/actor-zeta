@@ -35,9 +35,7 @@ namespace actor_zeta {
             static constexpr bool value = true;
         };
 
-        // =====================================================================
         // C++20 Concepts for implements<> validation
-        // =====================================================================
 
         // Method count must match
         template<typename Contract, auto... ActorMethods>
