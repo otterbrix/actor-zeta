@@ -531,8 +531,20 @@ namespace actor_zeta {
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
-                auto* res = promise_type_base::extract_resource_or_abort(args...);
-                return detail::allocate_coro_frame(res, size);
+                // GCC instantiates this template with Args={} even for member function coroutines.
+                // Use if constexpr to make the empty-args branch compile (but never execute).
+                if constexpr (sizeof...(Args) == 0) {
+                    // This path is never taken for valid actor member coroutines
+                    // but GCC requires it to compile.
+                    assert(false && "Coroutine must be actor member function with resource() method");
+                    std::abort();
+#if defined(__GNUC__)
+                    __builtin_unreachable();
+#endif
+                } else {
+                    auto* res = promise_type_base::extract_resource_or_abort(args...);
+                    return detail::allocate_coro_frame(res, size);
+                }
             }
 
             template<typename... Args>
