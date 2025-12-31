@@ -545,8 +545,15 @@ namespace actor_zeta {
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
-                auto* res = promise_type_base::extract_resource_or_abort(args...);
-                return detail::allocate_coro_frame(res, size);
+                if constexpr (sizeof...(Args) == 0) {
+                    // GCC may not pass 'this' and parameters to operator new.
+                    // Fall back to default resource; promise constructor will get
+                    // the correct resource from parameters.
+                    return detail::allocate_coro_frame(std::pmr::get_default_resource(), size);
+                } else {
+                    auto* res = promise_type_base::extract_resource_or_abort(args...);
+                    return detail::allocate_coro_frame(res, size);
+                }
             }
 
             template<typename... Args>
