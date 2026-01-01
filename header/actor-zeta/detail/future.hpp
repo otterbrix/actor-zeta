@@ -564,19 +564,21 @@ namespace actor_zeta {
             using base_type = promise_type_selected<actor_promise<Actor>>;
 
             // Constructor explicitly takes Actor& - GCC must pass it
+            // Use const Args&... to match coroutine argument passing semantics
             template<typename... Args>
-            actor_promise(Actor& actor, Args&&...) noexcept
+            actor_promise(Actor& actor, const Args&...) noexcept
                 : base_type(actor.resource()) {
             }
 
             // operator new explicitly takes Actor& - GCC must pass it
+            // Use const Args&... to match coroutine argument passing semantics
             template<typename... Args>
-            static void* operator new(std::size_t size, Actor& actor, Args&&...) {
+            static void* operator new(std::size_t size, Actor& actor, const Args&...) {
                 return detail::allocate_coro_frame(actor.resource(), size);
             }
 
             template<typename... Args>
-            static void operator delete(void* ptr, std::size_t size, Actor&, Args&&...) noexcept {
+            static void operator delete(void* ptr, std::size_t size, Actor&, const Args&...) noexcept {
                 detail::deallocate_coro_frame(ptr, size);
             }
 
