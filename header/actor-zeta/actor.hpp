@@ -3,6 +3,7 @@
 #include <actor-zeta/actor/basic_actor.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta/actor/implements.hpp>
+#include <actor-zeta/detail/coroutine_traits.hpp>
 
 namespace actor_zeta {
 

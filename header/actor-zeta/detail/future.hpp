@@ -350,6 +350,8 @@ namespace actor_zeta {
             , needs_scheduling_(false) {
         }
 
+        // CRTP base: PromiseDerived is the final promise type (promise_type or actor_promise<Actor>)
+        template<typename PromiseDerived>
         struct promise_type_base {
             using value_type = T;
 
@@ -367,7 +369,8 @@ namespace actor_zeta {
                 }
                 state_ = new (mem) coroutine_state_type(resource_);
 
-                auto handle = detail::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
+                // Use CRTP: PromiseDerived is the actual promise type
+                auto handle = detail::coroutine_handle<PromiseDerived>::from_promise(static_cast<PromiseDerived&>(*this));
                 state_->set_coroutine_owning(handle);
 
                 return unique_future<T>(static_cast<state_type*>(state_), resource_, false);
@@ -381,8 +384,9 @@ namespace actor_zeta {
 
                     bool await_ready() noexcept { return false; }
 
+                    // Use type-erased handle - the parameter is unused anyway
                     detail::coroutine_handle<> await_suspend(
-                        detail::coroutine_handle<promise_type> /*h*/
+                        detail::coroutine_handle<> /*h*/
                         ) noexcept {
                         // state_ is guaranteed non-null here because get_return_object()
                         // always sets it before any suspension point.
@@ -489,8 +493,9 @@ namespace actor_zeta {
             coroutine_state_type* state_;
         };
 
-        struct promise_type_non_void : promise_type_base {
-            using promise_type_base::promise_type_base;
+        template<typename PromiseDerived>
+        struct promise_type_non_void : promise_type_base<PromiseDerived> {
+            using promise_type_base<PromiseDerived>::promise_type_base;
 
             void return_value(T&& value) noexcept {
                 this->state_->set_value(std::forward<T>(value));
@@ -510,28 +515,68 @@ namespace actor_zeta {
             }
         };
 
-        struct promise_type_void : promise_type_base {
-            using promise_type_base::promise_type_base;
+        template<typename PromiseDerived>
+        struct promise_type_void : promise_type_base<PromiseDerived> {
+            using promise_type_base<PromiseDerived>::promise_type_base;
 
             void return_void() noexcept {
                 this->state_->set_ready();
             }
         };
 
-        using promise_type_selected = std::conditional_t<is_void_type, promise_type_void, promise_type_non_void>;
+        template<typename PromiseDerived>
+        using promise_type_selected = std::conditional_t<is_void_type, promise_type_void<PromiseDerived>, promise_type_non_void<PromiseDerived>>;
 
     public:
-        struct promise_type : promise_type_selected {
-            using promise_type_selected::promise_type_selected;
+        // Forward declaration for CRTP
+        struct promise_type;
+
+        // promise_type uses CRTP to pass itself to the base
+        struct promise_type : promise_type_selected<promise_type> {
+            using promise_type_selected<promise_type>::promise_type_selected;
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
-                auto* res = promise_type_base::extract_resource_or_abort(args...);
+                auto* res = promise_type_base<promise_type>::extract_resource_or_abort(args...);
                 return detail::allocate_coro_frame(res, size);
             }
 
             template<typename... Args>
             static void operator delete(void* ptr, std::size_t size, const Args&...) noexcept {
+                detail::deallocate_coro_frame(ptr, size);
+            }
+
+            static void operator delete(void* ptr, std::size_t size) noexcept {
+                detail::deallocate_coro_frame(ptr, size);
+            }
+
+            static void operator delete(void* ptr) noexcept {
+                detail::deallocate_coro_frame_unsized(ptr);
+            }
+        };
+
+        // Actor-aware promise for coroutine_traits specialization.
+        // This promise explicitly takes Actor& as first parameter,
+        // which forces GCC to pass it even for move-only method parameters.
+        // Uses CRTP to pass itself as the promise type.
+        template<typename Actor>
+        struct actor_promise : promise_type_selected<actor_promise<Actor>> {
+            using base_type = promise_type_selected<actor_promise<Actor>>;
+
+            // Constructor explicitly takes Actor& - GCC must pass it
+            template<typename... Args>
+            actor_promise(Actor& actor, Args&&...) noexcept
+                : base_type(actor.resource()) {
+            }
+
+            // operator new explicitly takes Actor& - GCC must pass it
+            template<typename... Args>
+            static void* operator new(std::size_t size, Actor& actor, Args&&...) {
+                return detail::allocate_coro_frame(actor.resource(), size);
+            }
+
+            template<typename... Args>
+            static void operator delete(void* ptr, std::size_t size, Actor&, Args&&...) noexcept {
                 detail::deallocate_coro_frame(ptr, size);
             }
 
