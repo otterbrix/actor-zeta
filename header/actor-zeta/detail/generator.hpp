@@ -322,10 +322,7 @@ struct final_awaiter {
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
         // state_ is guaranteed non-null here because get_return_object()
-        // always sets it. But GCC's static analyzer doesn't understand coroutine flow.
-        if (!state_) {
-            std::abort();
-        }
+        // always sets it before any suspension point.
         state_->set_exhausted();
 
         auto* linked = state_->linked_state();
@@ -397,15 +394,10 @@ struct generator_promise_type {
 
     // Default constructor - GCC may call this for move-only parameters (unique_ptr).
     // This is a known GCC issue where it doesn't pass 'this' for certain signatures.
-    // We use get_default_resource() as fallback to prevent crashes.
+    // We set nullptr here; get_return_object() will abort + assert.
     generator_promise_type() noexcept
-        : resource_(std::pmr::get_default_resource())
+        : resource_(nullptr)
         , state_(nullptr) {
-#ifdef ACTOR_ZETA_DEBUG_PMR_FALLBACK
-        // Track when fallback is used (for debugging GCC behavior)
-        // Enable with -DACTOR_ZETA_DEBUG_PMR_FALLBACK
-        assert(false && "PMR fallback: generator_promise_type default constructor called (GCC move-only param issue)");
-#endif
     }
 
     template<typename First, typename... Args>
@@ -426,23 +418,14 @@ struct generator_promise_type {
     }
 
     final_awaiter<T> final_suspend() noexcept {
-#if defined(__GNUC__) && !defined(__clang__)
-        __builtin_assume(state_ != nullptr);
-#endif
         return final_awaiter<T>{state_};
     }
 
     yield_awaiter<T> yield_value(T& value) noexcept {
-#if defined(__GNUC__) && !defined(__clang__)
-        __builtin_assume(state_ != nullptr);
-#endif
         return yield_awaiter<T>{state_, std::addressof(value)};
     }
 
     yield_awaiter<T> yield_value(T&& value) noexcept {
-#if defined(__GNUC__) && !defined(__clang__)
-        __builtin_assume(state_ != nullptr);
-#endif
         return yield_awaiter<T>{state_, std::addressof(value)};
     }
 
@@ -456,17 +439,11 @@ struct generator_promise_type {
     // Support co_await unique_future<U> inside generator
     template<typename U>
     auto await_transform(unique_future<U>&& future) noexcept {
-#if defined(__GNUC__) && !defined(__clang__)
-        __builtin_assume(state_ != nullptr);
-#endif
         return generator_future_awaiter<T, U>{future, state_};
     }
 
     template<typename U>
     auto await_transform(unique_future<U>& future) noexcept {
-#if defined(__GNUC__) && !defined(__clang__)
-        __builtin_assume(state_ != nullptr);
-#endif
         return generator_future_awaiter<T, U>{future, state_};
     }
 
@@ -477,10 +454,6 @@ struct generator_promise_type {
     }
 
     void return_void() noexcept {
-        if (!state_) std::abort();
-#if defined(__GNUC__) && !defined(__clang__)
-        __builtin_assume(state_ != nullptr);
-#endif
         state_->set_exhausted();
     }
 

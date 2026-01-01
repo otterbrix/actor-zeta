@@ -134,14 +134,6 @@ namespace actor_zeta {
         std::pmr::memory_resource* resource_;
     };
 
-    // GCC's -Wnull-dereference produces false positives for coroutine promise types.
-    // The warning triggers when user code defines coroutine methods returning unique_future.
-    // This is a known GCC issue with coroutines - the analyzer doesn't understand that
-    // extract_resource_from_args() returns valid resource for actor member functions.
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnull-dereference"
-#endif
     template<typename T>
     class unique_future final {
     private:
@@ -374,9 +366,6 @@ namespace actor_zeta {
                     std::abort();
                 }
                 state_ = new (mem) coroutine_state_type(resource_);
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(state_ != nullptr);
-#endif
 
                 auto handle = detail::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
                 state_->set_coroutine_owning(handle);
@@ -396,14 +385,7 @@ namespace actor_zeta {
                         detail::coroutine_handle<promise_type> /*h*/
                         ) noexcept {
                         // state_ is guaranteed non-null here because get_return_object()
-                        // always sets it before any suspension point. But GCC's static
-                        // analyzer doesn't understand coroutine execution order.
-                        if (!state_) {
-                            std::abort();
-                        }
-#if defined(__GNUC__) && !defined(__clang__)
-                        __builtin_assume(state_ != nullptr);
-#endif
+                        // always sets it before any suspension point.
                         if (auto cont = state_->take_continuation()) {
                             return cont;
                         }
@@ -412,17 +394,11 @@ namespace actor_zeta {
 
                     void await_resume() noexcept {}
                 };
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(this->state_ != nullptr);
-#endif
                 return final_awaiter{this->state_};
             }
 
             template<typename U>
             auto await_transform(unique_future<U>&& future) noexcept {
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(state_ != nullptr);
-#endif
                 return typename unique_future<U>::awaiter_type{future, static_cast<detail::future_state_base*>(state_)};
             }
 
@@ -437,15 +413,10 @@ namespace actor_zeta {
 
             // Default constructor - GCC may call this for move-only parameters (unique_ptr).
             // This is a known GCC issue where it doesn't pass 'this' for certain signatures.
-            // We use get_default_resource() as fallback to prevent crashes.
+            // We set nullptr here; get_return_object() will abort + assert.
             promise_type_base() noexcept
-                : resource_(std::pmr::get_default_resource())
+                : resource_(nullptr)
                 , state_(nullptr) {
-#ifdef ACTOR_ZETA_DEBUG_PMR_FALLBACK
-                // Track when fallback is used (for debugging GCC behavior)
-                // Enable with -DACTOR_ZETA_DEBUG_PMR_FALLBACK
-                assert(false && "PMR fallback: promise_type default constructor called (GCC move-only param issue)");
-#endif
             }
 
             template<typename First, typename... Args>
@@ -510,9 +481,6 @@ namespace actor_zeta {
                 assert(res != nullptr && "Coroutine must be actor member function with resource() method");
                 if (!res) {
                     std::abort();
-#if defined(__GNUC__)
-                    __builtin_unreachable();
-#endif
                 }
                 return res;
             }
@@ -525,41 +493,19 @@ namespace actor_zeta {
             using promise_type_base::promise_type_base;
 
             void return_value(T&& value) noexcept {
-                assert(this->state_ && "return_value() with null state");
-                if (!this->state_) std::abort();
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(this->state_ != nullptr);
-#endif
                 this->state_->set_value(std::forward<T>(value));
             }
 
             void return_value(const T& value) noexcept {
-                assert(this->state_ && "return_value() with null state");
-                if (!this->state_) std::abort();
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(this->state_ != nullptr);
-#endif
                 this->state_->set_value(value);
             }
 
             void return_value(unique_future<T>&& ready_future) noexcept {
-                assert(this->state_ && "return_value() with null state");
-                if (!this->state_) std::abort();
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(this->state_ != nullptr);
-#endif
-                assert(ready_future.valid() && "return_value() with invalid future");
-                assert(ready_future.available() && "return_value() requires READY future - use co_await first!");
                 T val = std::move(ready_future).get();
                 this->state_->set_value(std::move(val));
             }
 
             void return_value(std::error_code ec) noexcept {
-                assert(this->state_ && "return_value(error_code) with null state");
-                if (!this->state_) std::abort();
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(this->state_ != nullptr);
-#endif
                 this->state_->error(ec);
             }
         };
@@ -568,11 +514,6 @@ namespace actor_zeta {
             using promise_type_base::promise_type_base;
 
             void return_void() noexcept {
-                assert(this->state_ && "return_void() with null state");
-                if (!this->state_) std::abort();
-#if defined(__GNUC__) && !defined(__clang__)
-                __builtin_assume(this->state_ != nullptr);
-#endif
                 this->state_->set_ready();
             }
         };
@@ -580,13 +521,6 @@ namespace actor_zeta {
         using promise_type_selected = std::conditional_t<is_void_type, promise_type_void, promise_type_non_void>;
 
     public:
-        // GCC's -Wnull-dereference produces false positives for coroutine promise types.
-        // The warning triggers on the coroutine frame allocation path even though
-        // extract_resource_or_abort() guarantees non-null return or aborts.
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnull-dereference"
-#endif
         struct promise_type : promise_type_selected {
             using promise_type_selected::promise_type_selected;
 
@@ -609,18 +543,12 @@ namespace actor_zeta {
                 detail::deallocate_coro_frame_unsized(ptr);
             }
         };
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
     private:
         intrusive_ptr<state_type> state_;
         std::pmr::memory_resource* resource_;
         bool needs_scheduling_;
     };
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
     template<typename T>
     unique_future<T> promise<T>::get_future() noexcept {

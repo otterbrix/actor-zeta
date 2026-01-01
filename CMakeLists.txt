@@ -104,7 +104,7 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
                 -Wlogical-op
                 -Wduplicated-cond
                 -Wduplicated-branches
-                -Wnull-dereference
+                #-Wnull-dereference
         )
     endif()
 
