@@ -395,15 +395,9 @@ struct generator_promise_type {
     std::pmr::memory_resource* resource_ = nullptr;
     generator_state<T>* state_ = nullptr;
 
-    // Default constructor should never be called for generators.
-    // GCC always passes 'this' + params to promise constructor.
-    // Mark as unreachable to eliminate -Wnull-dereference false positives.
-    generator_promise_type() noexcept
-        : resource_(nullptr)
-        , state_(nullptr) {
-        assert(false && "generator can only be created as actor method");
-        std::abort();
-    }
+    // Default constructor deleted - generators MUST receive 'this' + params.
+    // GCC/Clang always pass arguments to promise constructor for member functions.
+    generator_promise_type() = delete;
 
     template<typename First, typename... Args>
     generator_promise_type(First&& first, Args&&...) noexcept
