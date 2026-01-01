@@ -374,6 +374,9 @@ namespace actor_zeta {
                     std::abort();
                 }
                 state_ = new (mem) coroutine_state_type(resource_);
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(state_ != nullptr);
+#endif
 
                 auto handle = detail::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
                 state_->set_coroutine_owning(handle);
@@ -398,6 +401,9 @@ namespace actor_zeta {
                         if (!state_) {
                             std::abort();
                         }
+#if defined(__GNUC__) && !defined(__clang__)
+                        __builtin_assume(state_ != nullptr);
+#endif
                         if (auto cont = state_->take_continuation()) {
                             return cont;
                         }
@@ -406,14 +412,20 @@ namespace actor_zeta {
 
                     void await_resume() noexcept {}
                 };
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(this->state_ != nullptr);
+#endif
                 return final_awaiter{this->state_};
             }
 
             template<typename U>
             auto await_transform(unique_future<U>&& future) noexcept {
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(state_ != nullptr);
+#endif
                 return typename unique_future<U>::awaiter_type{future, static_cast<detail::future_state_base*>(state_)};
             }
-            
+
             template<typename U>
             auto await_transform(generator<U>& gen) noexcept {
                 return detail::next_awaiter<U>{gen.internal_state()};
@@ -423,9 +435,18 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
-            // Default constructor deleted - coroutines MUST receive 'this' + params.
-            // GCC/Clang always pass arguments to promise constructor for member functions.
-            promise_type_base() = delete;
+            // Default constructor - GCC may call this for move-only parameters (unique_ptr).
+            // This is a known GCC issue where it doesn't pass 'this' for certain signatures.
+            // We use get_default_resource() as fallback to prevent crashes.
+            promise_type_base() noexcept
+                : resource_(std::pmr::get_default_resource())
+                , state_(nullptr) {
+#ifdef ACTOR_ZETA_DEBUG_PMR_FALLBACK
+                // Track when fallback is used (for debugging GCC behavior)
+                // Enable with -DACTOR_ZETA_DEBUG_PMR_FALLBACK
+                assert(false && "PMR fallback: promise_type default constructor called (GCC move-only param issue)");
+#endif
+            }
 
             template<typename First, typename... Args>
             promise_type_base(First&& first, Args&&... args) noexcept
@@ -505,16 +526,28 @@ namespace actor_zeta {
 
             void return_value(T&& value) noexcept {
                 assert(this->state_ && "return_value() with null state");
+                if (!this->state_) std::abort();
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(this->state_ != nullptr);
+#endif
                 this->state_->set_value(std::forward<T>(value));
             }
 
             void return_value(const T& value) noexcept {
                 assert(this->state_ && "return_value() with null state");
+                if (!this->state_) std::abort();
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(this->state_ != nullptr);
+#endif
                 this->state_->set_value(value);
             }
 
             void return_value(unique_future<T>&& ready_future) noexcept {
                 assert(this->state_ && "return_value() with null state");
+                if (!this->state_) std::abort();
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(this->state_ != nullptr);
+#endif
                 assert(ready_future.valid() && "return_value() with invalid future");
                 assert(ready_future.available() && "return_value() requires READY future - use co_await first!");
                 T val = std::move(ready_future).get();
@@ -523,6 +556,10 @@ namespace actor_zeta {
 
             void return_value(std::error_code ec) noexcept {
                 assert(this->state_ && "return_value(error_code) with null state");
+                if (!this->state_) std::abort();
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(this->state_ != nullptr);
+#endif
                 this->state_->error(ec);
             }
         };
@@ -532,6 +569,10 @@ namespace actor_zeta {
 
             void return_void() noexcept {
                 assert(this->state_ && "return_void() with null state");
+                if (!this->state_) std::abort();
+#if defined(__GNUC__) && !defined(__clang__)
+                __builtin_assume(this->state_ != nullptr);
+#endif
                 this->state_->set_ready();
             }
         };
