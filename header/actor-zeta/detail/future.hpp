@@ -392,6 +392,12 @@ namespace actor_zeta {
                     detail::coroutine_handle<> await_suspend(
                         detail::coroutine_handle<promise_type> /*h*/
                         ) noexcept {
+                        // state_ is guaranteed non-null here because get_return_object()
+                        // always sets it before any suspension point. But GCC's static
+                        // analyzer doesn't understand coroutine execution order.
+                        if (!state_) {
+                            std::abort();
+                        }
                         if (auto cont = state_->take_continuation()) {
                             return cont;
                         }
@@ -417,9 +423,17 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
+            // Default constructor should never be called for coroutines.
+            // GCC always passes 'this' + params to promise constructor.
+            // Mark as unreachable to eliminate -Wnull-dereference false positives.
             promise_type_base() noexcept
                 : resource_(nullptr)
-                , state_(nullptr) {}
+                , state_(nullptr) {
+                // This path is never taken for coroutines, but GCC's static
+                // analyzer doesn't know that. The abort() tells the analyzer
+                // that code after this constructor is unreachable.
+                std::abort();
+            }
 
             template<typename First, typename... Args>
             promise_type_base(First&& first, Args&&... args) noexcept

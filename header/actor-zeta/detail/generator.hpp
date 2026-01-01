@@ -321,6 +321,11 @@ struct final_awaiter {
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
+        // state_ is guaranteed non-null here because get_return_object()
+        // always sets it. But GCC's static analyzer doesn't understand coroutine flow.
+        if (!state_) {
+            std::abort();
+        }
         state_->set_exhausted();
 
         auto* linked = state_->linked_state();
@@ -390,10 +395,14 @@ struct generator_promise_type {
     std::pmr::memory_resource* resource_ = nullptr;
     generator_state<T>* state_ = nullptr;
 
+    // Default constructor should never be called for generators.
+    // GCC always passes 'this' + params to promise constructor.
+    // Mark as unreachable to eliminate -Wnull-dereference false positives.
     generator_promise_type() noexcept
         : resource_(nullptr)
         , state_(nullptr) {
         assert(false && "generator can only be created as actor method");
+        std::abort();
     }
 
     template<typename First, typename... Args>
@@ -401,6 +410,10 @@ struct generator_promise_type {
         : resource_(extract_resource_from_args(std::forward<std::remove_reference_t<First>>(first)))
         , state_(nullptr) {
         assert(resource_ != nullptr && "generator requires actor with resource()");
+        // Explicit runtime check to satisfy GCC's -Wnull-dereference static analyzer.
+        if (!resource_) {
+            std::abort();
+        }
     }
 
     generator<T> get_return_object() noexcept;
