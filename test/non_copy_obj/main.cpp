@@ -21,9 +21,7 @@ struct dummy_data {
     std::string name{"default_name"};
 };
 
-// Compile-time verification: T&& and T are equivalent after decay_t.
-// This is important because RTT stores decayed types, so both signatures
-// produce identical storage layout.
+// Verify decay_t<T&&> == decay_t<T> for RTT compatibility
 static_assert(
     std::is_same_v<
         actor_zeta::type_traits::decay_t<std::unique_ptr<dummy_data>&&>,
@@ -49,11 +47,7 @@ public:
         return executor_.get();
     }
 
-    // NOTE: Using by-value std::unique_ptr<T> instead of rvalue reference T&&.
-    // GCC 11.4 has a bug where coroutine operator new doesn't receive arguments
-    // when method parameters include rvalue references to move-only types.
-    // By-value works identically (move semantics preserved) and is compatible
-    // with all GCC versions. See: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=104981
+    // By-value for move-only types (GCC 11.4 bug workaround). See docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
     actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data> data, dummy_data expected_data) {
         REQUIRE(data != nullptr);
         REQUIRE(data->number == expected_data.number);

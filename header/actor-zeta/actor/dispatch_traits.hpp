@@ -27,11 +27,7 @@ namespace actor_zeta {
         template<typename... Args>
         concept has_any_const_lvalue_ref = (const_lvalue_ref<Args> || ...);
 
-        // Check for rvalue reference to move-only type (e.g., std::unique_ptr<T>&&)
-        // GCC 11.4 has a bug where coroutine operator new doesn't receive arguments
-        // when method parameters include rvalue references to move-only types.
-        // Solution: use by-value (T) instead of rvalue reference (T&&) for move-only types.
-        // See: docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
+        // Detects T&& to move-only type. Use T instead - see docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
         template<typename T>
         concept rvalue_ref_to_move_only =
             std::is_rvalue_reference_v<T> &&

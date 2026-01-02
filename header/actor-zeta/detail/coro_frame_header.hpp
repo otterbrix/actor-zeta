@@ -24,9 +24,7 @@ namespace actor_zeta::detail {
     // Requires: res != nullptr (coroutines must be actor member functions)
     inline void* allocate_coro_frame(std::pmr::memory_resource* res, std::size_t frame_size) noexcept {
         assert(res != nullptr && "allocate_coro_frame: resource must not be null");
-        // Explicit runtime check to satisfy GCC's -Wnull-dereference static analyzer.
-        // GCC doesn't trust assert() (empty in Release) or [[gnu::returns_nonnull]] attributes.
-        if (!res) {
+        if (!res) {  // Runtime check for GCC's -Wnull-dereference
             std::abort();
         }
 

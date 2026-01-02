@@ -1,89 +1,26 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working with this repository.
 
-## Table of Contents
+## Core Rules
 
-- [Critical: Read Full Files](#critical-read-full-files-before-making-changes)
-- [Core Principles](#core-principles)
-- [Project Overview](#project-overview)
-- [Quick Start](#quick-start-commands)
-- [File Structure](#file-structure-reference)
-- [Architecture](#architecture-deep-dive)
-- [Code Conventions](#code-conventions)
-- [Build Configurations](#common-build-configurations)
-- [CMake Options](#cmake-options-reference)
-- [Testing](#testing)
-- [Examples](#examples)
-- [Dependencies](#dependencies)
-- [CLion Workflows](#clion-specific-workflows)
-- [When Making Changes](#when-making-changes)
-- [Common Mistakes](#common-mistakes-to-avoid)
-- [Recent Changes](#recent-changes)
-- [Promise/Future System](#promisefuture-system)
-- [Generator System](#generator-system)
-
----
-
-## 🚨 CRITICAL: READ FULL FILES BEFORE MAKING CHANGES
-
-**ALWAYS read entire header files (at least the full file, not just snippets) before making changes.** This codebase has intricate template metaprogramming, PMR allocators, and cooperative actor patterns. Reading 50-100 lines will cause you to:
-- Add duplicate functions that exist deeper in the file
-- Break the carefully crafted RTTI-free/exception-free design
-- Misunderstand the actor lifecycle and memory management patterns
-
-**Once you've read the full file, you understand it completely.** Trust your full read and make changes directly.
-
-## Core Principles
-
-1. **READ FIRST**: Read entire files to understand context fully
-2. **NO RTTI, NO EXCEPTIONS**: Code MUST compile with `-fno-rtti -fno-exceptions`
-3. **FOLLOW EXISTING PATTERNS**: This library has unique patterns (PMR, cooperative actors, custom RTTI)
-4. **BUILD AND TEST**: Always run build + tests after changes
-5. **USE PMR ALLOCATORS**: Never use `new`/`delete` directly for actors
+1. **READ FULL FILES** before making changes - this codebase has intricate template metaprogramming
+2. **NO RTTI, NO EXCEPTIONS** - code MUST compile with `-fno-rtti -fno-exceptions`
+3. **USE PMR** - never use `new`/`delete` directly, always `spawn<Actor>(memory_resource, args...)`
+4. **BUILD AND TEST** after every change
 
 ## Project Overview
 
-actor-zeta is a C++20 **header-only** virtual actor model implementation with cooperative scheduling, custom memory management, and no dependencies on RTTI or exceptions.
+actor-zeta is a C++20 **header-only** actor model with cooperative scheduling, PMR memory management, and no RTTI/exceptions dependencies.
 
-**Minimum C++ standard: C++20**
-
-## Quick Start Commands
-
-### Using CLion (Recommended for Development)
-
-CLion automatically handles CMake configuration. Just:
-
-1. **Open project in CLion** - it will detect `CMakeLists.txt`
-2. **Configure Conan dependencies:**
-   ```bash
-   # Run once in terminal (inside CLion or external):
-   conan profile detect --force
-   conan install . -of cmake-build-debug/conan -s build_type=Debug --build=missing
-   ```
-3. **Reload CMake** in CLion (`Tools → CMake → Reload CMake Project`)
-4. **Set CMake options** in `Settings → Build → CMake`:
-   - Build type: `Debug` or `Release`
-   - CMake options:
-     ```
-     -DALLOW_EXAMPLES=ON
-     -DALLOW_TESTS=ON
-     -DRTTI_DISABLE=ON
-     -DEXCEPTIONS_DISABLE=ON
-     -DCMAKE_TOOLCHAIN_FILE=cmake-build-debug/conan/Debug/generators/conan_toolchain.cmake
-     ```
-5. **Build** using CLion's build button or `Ctrl+F9` / `Cmd+F9`
-6. **Run tests** from `Run → Edit Configurations → Add CTest`
-7. **Run examples** - CLion auto-creates run configurations from executables
-
-**CLion Build Directory:** CLion uses `cmake-build-debug/` or `cmake-build-release/` by default.
-
-### Command Line (Alternative)
+## Quick Start
 
 ```bash
-# Full build cycle (development)
+# Setup
 conan profile detect --force
 conan install . -of build -s build_type=Debug --build=missing
+
+# Build
 cmake -B build -GNinja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DALLOW_EXAMPLES=ON \
@@ -93,872 +30,183 @@ cmake -B build -GNinja \
   -DCMAKE_TOOLCHAIN_FILE=./build/Debug/generators/conan_toolchain.cmake
 cmake --build build
 
-# Run all tests
+# Test
 cd build && ctest --output-on-failure
-
-# Run specific test
-./build/bin/tests_message
-./build/bin/tests_behavior
-
-# Run examples
-./build/bin/balancer
-./build/bin/broadcast
 ```
 
-## File Structure Reference
+**CLion:** Uses `cmake-build-debug/`. Set toolchain: `-DCMAKE_TOOLCHAIN_FILE=cmake-build-debug/conan/Debug/generators/conan_toolchain.cmake`
+
+## File Structure
 
 ```
-actor-zeta/
-├── header/
-│   ├── actor-zeta.hpp              # Main public API entry point
-│   ├── actor-zeta/
-│   │   ├── core.hpp                # Core types (actor_abstract_t, address_t, message, scheduler_t)
-│   │   ├── src.hpp                 # Header-only mode: include in ONE .cpp file
-│   │   ├── spawn.hpp               # Actor allocation: spawn<T>(memory_resource, args...)
-│   │   ├── make_message.hpp        # Message creation
-│   │   ├── send.hpp                # Message sending
-│   │   ├── actor/                  # Actor implementation
-│   │   │   ├── actor_mixin.hpp     # Actor mixin pattern
-│   │   │   ├── address.hpp         # Actor addressing
-│   │   │   ├── basic_actor.hpp     # Basic actor alias
-│   │   │   ├── cooperative_actor.hpp # Cooperative actor implementation
-│   │   │   ├── dispatch.hpp        # Message dispatch
-│   │   │   ├── dispatch_traits.hpp # Dispatch traits
-│   │   │   └── forwards.hpp        # Forward declarations
-│   │   ├── mailbox/                # Message system
-│   │   │   ├── message.hpp         # Core message type
-│   │   │   ├── message_id.hpp      # Message identification
-│   │   │   ├── priority.hpp        # Priority levels
-│   │   │   └── *_priority_message.hpp
-│   │   ├── scheduler/              # Cooperative scheduler
-│   │   │   ├── scheduler.hpp       # Abstract scheduler interface
-│   │   │   ├── sharing_scheduler.hpp
-│   │   │   └── resumable.hpp       # Resumable execution
-│   │   ├── detail/                 # Internal implementation
-│   │   │   ├── future.hpp          # Promise/Future with coroutine support
-│   │   │   ├── future_state.hpp    # Future state management
-│   │   │   ├── generator.hpp       # Generator with co_yield support
-│   │   │   ├── rtt.hpp             # Custom RTTI (no typeid)
-│   │   │   ├── intrusive_ptr.hpp   # Reference counting
-│   │   │   ├── type_list.hpp       # Metaprogramming
-│   │   │   └── queue/              # Lock-free queues
-│   │   └── impl/                   # Implementation files (.ipp)
-├── test/                           # Test suite (Catch2)
-│   ├── message/
-│   ├── behavior/
-│   ├── actor-id/
-│   ├── coroutines/
-│   └── ...
-├── examples/                       # Usage examples
-│   ├── balancer/                   # Load balancing pattern
-│   ├── broadcast/                  # Message broadcasting
-│   ├── supervisor/                 # Supervisor pattern
-│   └── coroutine/                  # Coroutine examples
-└── source/src.cpp                  # Library implementation (if not header-only)
+header/
+├── actor-zeta.hpp              # Main API
+├── actor-zeta/
+│   ├── core.hpp                # Core types
+│   ├── spawn.hpp               # Actor allocation
+│   ├── send.hpp                # Message sending
+│   ├── actor/                  # Actor implementation
+│   │   ├── basic_actor.hpp     # Basic actor alias
+│   │   ├── dispatch.hpp        # Message dispatch
+│   │   └── dispatch_traits.hpp # Dispatch traits
+│   ├── mailbox/                # Message system
+│   └── detail/                 # Internal (future.hpp, generator.hpp, rtt.hpp)
+test/                           # Catch2 tests
+examples/                       # Usage examples
 ```
 
-## Architecture Deep Dive
+## Architecture
 
-### Actor System
-
-The library implements **cooperative actors** with custom memory management:
-
-- **basic_actor** - Alias for `cooperative_actor<Actor, traits, actor_type::classic>`
-- **address_t** - Actor addressing and identification
-- **behavior_t** - Message handler collection
-
-**Actor Lifecycle:**
-1. Define actor class inheriting from `basic_actor`
-2. Define `dispatch_traits` with method pointers: `dispatch_traits<&MyActor::method1, &MyActor::method2>`
-3. Implement `behavior(message*)` method to dispatch messages
-4. Spawn with PMR: `auto actor = spawn<MyActor>(memory_resource, args...)`
-5. Send messages: `send(actor, sender, &MyActor::method, arg1, arg2)`
-6. Scheduler runs actor's message handlers cooperatively
-
-### Message System
-
-- **message** - Intrusive-pointer-based message with type erasure
-- **message_id** - Unique message identification
-- **Priority levels:**
-  - `high_priority_message` - Processed first
-  - `normal_priority_message` - Standard priority
-
-Messages are **immutable** after creation. Use `make_message()` to create.
-
-**Key concept:** Messages now created in **receiver's** memory resource (not sender's) to avoid cross-arena migration issues.
-
-### Scheduler
-
-Cooperative scheduling, not preemptive:
-- **scheduler_t** - Abstract interface: `start()`, `stop()`, `schedule(resumable_t*)`
-- **sharing_scheduler** - Shared thread pool implementation
-- **resumable_t** - Interface for resumable execution contexts (actors)
-
-Actors run until they yield control (no timeslicing).
+### Actor Lifecycle
+1. Define actor class inheriting from `basic_actor<Actor>`
+2. Define `dispatch_traits<&Actor::method1, &Actor::method2>`
+3. Implement `behavior(message*)` to dispatch messages
+4. Spawn: `auto actor = spawn<MyActor>(memory_resource, args...)`
+5. Send: `send(actor, sender, &MyActor::method, args...)`
 
 ### Memory Management
+- Uses `std::pmr::memory_resource`
+- **spawn()** returns `unique_ptr<Actor, pmr::deleter_t>`
+- Messages created in **receiver's** memory resource
 
-Uses `std::pmr::memory_resource` for memory allocation.
-
-- **spawn()** - **ALWAYS use this for actor allocation:**
-  ```cpp
-  auto actor = spawn<MyActor>(std::pmr::get_default_resource(), constructor_args...);
-  // Returns: unique_ptr<MyActor, actor_zeta::pmr::deleter_t>
-  ```
-
-**Never use `new MyActor` directly** - breaks memory resource tracking.
-
-### Type System
-
-Since RTTI is disabled:
-- **rtt.hpp** - Custom runtime type information (replaces `typeid`)
-- **type_list** - Compile-time type lists for metaprogramming
-- **type_traits** - Custom type trait utilities
-- **intrusive_ptr** - Reference-counted smart pointer with custom ref counting
-
-### Reference Counting
-
-Actors use **intrusive reference counting**:
-```cpp
-template<class T, class Target, class Traits, class Type>
-void intrusive_ptr_add_ref(cooperative_actor<Target, Traits, Type>* ptr);
-
-template<class T, class Target, class Traits, class Type>
-void intrusive_ptr_release(cooperative_actor<Target, Traits, Type>* ptr);
-```
-
-Use `intrusive_ptr<T>` for actors, not `shared_ptr`.
+### Type System (no RTTI)
+- `rtt.hpp` - custom runtime type info
+- `intrusive_ptr<T>` - reference counting (not `shared_ptr`)
 
 ## Code Conventions
 
-### 1. RTTI and Exceptions
-
-**CRITICAL:** All code MUST work with `-fno-rtti -fno-exceptions`.
-
-❌ **NEVER:**
+### RTTI and Exceptions
 ```cpp
+// NEVER:
 throw std::runtime_error("error");  // NO EXCEPTIONS
 typeid(MyClass).name();             // NO RTTI
 dynamic_cast<Derived*>(ptr);        // NO RTTI
-```
 
-✅ **INSTEAD:**
-```cpp
-// Use error codes or assertions
+// INSTEAD:
 assert(condition && "error message");
-
-// Use custom RTT system
-#include <actor-zeta/detail/rtt.hpp>
-// (see rtt.hpp for type identification)
-
-// Use static polymorphism or intrusive_ptr with manual type tracking
+// Use custom RTT system from rtt.hpp
 ```
 
-### 2. Memory Management
-
-✅ **CORRECT:**
-```cpp
-auto actor = spawn<MyActor>(memory_resource, arg1, arg2);
-// Returns unique_ptr with custom deleter
-```
-
-❌ **WRONG:**
-```cpp
-auto actor = new MyActor(arg1, arg2);  // Breaks PMR tracking!
-delete actor;
-```
-
-### 3. Message Sending
-
-✅ **CORRECT:**
-```cpp
-// Method pointer dispatch (recommended)
-send(target_actor, sender_address, &MyActor::handle_command, arg1, arg2);
-
-// Or with message_id
-send(target_actor, sender_address, msg_id<MyActor, &MyActor::handle_command>, arg1, arg2);
-```
-
-Messages are immutable. Handler signature:
-```cpp
-void MyActor::handle_command(const ArgType1& arg1, const ArgType2& arg2) {
-    // ...
-}
-```
-
-### 4. Actor Definition Pattern
-
+### Actor Definition Pattern
 ```cpp
 class MyActor final : public basic_actor<MyActor> {
 public:
-    void handle_command1(const std::string& arg);
-    void handle_command2(int arg1, double arg2);
+    unique_future<int> compute(int x) { co_return x * 2; }
+    unique_future<void> notify(std::string msg) { co_return; }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &MyActor::handle_command1,
-        &MyActor::handle_command2
+        &MyActor::compute,
+        &MyActor::notify
     >;
 
-    explicit MyActor(actor_zeta::pmr::memory_resource* ptr, constructor_args...)
-        : basic_actor<MyActor>(ptr)
-        , command1_(actor_zeta::make_behavior(resource(), this, &MyActor::handle_command1))
-        , command2_(actor_zeta::make_behavior(resource(), this, &MyActor::handle_command2)) {
-    }
+    explicit MyActor(std::pmr::memory_resource* ptr)
+        : basic_actor<MyActor>(ptr) {}
 
     void behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
-        if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command1>) {
-            command1_(msg);
-        } else if (cmd == actor_zeta::msg_id<MyActor, &MyActor::handle_command2>) {
-            command2_(msg);
+        if (cmd == msg_id<MyActor, &MyActor::compute>) {
+            dispatch(this, &MyActor::compute, msg);
+        } else if (cmd == msg_id<MyActor, &MyActor::notify>) {
+            dispatch(this, &MyActor::notify, msg);
         }
     }
-
-    ~MyActor() override = default;
-
-private:
-    actor_zeta::behavior_t command1_;
-    actor_zeta::behavior_t command2_;
-
-    void handle_command1(const std::string& arg) {
-        // Handler implementation
-    }
-
-    void handle_command2(int arg1, double arg2) {
-        // Handler implementation
-    }
 };
 ```
 
-### 5. Header-Only Mode
-
-To use as header-only, in **exactly one** `.cpp` file:
+### Message Sending
 ```cpp
-#include <actor-zeta/src.hpp>
-```
-
-This includes all implementations.
-
-### 6. Clang-Specific Considerations
-
-On Linux with Clang, CMake auto-detects and configures:
-- `libc++` instead of `libstdc++` (if available)
-- `compiler-rt` instead of `libgcc`
-- Linker flags in `LINKFLAGS` variable
-
-**If adding linker options:** Check `CMakeLists.txt` for Clang-specific handling.
-
-## Common Build Configurations
-
-### Development (Debug, all features)
-```bash
-cmake -B build -GNinja \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DALLOW_EXAMPLES=ON \
-  -DALLOW_TESTS=ON \
-  -DENABLE_TESTS_MEASUREMENTS=ON \
-  -DRTTI_DISABLE=ON \
-  -DEXCEPTIONS_DISABLE=ON
-```
-
-### Release (optimized)
-```bash
-cmake -B build -GNinja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DRTTI_DISABLE=ON \
-  -DEXCEPTIONS_DISABLE=ON
-```
-
-## CMake Options Reference
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `ALLOW_EXAMPLES` | OFF | Build example applications |
-| `ALLOW_TESTS` | OFF | Build test suite (Catch2) |
-| `ENABLE_TESTS_MEASUREMENTS` | OFF | Enable performance measurements in tests |
-| `ALLOW_BENCHMARK` | OFF | Build benchmark suite |
-| `RTTI_DISABLE` | ON | Disable RTTI (`-fno-rtti`) |
-| `EXCEPTIONS_DISABLE` | ON | Disable exceptions (`-fno-exceptions`) |
-| `CMAKE_CXX_STANDARD` | 20 | C++ standard (C++20 only) |
-
-## Testing
-
-Test suite organized by component in `test/`:
-
-```bash
-# Run all tests
-cd build && ctest --output-on-failure
-
-# Run specific test executable
-./build/bin/tests_message
-./build/bin/tests_behavior
-./build/bin/tests_actor_id
-./build/bin/tests_spawn
-
-# Run with verbose output
-./build/bin/tests_message --success
-```
-
-Tests use **Catch2 2.13.8** framework with auto-discovery via `catch_discover_tests()`.
-
-## Examples
-
-Located in `examples/`:
-- **balancer** - Load balancing across multiple worker actors
-- **broadcast** - Broadcasting messages to multiple actors
-- **supervisor** - Supervisor pattern for actor management
-- **coroutine** - Mixed sync/async coroutine patterns
-- **generator** - Streaming data between actors with `co_yield`
-
-Build with `-DALLOW_EXAMPLES=ON`, run from `build/bin/`.
-
-## Dependencies
-
-**Build:**
-- CMake >= 3.15
-- Conan 2.x (installs Catch2, Benchmark)
-- C++ compiler: **GCC 9+, Clang 10+**, or MSVC (requires std::pmr support)
-
-**Runtime:**
-- None (header-only library)
-- Requires Threads library (pthread on Unix)
-
-## CLion-Specific Workflows
-
-### Debugging in CLion
-
-1. **Set breakpoints** in header files or test files
-2. **Run test in debug mode** - Right-click on test executable → `Debug 'tests_message'`
-3. **Debug specific example** - CLion auto-creates run configurations for executables in `bin/`
-
-### Running Single Test
-
-In CLion:
-- Open test file (e.g., `test/message/main.cpp`)
-- Click green arrow next to test case
-- Or use CTest run configuration
-
-From command line:
-```bash
-./cmake-build-debug/bin/tests_message --success  # Verbose output
-./cmake-build-debug/bin/tests_message "[tag_name]"  # Run specific test tag
-```
-
-### Troubleshooting CLion Build
-
-**Problem:** CLion can't find Conan dependencies
-
-**Solution:**
-```bash
-# Re-run Conan install for CLion's build directory:
-conan install . -of cmake-build-debug/conan -s build_type=Debug --build=missing
-
-# Then in CLion: Tools → CMake → Reset Cache and Reload Project
-```
-
-**Problem:** "Cannot find conan_toolchain.cmake"
-
-**Solution:** Update CMake options in CLion settings to point to correct toolchain file:
-```
--DCMAKE_TOOLCHAIN_FILE=cmake-build-debug/conan/Debug/generators/conan_toolchain.cmake
-```
-
-### Using CLion with Different Build Types
-
-Create multiple CMake profiles in CLion (`Settings → Build → CMake → +`):
-- **Debug**: `-DALLOW_TESTS=ON -DALLOW_EXAMPLES=ON`
-- **Release**: `-DCMAKE_BUILD_TYPE=Release`
-
-Switch between profiles using the dropdown in CLion's toolbar.
-
-## When Making Changes
-
-1. ✅ **Read the full file first** (not just the function you're changing)
-2. ✅ **Follow existing patterns** (PMR allocation, no RTTI/exceptions, intrusive_ptr)
-3. ✅ **Build after every change:** CLion auto-builds, or `cmake --build build`
-4. ✅ **Run tests:** In CLion or `cd build && ctest --output-on-failure`
-5. ✅ **Check examples still work** if you changed core headers
-
-## Common Mistakes to Avoid
-
-### Memory Management
-- ❌ Using `new`/`delete` instead of `spawn()`
-- ❌ Using `std::shared_ptr` for actors (use `intrusive_ptr` instead)
-- ❌ Using `std::memcpy` for non-trivial types (breaks `std::string`, etc.)
-- ❌ Cross-arena migration for type-erased containers (RTT, message) - only same-arena supported
-- ❌ Using alignment < `sizeof(void*)` with `posix_memalign`
-
-### Standard Library Replacements
-- ❌ `std::shared_ptr` → Use `actor_zeta::detail::intrusive_ptr` instead
-- ❌ `std::optional` → Use custom optional or raw pointers with null checks (C++11 compatibility)
-
-### RTTI and Exceptions
-- ❌ Using `throw` or `try/catch` (exceptions disabled)
-- ❌ Using `typeid` or `dynamic_cast` (RTTI disabled)
-
-### Code Reading
-- ❌ Reading only part of a header file (miss template specializations)
-- ❌ Skipping implementation files (.ipp) when modifying headers
-
-### API Usage
-✅ **These are LEGITIMATE APIs** - do not "fix" them:
-- `make_behavior(resource, this, &Class::method)` - creates behavior with automatic argument unpacking
-- `behavior_t` - type-erased behavior object
-- `void behavior(mailbox::message*)` - virtual method called by base class
-- Direct `message*` usage in low-level code
-
-**Current API (all code should use this):**
-- Define `dispatch_traits<&Actor::method...>` with method pointers
-- Implement `void behavior(mailbox::message*)` to dispatch based on `msg_id<Actor, &Actor::method>`
-- Create `behavior_t` members using `make_behavior(resource, this, &Actor::method)`
-- Send messages using `send(actor, sender, &Actor::method, args...)`
-
-## Recent Changes
-
-**For detailed change history, see [`CHANGELOG.md`](CHANGELOG.md).**
-
-### Key Recent Improvements (2025-01)
-
-**Actor State Management:**
-- Unified state management with single `atomic<actor_state>` (replaced 3 atomics)
-- Atomic state transitions prevent invalid states
-
-**Message System:**
-- Messages now created in **receiver's** memory resource (eliminates cross-arena issues)
-- API change: `enqueue_impl(sender, cmd, args...)` instead of `enqueue_impl(message_ptr)`
-- For library users: No changes needed
-- For custom actors/balancers: Update `enqueue_impl()` signature if overridden
-
-**Scheduler:**
-- Manual scheduling pattern (actors no longer self-schedule)
-- `resume()` returns `resume_info` with execution statistics
-- Shutdown race condition fixed
-
-**Promise/Future:**
-- Exponential backoff in `get()` (99% CPU reduction)
-- Multiple bug fixes (memory leaks, PMR resource usage, thread safety)
-
-**Build System:**
-- Conan 2.x integration fixed
-- CI matrix updated for C++20 compiler support
-
-**See [`CHANGELOG.md`](CHANGELOG.md) for detailed descriptions and migration guides.**
-
-## Promise/Future System
-
-**For complete guide with patterns and examples, see [`PROMISE_FUTURE_GUIDE.md`](PROMISE_FUTURE_GUIDE.md).**
-
-### Quick Overview
-
-Actor-zeta supports **async request-response** via `promise<T>` and `unique_future<T>`:
-
-**Fire-and-forget:**
-```cpp
-send(target_actor, sender, &TargetActor::handle_command, arg1, arg2);
-```
-
-**Request-response:**
-```cpp
-auto future = send(target_actor, sender, &TargetActor::compute, arg1);
-int result = std::move(future).get();  // Blocks until ready
-```
-
-**Handler returns future (coroutine):**
-```cpp
-class Worker : public basic_actor<Worker> {
-    unique_future<int> compute(int x) {
-        int result = x * 2;
-        co_return result;  // Use co_return for coroutines
-    }
-};
-```
-
-### Key Patterns
-
-**1. Multiple Futures (Parallel Requests)**
-```cpp
-std::vector<unique_future<int>> futures;
-futures.reserve(workers.size());  // CRITICAL: Reserve to avoid reallocation!
-
-for (auto& worker : workers) {
-    futures.push_back(send(worker.get(), address(), &Worker::compute, data));
-}
-
-// Wait for all results
-for (auto& future : futures) {
-    int result = std::move(future).get();
-    process(result);
-}
-```
-
-**2. Fire-and-Forget (Orphaned Futures)**
-```cpp
-{
-    auto future = send(logger, address(), &Logger::log, "message");
-}  // Future destroyed - message still processed, result ignored
-```
-
-**3. Timeout with Polling**
-```cpp
-auto future = send(worker, address(), &Worker::slow_task, data);
-
-auto start = std::chrono::steady_clock::now();
-while (!future.available()) {
-    if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
-        future.cancel();  // Best-effort cancellation
-        // Handle timeout - no exceptions
-        return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-}
-
+// Fire-and-forget
+send(target, sender, &Target::method, arg1, arg2);
+
+// Request-response
+auto future = send(target, sender, &Target::compute, arg);
 int result = std::move(future).get();
 ```
 
-### Coroutine Patterns
-
-**4. Typed Coroutines with co_await**
+### Coroutine Parameters
 ```cpp
-class MyActor : public basic_actor<MyActor> {
-    // ✅ Typed coroutines support co_await
-    unique_future<int> compute_async(int x) {
-        auto future = send(worker_, address(), &Worker::process, x);
-        int result = co_await std::move(future);  // OK!
-        co_return result + 10;
-    }
-};
+// For move-only types, use by-value (NOT T&&)
+unique_future<void> process(std::unique_ptr<Data> data) { ... }  // OK
+unique_future<void> process(std::unique_ptr<Data>&& data) { ... } // COMPILE ERROR
+// See docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
 ```
 
-**5. Void Coroutines**
-```cpp
-// ✅ unique_future<void> coroutines fully support co_await:
-unique_future<void> async_void_method() {
-    co_await send(other_actor, address(), &OtherActor::do_work);  // OK!
-    co_return;
-}
+## CMake Options
 
-// ✅ Simple void coroutine (no co_await) - also OK:
-unique_future<void> simple_void() {
-    co_return;  // OK
-}
-```
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ALLOW_EXAMPLES` | OFF | Build examples |
+| `ALLOW_TESTS` | OFF | Build tests (Catch2) |
+| `RTTI_DISABLE` | ON | `-fno-rtti` |
+| `EXCEPTIONS_DISABLE` | ON | `-fno-exceptions` |
 
-**6. Storing Pending Coroutines (CRITICAL)**
-```cpp
-class MyActor : public basic_actor<MyActor> {
-    void behavior(mailbox::message* msg) {
-        switch (msg->command()) {
-            case msg_id<MyActor, &MyActor::async_method>: {
-                // CRITICAL: Store pending coroutine!
-                // If destroyed immediately, coroutine is destroyed → refcount underflow!
-                auto future = dispatch(this, &MyActor::async_method, msg);
-                if (!future.available()) {
-                    pending_.push_back(std::move(future));
-                }
-                break;
-            }
-        }
-    }
+## Common Mistakes
 
-    // Poll and clean up completed coroutines
-    bool poll_pending() {
-        for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->available()) {
-                it = pending_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        return !pending_.empty();
-    }
+| Mistake | Correct |
+|---------|---------|
+| `new MyActor(...)` | `spawn<MyActor>(resource, ...)` |
+| `std::shared_ptr<Actor>` | `intrusive_ptr<Actor>` |
+| `throw`/`try`/`catch` | `assert()` or error codes |
+| `typeid`/`dynamic_cast` | Custom RTT system |
+| `T&&` for move-only in coroutines | `T` by-value |
+| `const T&` in coroutines | `T` by-value (dangling after co_await) |
 
-private:
-    std::vector<unique_future<int>> pending_;
-};
-```
+## Promise/Future System
 
-### Best Practices
-
-✅ **DO:**
-- Use `available()` for non-blocking checks
-- Reserve vector capacity before adding futures
-- Ensure actor outlives all futures
-- Use fire-and-forget for notifications/logging
-- Move futures when calling `get()`
-- **Store pending coroutines** in behavior() to prevent premature destruction
-- Use **typed coroutines** (`unique_future<T>`) when you need `co_await`
-
-❌ **DON'T:**
-- Call `get()` in tight loop without `available()` check
-- Destroy actor while futures are pending
-- Store futures indefinitely
-- Use exceptions for error handling
-
-### Type Erasure
-
-`unique_future<void>` (or `unique_future<>`) serves as a type-erased base. Any `unique_future<T>` can be converted to it:
+Async request-response via `unique_future<T>`:
 
 ```cpp
-std::vector<unique_future<>> futures;  // <> = <void>
+// Handler as coroutine
+unique_future<int> compute(int x) { co_return x * x; }
 
-// Collect futures of different types
-futures.push_back(actor1->compute_int(42));     // int -> void
-futures.push_back(actor2->compute_string("x")); // string -> void
+// Caller
+auto future = send(actor, sender, &Actor::compute, 42);
+int result = std::move(future).get();  // Blocks until ready
 
-// Wait for all
-for (auto& f : futures) {
-    while (!f.available()) { /* wait */ }
+// Coroutine chaining
+unique_future<int> chain(int x) {
+    auto f = send(other, address(), &Other::process, x);
+    int r = co_await std::move(f);
+    co_return r + 10;
 }
 ```
 
-**Note:** After type erasure, you can only check `available()` and `failed()` - the value is lost.
-
-### Custom promise_type (Advanced)
-
-For advanced use cases, actors can define custom `promise_type`:
-
-```cpp
-class MyActor : public basic_actor<MyActor> {
-    // Custom promise_type for all coroutines in this actor
-    template<typename T>
-    using promise_type = my_custom_promise<T>;
-};
-```
-
-Requirements for custom `promise_type`:
-- `get_return_object()` must return `unique_future<T>`
-- Use `unique_future<T>::from_state()` to construct from raw state
-
-See `detail/promise_concepts.hpp` for validation concepts.
-
-### Performance
-
-Current implementation uses **exponential backoff** in `get()`:
-- Start: 1 microsecond sleep
-- Growth: Doubles each iteration (1μs → 2μs → 4μs → ... → 1ms cap)
-- CPU usage: ~0.1-1% while waiting
-
-### Complete Example
-
-```cpp
-#include <actor-zeta.hpp>
-#include <iostream>
-
-class Worker : public actor_zeta::basic_actor<Worker> {
-public:
-    // Handler as coroutine
-    actor_zeta::unique_future<int> compute(int x) {
-        co_return x * x;  // Use co_return for coroutines
-    }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<&Worker::compute>;
-
-    explicit Worker(std::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<Worker>(ptr) {}
-
-    void behavior(actor_zeta::mailbox::message* msg) {
-        if (msg->command() == actor_zeta::msg_id<Worker, &Worker::compute>) {
-            actor_zeta::dispatch(this, &Worker::compute, msg);
-        }
-    }
-};
-
-int main() {
-    auto* resource = std::pmr::get_default_resource();
-    auto worker = actor_zeta::spawn<Worker>(resource);
-
-    auto future = actor_zeta::send(
-        worker.get(),
-        actor_zeta::address_t::empty_address(),
-        &Worker::compute,
-        42
-    );
-
-    // Process message
-    worker->resume(100);
-
-    int result = std::move(future).get();
-    std::cout << "Result: " << result << "\n";  // Output: Result: 1764
-
-    return 0;
-}
-```
-
-**See [`PROMISE_FUTURE_GUIDE.md`](PROMISE_FUTURE_GUIDE.md) for:**
-- Detailed patterns and examples
-- Message lifetime & ownership rules
-- Debugging common issues
-- Known limitations
-- Performance optimization options
-
----
+**See [`PROMISE_FUTURE_GUIDE.md`](PROMISE_FUTURE_GUIDE.md) for detailed patterns.**
 
 ## Generator System
 
-**For complete guide with patterns and examples, see [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md).**
+Streaming data via `generator<T>` with `co_yield`:
 
-### Quick Overview
-
-Actor-zeta supports **streaming data** via `generator<T>` - an async generator with `co_yield`:
-
-**Define a generator method:**
 ```cpp
-class DataProducer : public basic_actor<DataProducer> {
-    // Generator method - yields values one by one
-    generator<int> stream_range(int start, int end) {
-        for (int i = start; i < end; ++i) {
-            co_yield i;  // Yield and suspend
-        }
-        // Implicit co_return at end
+generator<int> stream_range(int start, int end) {
+    for (int i = start; i < end; ++i) {
+        co_yield i;
     }
+}
 
-    using dispatch_traits = dispatch_traits<&DataProducer::stream_range>;
-
-    void behavior(mailbox::message* msg) {
-        if (msg->command() == msg_id<DataProducer, &DataProducer::stream_range>) {
-            dispatch(this, &DataProducer::stream_range, msg);
-        }
-    }
-};
-```
-
-**Use via send() API:**
-```cpp
-auto gen = send(producer.get(), sender, &DataProducer::stream_range, 0, 10);
-producer->resume(1);  // Start generator
-```
-
-### Key Features
-
-- **Move-only** - generators cannot be copied
-- **Lazy evaluation** - producer runs on-demand
-- **PMR allocation** - uses actor's memory resource
-- **Zero-copy yield** - `current()` returns reference to value in coroutine frame
-- **CAS synchronization** - thread-safe producer/consumer coordination
-
-### Generator States
-
-| State | Description |
-|-------|-------------|
-| `created` | Producer not yet started |
-| `suspended` | Producer yielded a value |
-| `exhausted` | Producer finished (co_return) |
-| `cancelled` | Consumer cancelled |
-| `detached` | Consumer detached |
-
-### State Queries
-
-```cpp
-gen.valid()              // Has valid state (not moved-from)
-gen.exhausted()          // Producer finished
-gen.is_cancelled()       // Consumer cancelled
-gen.is_safe_to_destroy() // In terminal state
-```
-
-### Consumer Pattern (in coroutine context)
-
-```cpp
-unique_future<void> consume_stream() {
-    auto gen = other_actor->stream_data();
-    while (co_await gen) {          // Wait for next value
-        auto& value = gen.current(); // Get reference to yielded value
-        process(value);
-    }
-    co_return;
+// Consumer (in coroutine)
+while (co_await gen) {
+    auto& value = gen.current();
+    process(value);
 }
 ```
 
-### Lifecycle Control
+**See [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md) for detailed patterns.**
 
-```cpp
-// Cancel - stops producer
-gen.cancel();
-assert(gen.is_cancelled());
+## Recent Changes (2025-01)
 
-// Detach - release handle, let producer run
-gen.detach();
-assert(!gen.valid());  // Handle invalid after detach
-```
+- Messages created in receiver's memory resource
+- Unified actor state management (single atomic)
+- Exponential backoff in `future.get()` (99% CPU reduction)
+- Compile-time check for `T&&` to move-only types in coroutines
 
-### Comparison: unique_future vs generator
-
-| Aspect | `unique_future<T>` | `generator<T>` |
-|--------|-------------------|----------------|
-| Pattern | Request-response | Streaming |
-| Values | Single | Multiple |
-| Keyword | `co_return` | `co_yield` |
-| Consumer | `co_await future` | `co_await gen` + `current()` |
-
-### Limitations
-
-- Requires coroutine context for `co_await gen` consumption
-- No synchronous `next()` API (by design)
-- Single consumer only (move-only)
-- No `generator<void>` support
-- No exception support (`-fno-exceptions`)
-
-### Complete Example
-
-```cpp
-#include <actor-zeta.hpp>
-#include <iostream>
-
-class DataProducer : public actor_zeta::basic_actor<DataProducer> {
-public:
-    actor_zeta::generator<int> stream_fibonacci(int count) {
-        int a = 0, b = 1;
-        for (int i = 0; i < count; ++i) {
-            co_yield a;
-            int next = a + b;
-            a = b;
-            b = next;
-        }
-    }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<&DataProducer::stream_fibonacci>;
-
-    explicit DataProducer(std::pmr::memory_resource* ptr)
-        : actor_zeta::basic_actor<DataProducer>(ptr) {}
-
-    void behavior(actor_zeta::mailbox::message* msg) {
-        if (msg->command() == actor_zeta::msg_id<DataProducer, &DataProducer::stream_fibonacci>) {
-            actor_zeta::dispatch(this, &DataProducer::stream_fibonacci, msg);
-        }
-    }
-};
-
-int main() {
-    auto* resource = std::pmr::get_default_resource();
-    auto producer = actor_zeta::spawn<DataProducer>(resource);
-
-    auto gen = actor_zeta::send(
-        producer.get(),
-        actor_zeta::address_t::empty_address(),
-        &DataProducer::stream_fibonacci,
-        10
-    );
-
-    producer->resume(1);  // Start generator
-
-    std::cout << "Generator valid: " << gen.valid() << "\n";
-
-    return 0;
-}
-```
-
-**See [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md) for:**
-- Detailed patterns and examples
-- Memory management details
-- Best practices
-- Use cases (streaming, pagination, real-time feeds)
-
----
+**See [`CHANGELOG.md`](CHANGELOG.md) for full history.**
 
 ## Additional Resources
 
-- **[CHANGELOG.md](CHANGELOG.md)** - Detailed change history and migration guides
-- **[GENERATOR_GUIDE.md](GENERATOR_GUIDE.md)** - Complete generator streaming documentation
-- **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Complete promise/future documentation
-- **[MESSAGE_CREATION_REFACTORING.md](MESSAGE_CREATION_REFACTORING.md)** - Message creation refactoring notes
-- **Examples:** `examples/` directory for working code samples
-- **Tests:** `test/` directory for usage patterns and edge cases
+- **[CHANGELOG.md](CHANGELOG.md)** - Change history
+- **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Promise/Future guide
+- **[GENERATOR_GUIDE.md](GENERATOR_GUIDE.md)** - Generator guide
+- **[docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md](docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md)** - GCC 11.4 bug workaround
+- **Examples:** `examples/` directory
+- **Tests:** `test/` directory

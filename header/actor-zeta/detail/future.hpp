@@ -415,9 +415,8 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
-            // Default constructor - GCC may call this for move-only parameters (unique_ptr).
-            // This is a known GCC issue where it doesn't pass 'this' for certain signatures.
-            // We set nullptr here; get_return_object() will abort + assert.
+            // Default constructor - required for edge cases where GCC fails to pass arguments.
+            // get_return_object() will abort if resource_ is nullptr.
             promise_type_base() noexcept
                 : resource_(nullptr)
                 , state_(nullptr) {
@@ -471,9 +470,7 @@ namespace actor_zeta {
                 return nullptr;
             }
 
-            /// Helper that guarantees non-null return or aborts.
-            /// This eliminates GCC's -Wnull-dereference false positives.
-            /// Empty args overload - aborts (out-of-line coroutine methods are not supported).
+            /// Empty args - aborts (coroutine must be inline actor method).
             [[noreturn]] static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
                 assert(false && "Coroutine must be defined inline (GCC doesn't pass 'this' for out-of-line methods)");
                 std::abort();
@@ -555,8 +552,7 @@ namespace actor_zeta {
             }
         };
 
-        // Promise for coroutine_traits specialization with explicit Actor& parameter.
-        // Uses same signature as promise_type but extracts resource from actor.
+        // Promise for std::coroutine_traits specialization with explicit Actor& parameter.
         template<typename Actor>
         struct actor_promise : promise_type_selected<actor_promise<Actor>> {
             using base_type = promise_type_selected<actor_promise<Actor>>;
@@ -566,8 +562,6 @@ namespace actor_zeta {
                 : base_type(actor.resource()) {
             }
 
-            // Use same signature as promise_type::operator new
-            // GCC 11.4 requires exact match with coroutine params
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
                 auto* res = promise_type_base<actor_promise>::extract_resource_or_abort(args...);
