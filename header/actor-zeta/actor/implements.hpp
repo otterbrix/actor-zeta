@@ -50,8 +50,13 @@ namespace actor_zeta {
 
         // Coroutines must not have const& parameters
         template<auto... ActorMethods>
-        concept all_methods_safe =
-            dispatch_traits_parser<ActorMethods...>::all_safe;
+        concept all_methods_no_const_ref =
+            dispatch_traits_parser<ActorMethods...>::all_no_const_ref;
+
+        // Coroutines must not have T&& parameters for move-only types
+        template<auto... ActorMethods>
+        concept all_methods_no_rvalue_move_only =
+            dispatch_traits_parser<ActorMethods...>::all_no_rvalue_move_only;
 
         // Signatures must match contract
         template<typename Contract, auto... ActorMethods>
@@ -68,7 +73,8 @@ namespace actor_zeta {
             is_interface<Contract> &&
             methods_count_matches<Contract, ActorMethods...> &&
             all_methods_valid<ActorMethods...> &&
-            all_methods_safe<ActorMethods...> &&
+            all_methods_no_const_ref<ActorMethods...> &&
+            all_methods_no_rvalue_move_only<ActorMethods...> &&
             signatures_compatible<Contract, ActorMethods...>;
 
     } // namespace detail

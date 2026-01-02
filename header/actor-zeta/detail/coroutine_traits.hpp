@@ -35,26 +35,3 @@ struct std::coroutine_traits<actor_zeta::unique_future<T>, Actor, Args...> {
         "Check that get_return_object() returns unique_future<T>."
     );
 };
-
-// std::coroutine_traits specialization for actors WITHOUT custom promise_type
-// but WITH resource() method.
-//
-// This ensures GCC passes Actor& to operator new and promise constructor
-// even for methods with move-only parameters (GCC bug workaround).
-//
-// GCC has a known issue where it doesn't pass coroutine arguments to
-// operator new and promise constructor for methods with rvalue reference
-// parameters to move-only types (e.g., std::unique_ptr<T>&&).
-//
-// This specialization forces GCC to use actor_promise<Actor> which
-// explicitly requires Actor& as its first parameter, ensuring the
-// actor's memory resource is always available for coroutine frame allocation.
-//
-// See: docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md for detailed analysis.
-template<typename T, typename Actor, typename... Args>
-    requires actor_zeta::detail::has_resource_method<std::remove_reference_t<Actor>>
-          && (!actor_zeta::detail::has_custom_promise_type<std::remove_reference_t<Actor>>)
-struct std::coroutine_traits<actor_zeta::unique_future<T>, Actor&, Args...> {
-    using actor_type = std::remove_reference_t<Actor>;
-    using promise_type = typename actor_zeta::unique_future<T>::template actor_promise<actor_type>;
-};

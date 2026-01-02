@@ -555,38 +555,27 @@ namespace actor_zeta {
             }
         };
 
-        // Actor-aware promise for coroutine_traits specialization.
-        // This promise explicitly takes Actor& as first parameter,
-        // which forces GCC to pass it even for move-only method parameters.
-        // Uses CRTP to pass itself as the promise type.
+        // Promise for coroutine_traits specialization with explicit Actor& parameter.
+        // Uses same signature as promise_type but extracts resource from actor.
         template<typename Actor>
         struct actor_promise : promise_type_selected<actor_promise<Actor>> {
             using base_type = promise_type_selected<actor_promise<Actor>>;
 
-            // Constructor explicitly takes Actor& - GCC must pass it
             template<typename... Args>
             actor_promise(Actor& actor, Args&&...) noexcept
                 : base_type(actor.resource()) {
             }
 
-            // operator new explicitly takes Actor& - GCC must pass it
-            // Coroutine parameters are passed as lvalues to operator new
+            // Use same signature as promise_type::operator new
+            // GCC 11.4 requires exact match with coroutine params
             template<typename... Args>
-            static void* operator new(std::size_t size, Actor& actor, Args&&...) {
-                return detail::allocate_coro_frame(actor.resource(), size);
-            }
-
-            // Fallback for when variadic doesn't match
-            static void* operator new(std::size_t size, Actor& actor) {
-                return detail::allocate_coro_frame(actor.resource(), size);
+            static void* operator new(std::size_t size, const Args&... args) {
+                auto* res = promise_type_base<actor_promise>::extract_resource_or_abort(args...);
+                return detail::allocate_coro_frame(res, size);
             }
 
             template<typename... Args>
-            static void operator delete(void* ptr, std::size_t size, Actor&, Args&&...) noexcept {
-                detail::deallocate_coro_frame(ptr, size);
-            }
-
-            static void operator delete(void* ptr, std::size_t size, Actor&) noexcept {
+            static void operator delete(void* ptr, std::size_t size, const Args&...) noexcept {
                 detail::deallocate_coro_frame(ptr, size);
             }
 
