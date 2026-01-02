@@ -3,14 +3,15 @@
 #include <concepts>
 #include <cstdint>
 
+#include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
-#include <actor-zeta/detail/generator.hpp>
+#include <actor-zeta/detail/forwards.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
-#include <actor-zeta/detail/type_list.hpp>
-#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/mailbox/id.hpp>
 
 namespace actor_zeta {
+
+    // Method map entry
 
     template<auto MethodPtr>
     struct method_map_entry {};
@@ -26,6 +27,16 @@ namespace actor_zeta {
         template<typename... Args>
         concept has_any_const_lvalue_ref = (const_lvalue_ref<Args> || ...);
 
+        // Detects T&& to move-only type. Use T instead - see docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
+        template<typename T>
+        concept rvalue_ref_to_move_only =
+            std::is_rvalue_reference_v<T> &&
+            std::is_move_constructible_v<std::remove_reference_t<T>> &&
+            !std::is_copy_constructible_v<std::remove_reference_t<T>>;
+
+        template<typename... Args>
+        concept has_any_rvalue_ref_to_move_only = (rvalue_ref_to_move_only<Args> || ...);
+
         namespace type_list_check {
             template<typename ArgsList>
             struct has_const_ref_impl;
@@ -34,10 +45,21 @@ namespace actor_zeta {
             struct has_const_ref_impl<type_traits::type_list<Args...>> {
                 static constexpr bool value = has_any_const_lvalue_ref<Args...>;
             };
+
+            template<typename ArgsList>
+            struct has_rvalue_ref_move_only_impl;
+
+            template<typename... Args>
+            struct has_rvalue_ref_move_only_impl<type_traits::type_list<Args...>> {
+                static constexpr bool value = has_any_rvalue_ref_to_move_only<Args...>;
+            };
         }
 
         template<typename ArgsList>
         concept type_list_has_const_lvalue_ref = type_list_check::has_const_ref_impl<ArgsList>::value;
+
+        template<typename ArgsList>
+        concept type_list_has_rvalue_ref_move_only = type_list_check::has_rvalue_ref_move_only_impl<ArgsList>::value;
 
         template<auto MethodPtr>
         struct method_return_type_check {
@@ -55,26 +77,99 @@ namespace actor_zeta {
             using result_type = typename trait::result_type;
             using args_types = typename trait::args_types;
 
-            static constexpr bool is_coroutine = type_traits::is_unique_future_v<result_type>;
+            static constexpr bool is_coroutine =
+                type_traits::is_unique_future_v<result_type> ||
+                type_traits::is_generator_v<result_type>;
             static constexpr bool has_const_ref = type_list_has_const_lvalue_ref<args_types>;
-            static constexpr bool is_safe = !is_coroutine || !has_const_ref;
+            static constexpr bool has_rvalue_ref_move_only = type_list_has_rvalue_ref_move_only<args_types>;
+
+            // Safe if: not a coroutine, or (no const& and no T&& to move-only)
+            static constexpr bool no_const_ref = !is_coroutine || !has_const_ref;
+            static constexpr bool no_rvalue_move_only = !is_coroutine || !has_rvalue_ref_move_only;
+        };
+
+        // Actor/Interface detection concepts
+
+        template<typename T>
+        concept has_dispatch_traits = requires {
+            typename T::dispatch_traits;
+            typename T::dispatch_traits::methods;
+        };
+
+        template<typename T>
+        concept has_mailbox = requires(T* t) {
+            { t->mailbox() };
+        };
+
+        /// Interface: has dispatch_traits but no mailbox (pure contract)
+        template<typename T>
+        concept is_interface = has_dispatch_traits<T> && !has_mailbox<T>;
+
+        /// Actor: has both dispatch_traits and mailbox (concrete implementation)
+        template<typename T>
+        concept is_actor = has_dispatch_traits<T> && has_mailbox<T>;
+
+    } // namespace detail
+
+    // dispatch_traits implementation
+
+    namespace detail {
+        // Helper to extract methods from variadic pack
+        template<auto... MethodPtrs>
+        struct dispatch_traits_parser {
+            using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
+
+            static constexpr bool all_valid =
+                (method_return_type_check<MethodPtrs>::is_valid && ...);
+            static constexpr bool all_no_const_ref =
+                (coroutine_parameter_check<MethodPtrs>::no_const_ref && ...);
+            static constexpr bool all_no_rvalue_move_only =
+                (coroutine_parameter_check<MethodPtrs>::no_rvalue_move_only && ...);
+        };
+
+        template<auto First>
+        struct dispatch_traits_parser<First> {
+            using methods = type_traits::type_list<method_map_entry<First>>;
+
+            static constexpr bool all_valid = method_return_type_check<First>::is_valid;
+            static constexpr bool all_no_const_ref = coroutine_parameter_check<First>::no_const_ref;
+            static constexpr bool all_no_rvalue_move_only = coroutine_parameter_check<First>::no_rvalue_move_only;
         };
     } // namespace detail
 
-    template<auto... MethodPtrs>
+    /// Dispatch traits - list of method pointers for an actor/interface.
+    /// Usage:
+    ///   dispatch_traits<&Actor::method1, &Actor::method2>
+    template<auto... Args>
     struct dispatch_traits {
-        using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
+    private:
+        using parser = detail::dispatch_traits_parser<Args...>;
+
+    public:
+        using methods = typename parser::methods;
 
         static_assert(
-            (detail::method_return_type_check<MethodPtrs>::is_valid && ...),
+            parser::all_valid,
             "All actor methods must return unique_future<T> or generator<T>. "
             "Raw void or value returns are not allowed. "
             "All actor methods must be coroutines using co_return or co_yield.");
 
         static_assert(
-            (detail::coroutine_parameter_check<MethodPtrs>::is_safe && ...),
+            parser::all_no_const_ref,
             "Coroutine methods must not have const& parameters. "
             "After co_await, message is destroyed and const& becomes dangling. Use by-value instead.");
+
+        static_assert(
+            parser::all_no_rvalue_move_only,
+            "Coroutine methods must not have T&& parameters for move-only types (e.g., std::unique_ptr<T>&&). "
+            "GCC 11.4 has a bug where operator new doesn't receive arguments for such signatures. "
+            "Use by-value instead: T (not T&&). See docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md");
+    };
+
+    // Empty dispatch_traits (no methods)
+    template<>
+    struct dispatch_traits<> {
+        using methods = type_traits::type_list<>;
     };
 
     namespace detail {
@@ -142,6 +237,10 @@ namespace actor_zeta {
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
         auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
             -> dispatch_result_t<Actor, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
+
+        template<typename Interface, auto MethodPtr, uint64_t ActionId, typename Sender, typename... Args>
+        auto dispatch_method_impl_address(actor::address_t target, Sender sender, Args&&... args)
+            -> dispatch_result_t<Interface, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
     }
 
     template<typename Actor, typename Method>
@@ -215,6 +314,77 @@ namespace actor_zeta {
             auto* actor = static_cast<Actor*>(target.get());
             return dispatch_impl<Actor, Method, MethodPtrs...>(
                 method, actor, sender,
+                std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
+                std::forward<Args>(args)...);
+        }
+    };
+
+    // runtime_dispatch_helper_address - for interface polymorphism via address_t
+
+    template<typename Interface, typename Method, typename MethodList>
+    struct runtime_dispatch_helper_address;
+
+    template<typename Interface, typename Method>
+    struct runtime_dispatch_helper_address<Interface, Method, type_traits::type_list<>> {
+        template<typename Sender, typename... Args>
+        static auto dispatch(Method method, actor::address_t target, Sender sender, Args&&... args)
+            -> detail::dispatch_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
+            detail::ignore_unused(method, target, sender, sizeof...(args));
+            assert(false && "Method not found in dispatch_traits");
+            std::abort();
+        }
+    };
+
+    template<typename Interface, typename Method, typename Sender, typename... Args>
+    struct dispatch_one_impl_address {
+        using result_type = typename type_traits::callable_trait<Method>::result_type;
+        using dispatch_return_type = detail::dispatch_result_t<Interface, result_type>;
+
+        template<std::size_t... Is>
+        static auto dispatch(Method method, actor::address_t target, Sender sender, std::index_sequence<>, Args&&... args)
+            -> dispatch_return_type {
+            detail::ignore_unused(method, target, sender, sizeof...(args));
+            assert(false && "Method not found in dispatch_traits");
+            std::abort();
+        }
+
+        template<auto FirstMethod, auto... RestMethods, std::size_t FirstIndex, std::size_t... RestIndices>
+        static auto dispatch(Method method, actor::address_t target, Sender sender,
+                             std::index_sequence<FirstIndex, RestIndices...>, Args&&... args)
+            -> dispatch_return_type {
+            if constexpr (std::same_as<Method, decltype(FirstMethod)>) {
+                if (method == FirstMethod) {
+                    return detail::dispatch_method_impl_address<Interface, FirstMethod, FirstIndex>(
+                        target, sender, std::forward<Args>(args)...);
+                }
+            }
+
+            return dispatch<RestMethods...>(
+                method, target, sender,
+                std::index_sequence<RestIndices...>{},
+                std::forward<Args>(args)...);
+        }
+    };
+
+    template<typename Interface, typename Method, auto... MethodPtrs, typename Sender, typename... Args, std::size_t... Is>
+    static auto dispatch_impl_address(Method method, actor::address_t target, Sender sender, std::index_sequence<Is...>, Args&&... args)
+        -> detail::dispatch_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
+        return dispatch_one_impl_address<Interface, Method, Sender, Args...>::template dispatch<MethodPtrs...>(
+            method, target, sender,
+            std::index_sequence<Is...>{},
+            std::forward<Args>(args)...);
+    }
+
+    template<typename Interface, typename Method, auto... MethodPtrs>
+    struct runtime_dispatch_helper_address<Interface, Method, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
+        using result_type = typename type_traits::callable_trait<Method>::result_type;
+        using dispatch_return_type = detail::dispatch_result_t<Interface, result_type>;
+
+        template<typename Sender, typename... Args>
+        static auto dispatch(Method method, actor::address_t target, Sender sender, Args&&... args)
+            -> dispatch_return_type {
+            return dispatch_impl_address<Interface, Method, MethodPtrs...>(
+                method, target, sender,
                 std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
                 std::forward<Args>(args)...);
         }

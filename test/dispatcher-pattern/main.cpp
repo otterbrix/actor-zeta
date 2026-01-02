@@ -64,11 +64,11 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
     storage->resume(1);
 
     // 4. Send poll to dispatcher to trigger behavior() and poll_pending()
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // 5. Send poll to client to trigger behavior() and poll_pending()
-    send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
     client->resume(1);
 
     // Check result
@@ -108,7 +108,7 @@ TEST_CASE("dispatcher-pattern: error handling") {
     dispatcher->resume(1);
 
     // Send poll to client to trigger poll_pending()
-    send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
     client->resume(1);
 
     // Check result
@@ -142,9 +142,9 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future1.available());
@@ -163,9 +163,9 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future2.available());
@@ -184,9 +184,9 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future3.available());
@@ -219,9 +219,9 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future.available());
@@ -266,9 +266,9 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
         client->resume(1);
         dispatcher->resume(1);
         storage->resume(1);
-        send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+        (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
         dispatcher->resume(1);
-        send(client.get(), address_t::empty_address(), &client_t::poll);
+        (void)send(client.get(), address_t::empty_address(), &client_t::poll);
         client->resume(1);
 
         future_available = future.available();
@@ -319,7 +319,7 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -331,7 +331,7 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
     REQUIRE(cursor->is_open);
 
     // Cleanup
-    send(dispatcher.get(), address_t::empty_address(),
+    (void)send(dispatcher.get(), address_t::empty_address(),
          &manager_dispatcher_t::close_cursor, session);
     dispatcher->resume(1);
 
@@ -393,7 +393,7 @@ TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -432,14 +432,14 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
     storage->resume(1);
 
     // Poll to resume after first co_await
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Step 2
     storage->resume(1);
 
     // Poll to complete
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -472,7 +472,7 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -514,22 +514,22 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
     storage->resume(1);
 
     // Poll - first co_await ready
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Poll - second co_await
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Poll - third co_await
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Nested coroutine get_aggregate_detail
     // total = 400 > 200, so extra co_await
     storage->resume(1);
 
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -565,7 +565,7 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
     dispatcher->resume(1);
     storage->resume(1);
 
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -660,9 +660,9 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
             client->resume(1);
             dispatcher->resume(1);
             storage->resume(1);
-            send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+            (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
             dispatcher->resume(1);
-            send(client.get(), address_t::empty_address(), &client_t::poll);
+            (void)send(client.get(), address_t::empty_address(), &client_t::poll);
             client->resume(1);
 
             results[i].available = future.available();
@@ -775,7 +775,7 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
     storage->resume(1);
 
     // Poll to resume dispatcher after storage returns
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -805,7 +805,7 @@ TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -841,7 +841,7 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
     storage->resume(1);
 
     // Poll to resume lambda-coroutine, then outer coroutine
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -872,7 +872,7 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -899,7 +899,7 @@ TEST_CASE("database: create_cursor_from_query - lambda-coroutine returns unique_
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -925,7 +925,7 @@ TEST_CASE("database: validate_and_execute - chained lambda-coroutines") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -978,11 +978,11 @@ TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
     storage->resume(1);
     storage->resume(1);
     // Poll after each storage completes to resume lambda-coroutines
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -1090,7 +1090,7 @@ TEST_CASE("database: execute_with_retry - success without retry") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -1115,7 +1115,7 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());

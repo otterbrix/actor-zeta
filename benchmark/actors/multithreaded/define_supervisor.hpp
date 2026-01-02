@@ -53,7 +53,7 @@ public:
             }
         } else if (actor_0_) {
             // Synchronous mode (no scheduler)
-            auto future = actor_zeta::send(actor_0_.get(), this->address(), &Actor::start);
+            actor_zeta::detail::ignore_unused(actor_zeta::send(actor_0_.get(), this->address(), &Actor::start));
             actor_0_->resume(1);
             actor_1_->resume(1);
             actor_0_->resume(1);
@@ -78,19 +78,9 @@ public:
         &simple_supervisor::send
     >;
 
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return this->template enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* ctx) { behavior(ctx); },
-            std::forward<Args>(args)...
-        );
+    std::pair<actor_zeta::detail::enqueue_result, bool> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {actor_zeta::detail::enqueue_result::success, false};
     }
 
 protected:

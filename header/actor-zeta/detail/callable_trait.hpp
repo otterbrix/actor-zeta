@@ -3,7 +3,6 @@
 #include <actor-zeta/detail/type_list.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 #include <concepts>
-#include <functional>
 
 namespace actor_zeta { namespace type_traits {
 
@@ -15,7 +14,6 @@ namespace actor_zeta { namespace type_traits {
         using result_type = R;
         using args_types = type_list<Args...>;
         using fun_sig = R(Args...);
-        using fun_type = std::function<R(Args...)>;
         static constexpr size_t number_of_arguments = type_list_size_v<args_types>;
     };
 
@@ -63,7 +61,6 @@ namespace actor_zeta { namespace type_traits {
         using type = callable_trait<T>;
         using result_type = typename type::result_type;
         using args_types = typename type::args_types;
-        using fun_type = typename type::fun_type;
         using fun_sig = typename type::fun_sig;
         static constexpr size_t number_of_arguments = type_list_size_v<args_types>;
     };
@@ -74,7 +71,6 @@ namespace actor_zeta { namespace type_traits {
         using class_type = typename type::class_type;
         using result_type = typename type::result_type;
         using args_types = typename type::args_types;
-        using fun_type = typename type::fun_type;
         using fun_sig = typename type::fun_sig;
         static constexpr size_t number_of_arguments = type_list_size_v<args_types>;
     };

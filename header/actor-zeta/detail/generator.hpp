@@ -283,8 +283,10 @@ struct next_awaiter {
         if (state_->is_created()) {
             auto producer = state_->take_producer_handle();
             if (producer && !producer.done()) {
-                state_->try_set_consumer_waiting();
-                return producer;
+                if (state_->try_set_consumer_waiting()) {
+                    return producer;
+                }
+                // CAS failed - fallthrough to general logic below
             }
         }
 
@@ -319,6 +321,8 @@ struct final_awaiter {
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<>) noexcept {
+        // state_ is guaranteed non-null here because get_return_object()
+        // always sets it before any suspension point.
         state_->set_exhausted();
 
         auto* linked = state_->linked_state();
@@ -357,10 +361,8 @@ struct generator_future_awaiter {
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
-        // Store generator coroutine for resumption
         gen_state_->set_producer_handle(caller);
 
-        // Set continuation on future's state
         auto* future_state = future_.internal_state();
         if (future_state) {
             future_state->set_coroutine(caller);
@@ -390,10 +392,12 @@ struct generator_promise_type {
     std::pmr::memory_resource* resource_ = nullptr;
     generator_state<T>* state_ = nullptr;
 
+    // Default constructor - GCC may call this for move-only parameters (unique_ptr).
+    // This is a known GCC issue where it doesn't pass 'this' for certain signatures.
+    // We set nullptr here; get_return_object() will abort + assert.
     generator_promise_type() noexcept
         : resource_(nullptr)
         , state_(nullptr) {
-        assert(false && "generator can only be created as actor method");
     }
 
     template<typename First, typename... Args>
@@ -401,6 +405,10 @@ struct generator_promise_type {
         : resource_(extract_resource_from_args(std::forward<std::remove_reference_t<First>>(first)))
         , state_(nullptr) {
         assert(resource_ != nullptr && "generator requires actor with resource()");
+        // Fallback to default resource if extraction failed
+        if (!resource_) {
+            resource_ = std::pmr::get_default_resource();
+        }
     }
 
     generator<T> get_return_object() noexcept;
@@ -446,9 +454,7 @@ struct generator_promise_type {
     }
 
     void return_void() noexcept {
-        if (state_) {
-            state_->set_exhausted();
-        }
+        state_->set_exhausted();
     }
 
     void unhandled_exception() noexcept {

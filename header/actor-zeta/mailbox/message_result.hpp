@@ -4,8 +4,6 @@
 #include <actor-zeta/detail/generator.hpp>
 #include <actor-zeta/mailbox/message.hpp>
 
-#include <actor-zeta/detail/type_traits.hpp>
-
 namespace actor_zeta { namespace mailbox {
 
     template<typename T>

@@ -127,23 +127,6 @@ public:
         &supervisor_actor::check_status
     >;
 
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
-    }
-
-protected:
-
 private:
     std::pmr::memory_resource* resource_;
     actor_zeta::scheduler::sharing_scheduler* scheduler_;
@@ -165,53 +148,67 @@ int main() {
     std::cerr << std::endl;
 
     std::cerr << "--- Creating Workers ---" << std::endl;
-    for (int i = 1; i <= 3; ++i) {
-        actor_zeta::send(
-            supervisor.get(),
-            actor_zeta::address_t::empty_address(),
-            &supervisor_actor::create_worker,
-            std::string("Worker-") + std::to_string(i));
+    {
+        std::vector<actor_zeta::unique_future<void>> create_futures;
+        create_futures.reserve(3);
+        for (int i = 1; i <= 3; ++i) {
+            create_futures.push_back(actor_zeta::send(
+                supervisor.get(),
+                actor_zeta::address_t::empty_address(),
+                &supervisor_actor::create_worker,
+                std::string("Worker-") + std::to_string(i)));
+        }
+        // Wait for all workers to be created before assigning tasks
+        for (auto& f : create_futures) {
+            std::move(f).get();
+        }
     }
     std::cerr << std::endl;
 
     std::cerr << "--- Assigning Tasks ---" << std::endl;
-    std::vector<std::string> tasks = {
-        "Parse config file",
-        "Process HTTP request",
-        "Update database",
-        "Send notification",
-        "Generate report",
-        "Clean temp files"
-    };
+    {
+        std::vector<std::string> tasks = {
+            "Parse config file",
+            "Process HTTP request",
+            "Update database",
+            "Send notification",
+            "Generate report",
+            "Clean temp files"
+        };
 
-    for (const auto& task : tasks) {
-        actor_zeta::send(
-            supervisor.get(),
-            actor_zeta::address_t::empty_address(),
-            &supervisor_actor::assign_task,
-            task);
+        std::vector<actor_zeta::unique_future<void>> task_futures;
+        task_futures.reserve(tasks.size());
+        for (const auto& task : tasks) {
+            task_futures.push_back(actor_zeta::send(
+                supervisor.get(),
+                actor_zeta::address_t::empty_address(),
+                &supervisor_actor::assign_task,
+                task));
+        }
+        // Wait for all tasks to be assigned
+        for (auto& f : task_futures) {
+            std::move(f).get();
+        }
     }
     std::cerr << std::endl;
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
     std::cerr << "--- Checking Status ---" << std::endl;
     {
-        actor_zeta::send(
+        auto status_future = actor_zeta::send(
             supervisor.get(),
             actor_zeta::address_t::empty_address(),
             &supervisor_actor::check_status);
+        std::move(status_future).get();
     }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     std::cerr << std::endl;
     std::cerr << "--- Stopping ---" << std::endl;
     {
-        actor_zeta::send(
+        auto stop_future = actor_zeta::send(
             supervisor.get(),
             actor_zeta::address_t::empty_address(),
             &supervisor_actor::stop_workers);
+        std::move(stop_future).get();
     }
 
     scheduler->stop();

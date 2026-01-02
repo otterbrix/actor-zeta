@@ -21,6 +21,15 @@ struct dummy_data {
     std::string name{"default_name"};
 };
 
+// Verify decay_t<T&&> == decay_t<T> for RTT compatibility
+static_assert(
+    std::is_same_v<
+        actor_zeta::type_traits::decay_t<std::unique_ptr<dummy_data>&&>,
+        actor_zeta::type_traits::decay_t<std::unique_ptr<dummy_data>>
+    >,
+    "decay_t<T&&> must equal decay_t<T> for RTT compatibility"
+);
+
 class dummy_supervisor final : public actor_zeta::actor::actor_mixin<dummy_supervisor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
@@ -38,48 +47,30 @@ public:
         return executor_.get();
     }
 
-    actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data);
+    // By-value for move-only types (GCC 11.4 bug workaround). See docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
+    actor_zeta::unique_future<void> check(std::unique_ptr<dummy_data> data, dummy_data expected_data) {
+        REQUIRE(data != nullptr);
+        REQUIRE(data->number == expected_data.number);
+        REQUIRE(data->name.size() == expected_data.name.size());
+        REQUIRE(data->name == expected_data.name);
+        co_return;
+    }
 
     void behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::check>) {
-            dispatch(this, &dummy_supervisor::check, msg);
+            actor_zeta::dispatch(this, &dummy_supervisor::check, msg);
         }
-    }
-
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-        return enqueue_sync_impl<R>(
-            sender,
-            cmd,
-            [this](auto* msg) { behavior(msg); },
-            std::forward<Args>(args)...
-        );
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &dummy_supervisor::check
     >;
 
-protected:
-
 private:
     std::pmr::memory_resource* resource_;
     std::unique_ptr<actor_zeta::test::scheduler_test_t> executor_;
     std::set<int64_t> ids_;
 };
-
-actor_zeta::unique_future<void> dummy_supervisor::check(std::unique_ptr<dummy_data>&& data, dummy_data expected_data) {
-    REQUIRE(data != nullptr);
-    REQUIRE(data->number == expected_data.number);
-    REQUIRE(data->name.size() == expected_data.name.size());
-    REQUIRE(data->name == expected_data.name);
-    co_return;
-}
 
 TEST_CASE("base move test") {
     auto* mr_ptr =std::pmr::get_default_resource();

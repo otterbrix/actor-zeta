@@ -9,7 +9,6 @@
 #include <thread>
 #include <type_traits>
 
-#include <actor-zeta/config.hpp>
 #include <actor-zeta/detail/coroutine.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
 #include <actor-zeta/detail/intrusive_ptr.hpp>
@@ -46,212 +45,51 @@ namespace actor_zeta { namespace detail {
 
     class future_state_base {
     public:
-        explicit future_state_base(std::pmr::memory_resource* res) noexcept
-            : resource_(res)
-            , state_(future_state_enum::pending)
-            , refcount_(1)
-            , owning_coro_handle_()
-            , resume_coro_handle_()
-            , owns_coroutine_(false)
-#ifndef NDEBUG
-            , magic_(kMagicAlive)
-            , generation_(next_generation())
-#endif
-        {
-        }
+        explicit future_state_base(std::pmr::memory_resource* res) noexcept;
 
         future_state_base(const future_state_base&) = delete;
         future_state_base& operator=(const future_state_base&) = delete;
 
-        virtual ~future_state_base() noexcept {
-            if (owns_coroutine_ && owning_coro_handle_) {
-                owning_coro_handle_.destroy();
-            }
-#ifndef NDEBUG
-            assert(is_alive() && "Double delete detected!");
-            magic_.store(kMagicDead, std::memory_order_release);
-#endif
-        }
+        virtual ~future_state_base() noexcept;
 
-        void add_ref() noexcept {
-#ifndef NDEBUG
-            assert(is_alive() && "Use-after-free: add_ref() on deleted state!");
-            int old_value = refcount_.fetch_add(1, std::memory_order_relaxed);
-            assert(old_value > 0 && "Refcount underflow!");
-            assert(old_value < 1000000 && "Refcount overflow!");
-#else
-            refcount_.fetch_add(1, std::memory_order_relaxed);
-#endif
-        }
+        void add_ref() noexcept;
+        void release() noexcept;
 
-        void release() noexcept {
-            int old_value = refcount_.fetch_sub(1, std::memory_order_release);
-#ifndef NDEBUG
-            assert(old_value > 0 && "Refcount underflow!");
-#endif
-            if (old_value == 1) {
-                std::atomic_thread_fence(std::memory_order_acquire);
-                destroy();
-            }
-        }
+        [[nodiscard]] bool is_ready() const noexcept;
+        [[nodiscard]] bool is_failed() const noexcept;
+        [[nodiscard]] bool is_error() const noexcept;
 
-        [[nodiscard]] bool is_ready() const noexcept {
-            auto s = state_.load(std::memory_order_acquire);
-            return s == future_state_enum::ready || s == future_state_enum::consumed;
-        }
+        bool error(std::error_code ec) noexcept;
+        [[nodiscard]] std::error_code error() const noexcept;
 
-        [[nodiscard]] bool is_failed() const noexcept {
-            return state_.load(std::memory_order_acquire) >= future_state_enum::error;
-        }
+        void wait_until_ready() const noexcept;
 
-        [[nodiscard]] bool is_error() const noexcept {
-            return state_.load(std::memory_order_acquire) == future_state_enum::error;
-        }
+        [[nodiscard]] bool is_cancelled() const noexcept;
+        bool cancelled() noexcept;
 
-        bool error(std::error_code ec) noexcept {
-            auto expected = future_state_enum::pending;
-            if (state_.compare_exchange_strong(expected, future_state_enum::error,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_acquire)) {
-                error_code_ = ec;
-#if HAVE_ATOMIC_WAIT
-                state_.notify_one();
-#endif
-                return true;
-            }
-            return false;
-        }
+        [[nodiscard]] bool is_pending() const noexcept;
 
-        [[nodiscard]] std::error_code error() const noexcept {
-            return error_code_;
-        }
+        [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept;
 
-        void wait_until_ready() const noexcept {
-#if HAVE_ATOMIC_WAIT
-            while (!is_available()) {
-                auto current = state_.load(std::memory_order_acquire);
-                if (current == future_state_enum::pending ||
-                    current == future_state_enum::setting) {
-                    state_.wait(current, std::memory_order_acquire);
-                }
-            }
-#else
-            int spin_count = 0;
-            constexpr int yield_limit = 100;
-            while (!is_available()) {
-                if (spin_count < yield_limit) {
-                    std::this_thread::yield();
-                    ++spin_count;
-                } else {
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
-                }
-            }
-#endif
-        }
-
-        [[nodiscard]] bool is_cancelled() const noexcept {
-            return state_.load(std::memory_order_acquire) == future_state_enum::cancelled;
-        }
-
-        bool cancelled() noexcept {
-            auto expected = future_state_enum::pending;
-            if (state_.compare_exchange_strong(expected, future_state_enum::cancelled,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_acquire)) {
-                error_code_ = std::make_error_code(std::errc::operation_canceled);
-#if HAVE_ATOMIC_WAIT
-                state_.notify_one();
-#endif
-                return true;
-            }
-            return false;
-        }
-
-        [[nodiscard]] bool is_pending() const noexcept {
-            auto s = state_.load(std::memory_order_acquire);
-            return s == future_state_enum::pending ||
-                   s == future_state_enum::setting ||
-                   s == future_state_enum::consuming;
-        }
-
-        [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept {
-            return resource_;
-        }
-
-        void resume_coroutine() noexcept {
-            if (owns_coroutine_ && owning_coro_handle_ && !owning_coro_handle_.done()) {
-                owning_coro_handle_.resume();
-                return;
-            }
-            if (resume_coro_handle_ && !resume_coro_handle_.done()) {
-                resume_coro_handle_.resume();
-            }
-        }
-
-        void set_coroutine(coroutine_handle<> handle) noexcept {
-            resume_coro_handle_ = handle;
-        }
-
-        void set_coroutine_owning(coroutine_handle<> handle) noexcept {
-            owning_coro_handle_ = handle;
-            owns_coroutine_ = true;
-        }
+        void resume_coroutine() noexcept;
+        void set_coroutine(coroutine_handle<> handle) noexcept;
+        void set_coroutine_owning(coroutine_handle<> handle) noexcept;
 
         virtual bool set_forward_target_void(future_state_base* target) noexcept = 0;
 
-        void set_awaiting_on(future_state_base* target) noexcept {
-            awaiting_on_ = target;
-        }
+        void set_awaiting_on(future_state_base* target) noexcept;
+        [[nodiscard]] future_state_base* get_awaiting_on() const noexcept;
+        void clear_awaiting_on() noexcept;
 
-        [[nodiscard]] future_state_base* get_awaiting_on() const noexcept {
-            return awaiting_on_.get();
-        }
-
-        void clear_awaiting_on() noexcept {
-            awaiting_on_ = nullptr;
-        }
-
-        [[nodiscard]] coroutine_handle<> take_continuation() noexcept {
-            auto h = resume_coro_handle_;
-            resume_coro_handle_ = {};
-            return h;
-        }
+        [[nodiscard]] coroutine_handle<> take_continuation() noexcept;
 
     protected:
-        [[nodiscard]] bool is_available() const noexcept {
-            return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
-        }
+        [[nodiscard]] bool is_available() const noexcept;
+        void try_resume_continuation() noexcept;
 
-        void try_resume_continuation() noexcept {
-            if (!owns_coroutine_ && resume_coro_handle_ && !resume_coro_handle_.done()) {
-                auto cont = resume_coro_handle_;
-                resume_coro_handle_ = {};
-                cont.resume();
-            }
-        }
-
-
-        [[nodiscard]] uint8_t load_state_raw() const noexcept {
-            return static_cast<uint8_t>(state_.load(std::memory_order_acquire));
-        }
-
-        void store_state_raw(uint8_t s) noexcept {
-            state_.store(static_cast<future_state_enum>(s), std::memory_order_release);
-#if HAVE_ATOMIC_WAIT
-            state_.notify_one();
-#endif
-        }
-
-        bool cas_state_raw(uint8_t& expected, uint8_t desired) noexcept {
-            auto exp_enum = static_cast<future_state_enum>(expected);
-            bool result = state_.compare_exchange_strong(
-                exp_enum,
-                static_cast<future_state_enum>(desired),
-                std::memory_order_acq_rel,
-                std::memory_order_acquire);
-            expected = static_cast<uint8_t>(exp_enum);
-            return result;
-        }
+        [[nodiscard]] uint8_t load_state_raw() const noexcept;
+        void store_state_raw(uint8_t s) noexcept;
+        bool cas_state_raw(uint8_t& expected, uint8_t desired) noexcept;
 
     public:
 #ifndef NDEBUG
@@ -261,7 +99,7 @@ namespace actor_zeta { namespace detail {
     protected:
         virtual void destroy() noexcept = 0;
 
-        std::pmr::memory_resource* resource_;
+        std::pmr::memory_resource* resource_ = nullptr;
         std::atomic<future_state_enum> state_;
         std::atomic<int> refcount_;
         intrusive_ptr<future_state_base> awaiting_on_;
@@ -276,14 +114,8 @@ namespace actor_zeta { namespace detail {
         mutable std::atomic<uint32_t> magic_;
         uint64_t generation_;
 
-        static uint64_t next_generation() {
-            static std::atomic<uint64_t> counter{0};
-            return counter.fetch_add(1, std::memory_order_relaxed);
-        }
-
-        [[nodiscard]] bool is_alive() const noexcept {
-            return magic_.load(std::memory_order_acquire) == kMagicAlive;
-        }
+        static uint64_t next_generation();
+        [[nodiscard]] bool is_alive() const noexcept;
 #endif
     };
 
@@ -597,7 +429,10 @@ namespace actor_zeta { namespace detail {
     protected:
         void destroy() noexcept override {
             this->~future_state();
-            resource_->deallocate(this, sizeof(future_state<T>), alignof(future_state<T>));
+            // GCC static analyzer false positive: -Wmaybe-uninitialized
+            if (resource_) {
+                resource_->deallocate(this, sizeof(future_state<T>), alignof(future_state<T>));
+            }
         }
 
     private:
@@ -605,12 +440,7 @@ namespace actor_zeta { namespace detail {
         std::atomic<future_state<T>*> forward_target_;
     };
 
-    inline void intrusive_ptr_add_ref(const future_state_base* p) noexcept {
-        const_cast<future_state_base*>(p)->add_ref();
-    }
-
-    inline void intrusive_ptr_release(const future_state_base* p) noexcept {
-        const_cast<future_state_base*>(p)->release();
-    }
+    void intrusive_ptr_add_ref(const future_state_base* p) noexcept;
+    void intrusive_ptr_release(const future_state_base* p) noexcept;
 
 }} // namespace actor_zeta::detail

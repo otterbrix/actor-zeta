@@ -22,14 +22,14 @@ public:
 
     actor_zeta::unique_future<void> start() {
         if (partner_) {
-            actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
+            actor_zeta::detail::ignore_unused(actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...));
         }
         co_return;
     }
 
     actor_zeta::unique_future<void> ping(Args...) {
         if (partner_) {
-            actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
+            actor_zeta::detail::ignore_unused(actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...));
         }
         co_return;
     }

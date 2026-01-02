@@ -570,7 +570,7 @@ public:
             }
             g_log.log("[%::process_batch_buffer] Processing % items", name_, b->size());
             result.committed = true;
-            result.total_rows = static_cast<int>(b->size());
+            result.total_rows = b->size();
             co_return result;
         };
         co_return co_await process(resource());
@@ -578,7 +578,7 @@ public:
 
     /// @brief Get cached value - ready immediately via promise
     unique_future<std::size_t> get_cached_value(
-            session_id_t session,
+            [[maybe_unused]] session_id_t session,
             std::string collection) {
         // Simulate cache hit - value is ready immediately
         promise<std::size_t> cache_promise(resource());

@@ -1,17 +1,11 @@
 #pragma once
 
-#include <algorithm>
 #include <chrono>
 #include <thread>
 
 #include <actor-zeta/actor/actor_mixin.hpp>
-#include <actor-zeta/config.hpp>
-#include <actor-zeta/detail/ignore_unused.hpp>
-#include <actor-zeta/detail/future.hpp>
-#include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/generator.hpp>
+#include <actor-zeta/detail/forwards.hpp>
 #include <actor-zeta/detail/memory.hpp>
-#include <actor-zeta/detail/queue/enqueue_result.hpp>
 #include <actor-zeta/scheduler/resumable.hpp>
 
 namespace actor_zeta { namespace actor {
@@ -44,7 +38,7 @@ namespace actor_zeta { namespace actor {
         if (value) {
             bits |= 0b001;
         } else {
-            bits &= ~0b001;
+            bits &= static_cast<uint8_t>(~0b001);
         }
         return static_cast<actor_state>(bits);
     }
@@ -54,7 +48,7 @@ namespace actor_zeta { namespace actor {
         if (value) {
             bits |= 0b010;
         } else {
-            bits &= ~0b010;
+            bits &= static_cast<uint8_t>(~0b010);
         }
         return static_cast<actor_state>(bits);
     }
@@ -91,7 +85,8 @@ namespace actor_zeta { namespace actor {
         } else if (attempt < kYieldPhaseEnd) {
             std::this_thread::yield();
         } else {
-            auto sleep_us = std::min(1 << (attempt - kYieldPhaseEnd), kMaxSleepMicroseconds);
+            int computed = 1 << (attempt - kYieldPhaseEnd);
+            auto sleep_us = computed < kMaxSleepMicroseconds ? computed : kMaxSleepMicroseconds;
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
         }
     }
@@ -119,94 +114,34 @@ namespace actor_zeta { namespace actor {
         template<typename T>
         using unique_future = actor_zeta::unique_future<T>;
 
-        template<typename ReturnType, typename... Args>
-        [[nodiscard("Check needs_scheduling() and call schedule() if needed")]]
-        ReturnType enqueue_impl(
-            actor::address_t sender,
-            mailbox::message_id cmd,
-            Args&&... args) {
-
-            if constexpr (type_traits::is_generator_v<ReturnType>) {
-                using value_type = typename type_traits::is_generator<ReturnType>::value_type;
-
-                auto [msg, gen] = detail::make_generator_message<value_type>(
-                    this->resource(),
-                    std::move(sender),
-                    cmd,
-                    std::forward<Args>(args)...);
-
-                if (is_destroying(state_.load(std::memory_order_acquire))) {
-                    return generator<value_type>{};
-                }
-
-                auto result = mailbox().push_back(std::move(msg));
-                bool needs_sched = false;
-
-                switch (result) {
-                    case detail::enqueue_result::unblocked_reader:
-                        needs_sched = try_schedule_after_enqueue("enqueue_impl(generator)");
-                        break;
-
-                    case detail::enqueue_result::success:
-                    case detail::enqueue_result::queue_closed:
-                        needs_sched = false;
-                        break;
-
-                    default:
-                        assert(false && "enqueue_result: unreachable");
-                        needs_sched = false;
-                        break;
-                }
-
-                detail::ignore_unused(needs_sched);
-                return std::move(gen);
-
-            } else {
-
-                static_assert(type_traits::is_unique_future_v<ReturnType>,
-                              "ReturnType must be unique_future<T>");
-                using R = typename type_traits::is_unique_future<ReturnType>::value_type;
-                static_assert(!type_traits::is_unique_future_v<R>,
-                              "R should not be unique_future (double wrapping)");
-                auto [msg, future] = detail::make_message<R>(
-                    this->resource(),
-                    std::move(sender),
-                    cmd,
-                    std::forward<Args>(args)...);
-
-                auto result_promise = msg->template get_result_promise<R>();
-
-                if (is_destroying(state_.load(std::memory_order_acquire))) {
-                    result_promise.error(std::make_error_code(std::errc::operation_canceled));
-                    return std::move(future);
-                }
-
-                auto result = mailbox().push_back(std::move(msg));
-                bool needs_sched = false;
-
-                switch (result) {
-                    case detail::enqueue_result::unblocked_reader:
-                        needs_sched = try_schedule_after_enqueue("enqueue_impl(future)");
-                        break;
-
-                    case detail::enqueue_result::success:
-                        needs_sched = false;
-                        break;
-
-                    case detail::enqueue_result::queue_closed:
-                        result_promise.error(std::make_error_code(std::errc::broken_pipe));
-                        needs_sched = false;
-                        break;
-
-                    default:
-                        assert(false && "enqueue_result: unreachable");
-                        needs_sched = false;
-                        break;
-                }
-
-                future.set_needs_scheduling(needs_sched);
-                return std::move(future);
+        /// Type-erased enqueue for address_t polymorphism
+        /// Returns: {enqueue_result, needs_scheduling}
+        [[nodiscard]]
+        std::pair<detail::enqueue_result, bool> enqueue_impl(mailbox::message_ptr msg) {
+            if (is_destroying(state_.load(std::memory_order_acquire))) {
+                return {detail::enqueue_result::queue_closed, false};
             }
+
+            auto result = mailbox().push_back(std::move(msg));
+            bool needs_sched = false;
+
+            switch (result) {
+                case detail::enqueue_result::unblocked_reader:
+                    needs_sched = try_schedule_after_enqueue("enqueue_impl");
+                    break;
+
+                case detail::enqueue_result::success:
+                case detail::enqueue_result::queue_closed:
+                    needs_sched = false;
+                    break;
+
+                default:
+                    assert(false && "enqueue_result: unreachable");
+                    needs_sched = false;
+                    break;
+            }
+
+            return {result, needs_sched};
         }
 
         scheduler::resume_info resume(size_t max_throughput) noexcept {
@@ -369,10 +304,10 @@ namespace actor_zeta { namespace actor {
                         mailbox::message* get() const noexcept { return message_.get(); }
                     };
 
-                    message_guard guard(this, std::move(msg));
+                    message_guard msg_guard(this, std::move(msg));
 
                     if (!is_destroying(state_.load(std::memory_order_acquire))) {
-                        self()->behavior(guard.get());
+                        self()->behavior(msg_guard.get());
                     }
 
                     ++handled;

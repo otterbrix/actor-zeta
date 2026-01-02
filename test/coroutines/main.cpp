@@ -297,8 +297,6 @@ TEST_CASE("Coroutine futures") {
     }
 
     SECTION("cancel works on futures") {
-        auto* resource =std::pmr::get_default_resource();
-
         // Create future via promise (clean API)
         actor_zeta::promise<int> p(resource);
         auto future_state = p.get_future();

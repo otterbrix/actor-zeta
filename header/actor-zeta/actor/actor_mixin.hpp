@@ -3,9 +3,7 @@
 #include <memory_resource>
 
 #include <actor-zeta/actor/address.hpp>
-#include <actor-zeta/detail/future.hpp>
 #include <actor-zeta/detail/ignore_unused.hpp>
-#include <actor-zeta/mailbox/make_message.hpp>
 
 namespace actor_zeta::actor {
 
@@ -98,25 +96,13 @@ namespace actor_zeta::actor {
         std::pmr::polymorphic_allocator<T> allocator() const noexcept {
             return {static_cast<const Derived*>(this)->resource()};
         }
-
-        template<typename R, typename BehaviorFunc, typename... Args>
-        unique_future<R> enqueue_sync_impl(
-            actor::address_t sender,
-            mailbox::message_id cmd,
-            BehaviorFunc&& behavior_func,
-            Args&&... args) {
+        /// Enqueue for sync processing (calls behavior() immediately)
+        /// This method is hidden by cooperative_actor::enqueue_impl for async actors
+        [[nodiscard]]
+            std::pair<detail::enqueue_result, bool> enqueue_impl(mailbox::message_ptr msg) {
             auto* derived = static_cast<Derived*>(this);
-            auto* res = derived->resource();
-
-            auto [msg, future] = detail::make_message<R>(
-                res,
-                std::move(sender),
-                cmd,
-                std::forward<Args>(args)...);
-
-            behavior_func(msg.get());
-
-            return std::move(future);
+            derived->behavior(msg.get());
+            return {detail::enqueue_result::success, false};
         }
 
     protected:

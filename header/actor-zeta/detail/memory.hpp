@@ -41,9 +41,9 @@ namespace actor_zeta { namespace pmr {
     class deleter_t final {
     public:
         explicit deleter_t(std::pmr::memory_resource* resource)
-            : resource_([](std::pmr::memory_resource* resource) {
-                assert(resource);
-                return resource;
+            : resource_([](std::pmr::memory_resource* res) {
+                assert(res);
+                return res;
             }(resource)) {}
 
         template<typename Target>

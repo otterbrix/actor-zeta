@@ -193,7 +193,7 @@ TEST_CASE("rt_tuple") {
     }
 
     SECTION("test_getSize") {
-        auto* resource =std::pmr::get_default_resource();
+        [[maybe_unused]] auto* resource = std::pmr::get_default_resource();
         test_getSize(
             static_cast<int8_t>(3457),
             static_cast<int64_t>(57),

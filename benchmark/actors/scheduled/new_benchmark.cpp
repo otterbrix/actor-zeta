@@ -25,7 +25,7 @@ public:
     actor_zeta::unique_future<void> ping(Args...) {
         ++ping_pong_counter;
         if (partner_) {
-            actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
+            actor_zeta::detail::ignore_unused(actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...));
         }
         co_return;
     }
@@ -87,7 +87,7 @@ public:
     void DoPingPong() {
         ping_pong_counter = 0;
         ping_pong_done.store(false, std::memory_order_release);
-        actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping);
+        actor_zeta::detail::ignore_unused(actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping));
         scheduler_->enqueue(actor0_.get());
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
@@ -126,7 +126,7 @@ public:
     void DoPingPong() {
         ping_pong_counter = 0;
         ping_pong_done.store(false, std::memory_order_release);
-        actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping, int64_t{});
+        actor_zeta::detail::ignore_unused(actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping, int64_t{}));
         scheduler_->enqueue(actor0_.get());
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }

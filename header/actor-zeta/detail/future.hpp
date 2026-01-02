@@ -1,19 +1,16 @@
 #pragma once
 
 #include <cassert>
-#include <chrono>
 #include <concepts>
 #include <memory_resource>
 #include <new>
-#include <thread>
 #include <type_traits>
 #include <utility>
 
 #include <actor-zeta/config.hpp>
 #include <actor-zeta/detail/coro_frame_header.hpp>
-#include <actor-zeta/detail/coroutine.hpp>
 #include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/intrusive_ptr.hpp>
+#include <actor-zeta/detail/type_traits.hpp>
 
 namespace actor_zeta {
 
@@ -265,6 +262,19 @@ namespace actor_zeta {
             return state_ && state_->is_cancelled();
         }
 
+        /// Factory method for custom promise_type implementations.
+        /// Creates unique_future from raw state pointer.
+        /// @param state Pointer to future_state (takes ownership if add_ref=false)
+        /// @param res Memory resource associated with the state
+        /// @param add_ref If true, increments refcount; if false, assumes ownership
+        [[nodiscard]] static unique_future from_state(
+            detail::future_state_base* state,
+            std::pmr::memory_resource* res,
+            bool add_ref
+        ) noexcept {
+            return unique_future(static_cast<state_type*>(state), res, add_ref);
+        }
+
         void forward_to(promise<T>& target)
             requires(!std::is_void_v<T>)
         {
@@ -340,17 +350,27 @@ namespace actor_zeta {
             , needs_scheduling_(false) {
         }
 
+        // CRTP base: PromiseDerived is the final promise type (promise_type or actor_promise<Actor>)
+        template<typename PromiseDerived>
         struct promise_type_base {
             using value_type = T;
 
             unique_future<T> get_return_object() {
                 assert(resource_ != nullptr &&
                        "Coroutine must be actor member function with resource() method");
+                if (!resource_) {
+                    std::abort();
+                }
 
                 void* mem = resource_->allocate(sizeof(coroutine_state_type), alignof(coroutine_state_type));
+                assert(mem != nullptr && "allocation failed");
+                if (!mem) {
+                    std::abort();
+                }
                 state_ = new (mem) coroutine_state_type(resource_);
 
-                auto handle = detail::coroutine_handle<struct promise_type>::from_promise(static_cast<struct promise_type&>(*this));
+                // Use CRTP: PromiseDerived is the actual promise type
+                auto handle = detail::coroutine_handle<PromiseDerived>::from_promise(static_cast<PromiseDerived&>(*this));
                 state_->set_coroutine_owning(handle);
 
                 return unique_future<T>(static_cast<state_type*>(state_), resource_, false);
@@ -364,9 +384,12 @@ namespace actor_zeta {
 
                     bool await_ready() noexcept { return false; }
 
+                    // Use type-erased handle - the parameter is unused anyway
                     detail::coroutine_handle<> await_suspend(
-                        detail::coroutine_handle<promise_type> /*h*/
+                        detail::coroutine_handle<> /*h*/
                         ) noexcept {
+                        // state_ is guaranteed non-null here because get_return_object()
+                        // always sets it before any suspension point.
                         if (auto cont = state_->take_continuation()) {
                             return cont;
                         }
@@ -382,7 +405,7 @@ namespace actor_zeta {
             auto await_transform(unique_future<U>&& future) noexcept {
                 return typename unique_future<U>::awaiter_type{future, static_cast<detail::future_state_base*>(state_)};
             }
-            
+
             template<typename U>
             auto await_transform(generator<U>& gen) noexcept {
                 return detail::next_awaiter<U>{gen.internal_state()};
@@ -392,14 +415,18 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
+            // Default constructor - required for edge cases where GCC fails to pass arguments.
+            // get_return_object() will abort if resource_ is nullptr.
             promise_type_base() noexcept
                 : resource_(nullptr)
-                , state_(nullptr) {}
+                , state_(nullptr) {
+            }
 
             template<typename First, typename... Args>
             promise_type_base(First&& first, Args&&... args) noexcept
-                : resource_(extract_resource_from_args(std::forward<First>(first), std::forward<Args>(args)...))
-                , state_(nullptr) {}
+                : resource_(extract_resource_or_abort(std::forward<First>(first), std::forward<Args>(args)...))
+                , state_(nullptr) {
+            }
 
             ~promise_type_base() noexcept = default;
 
@@ -443,55 +470,101 @@ namespace actor_zeta {
                 return nullptr;
             }
 
+            /// Empty args - aborts (coroutine must be inline actor method).
+            [[noreturn]] static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
+                assert(false && "Coroutine must be defined inline (GCC doesn't pass 'this' for out-of-line methods)");
+                std::abort();
+            }
+
+            template<typename First, typename... Rest>
+            RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
+                auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
+                assert(res != nullptr && "Coroutine must be actor member function with resource() method");
+                if (!res) {
+                    std::abort();
+                }
+                return res;
+            }
+
             std::pmr::memory_resource* resource_;
             coroutine_state_type* state_;
         };
 
-        struct promise_type_non_void : promise_type_base {
-            using promise_type_base::promise_type_base;
+        template<typename PromiseDerived>
+        struct promise_type_non_void : promise_type_base<PromiseDerived> {
+            using promise_type_base<PromiseDerived>::promise_type_base;
 
             void return_value(T&& value) noexcept {
-                assert(this->state_ && "return_value() with null state");
                 this->state_->set_value(std::forward<T>(value));
             }
 
             void return_value(const T& value) noexcept {
-                assert(this->state_ && "return_value() with null state");
                 this->state_->set_value(value);
             }
 
             void return_value(unique_future<T>&& ready_future) noexcept {
-                assert(this->state_ && "return_value() with null state");
-                assert(ready_future.valid() && "return_value() with invalid future");
-                assert(ready_future.available() && "return_value() requires READY future - use co_await first!");
                 T val = std::move(ready_future).get();
                 this->state_->set_value(std::move(val));
             }
 
             void return_value(std::error_code ec) noexcept {
-                assert(this->state_ && "return_value(error_code) with null state");
                 this->state_->error(ec);
             }
         };
 
-        struct promise_type_void : promise_type_base {
-            using promise_type_base::promise_type_base;
+        template<typename PromiseDerived>
+        struct promise_type_void : promise_type_base<PromiseDerived> {
+            using promise_type_base<PromiseDerived>::promise_type_base;
 
             void return_void() noexcept {
-                assert(this->state_ && "return_void() with null state");
                 this->state_->set_ready();
             }
         };
 
-        using promise_type_selected = std::conditional_t<is_void_type, promise_type_void, promise_type_non_void>;
+        template<typename PromiseDerived>
+        using promise_type_selected = std::conditional_t<is_void_type, promise_type_void<PromiseDerived>, promise_type_non_void<PromiseDerived>>;
 
     public:
-        struct promise_type : promise_type_selected {
-            using promise_type_selected::promise_type_selected;
+        // Forward declaration for CRTP
+        struct promise_type;
+
+        // promise_type uses CRTP to pass itself to the base
+        struct promise_type : promise_type_selected<promise_type> {
+            using promise_type_selected<promise_type>::promise_type_selected;
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
-                auto* res = promise_type_base::extract_resource_from_args(args...);
+                auto* res = promise_type_base<promise_type>::extract_resource_or_abort(args...);
+                return detail::allocate_coro_frame(res, size);
+            }
+
+            template<typename... Args>
+            static void operator delete(void* ptr, std::size_t size, const Args&...) noexcept {
+                detail::deallocate_coro_frame(ptr, size);
+            }
+
+            static void operator delete(void* ptr, std::size_t size) noexcept {
+                detail::deallocate_coro_frame(ptr, size);
+            }
+
+            static void operator delete(void* ptr) noexcept {
+                detail::deallocate_coro_frame_unsized(ptr);
+            }
+        };
+
+        // Promise for std::coroutine_traits specialization with explicit Actor& parameter.
+        template<typename Actor>
+        struct actor_promise : promise_type_selected<actor_promise<Actor>> {
+            using base_type = promise_type_selected<actor_promise<Actor>>;
+
+            template<typename... Args>
+            actor_promise(Actor& actor, Args&&...) noexcept
+                : base_type(actor.resource()) {
+            }
+
+            template<typename... Args>
+            static void* operator new(std::size_t size, const Args&... args) {
+                auto* res = promise_type_base<actor_promise>::extract_resource_or_abort(args...);
                 return detail::allocate_coro_frame(res, size);
             }
 
@@ -530,6 +603,33 @@ namespace actor_zeta {
     [[nodiscard]] unique_future<T> make_error(std::pmr::memory_resource* res, std::error_code ec) {
         promise<T> p(res);
         p.error(ec);
+        return p.get_future();
+    }
+
+    /// Create a ready future with the given value.
+    template<typename T>
+    [[nodiscard]] unique_future<T> make_ready_future(std::pmr::memory_resource* res, T&& value) {
+        assert(res && "make_ready_future: resource must not be null");
+        promise<T> p(res);
+        p.set_value(std::forward<T>(value));
+        return p.get_future();
+    }
+
+    /// Create a ready void future.
+    [[nodiscard]] inline unique_future<void> make_ready_future(std::pmr::memory_resource* res) {
+        assert(res && "make_ready_future: resource must not be null");
+        promise<void> p(res);
+        p.set_value();
+        return p.get_future();
+    }
+
+    /// Create a ready future with default-constructed value.
+    template<typename T>
+        requires(!std::is_void_v<T> && std::is_default_constructible_v<T>)
+    [[nodiscard]] unique_future<T> make_ready_future(std::pmr::memory_resource* res) {
+        assert(res && "make_ready_future: resource must not be null");
+        promise<T> p(res);
+        p.set_value(T{});
         return p.get_future();
     }
 

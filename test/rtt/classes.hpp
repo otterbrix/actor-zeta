@@ -139,8 +139,8 @@ struct throw_on_move {
 #endif
 
 struct move_constructor_counter {
-    explicit move_constructor_counter(std::size_t& move_count)
-        : move_count(move_count) {
+    explicit move_constructor_counter(std::size_t& count)
+        : move_count(count) {
     }
 
     move_constructor_counter(move_constructor_counter&& that)
@@ -152,8 +152,8 @@ struct move_constructor_counter {
 };
 
 struct destructor_counter {
-    explicit destructor_counter(std::size_t& destruct_count)
-        : destruct_count(destruct_count) {
+    explicit destructor_counter(std::size_t& count)
+        : destruct_count(count) {
     }
 
     ~destructor_counter() {
@@ -177,6 +177,7 @@ struct movable_only {
         alive = other.alive;
         other.alive = false;
         assert(alive);
+        return *this;
     }
 
     bool alive {true};

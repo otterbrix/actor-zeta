@@ -101,10 +101,11 @@ public:
     std::pmr::memory_resource* resource() const noexcept { return resource_; }
 
     void create() {
-        auto ptr = actor_zeta::spawn<collection_part_t> (resource_);
+        auto ptr = actor_zeta::spawn<collection_part_t>(resource_);
         actors_.emplace_back(std::move(ptr));
     }
 
+    // Interface methods - signatures define the contract
     actor_zeta::unique_future<void> insert(std::string, std::string) { co_return; }
     actor_zeta::unique_future<void> remove(std::string) { co_return; }
     actor_zeta::unique_future<void> update(std::string, std::string) { co_return; }
@@ -117,50 +118,74 @@ public:
         &collection_t::find
     >;
 
-    template<typename ReturnType, typename... Args>
-    ReturnType enqueue_impl(
-        actor_zeta::actor::address_t sender,
-        actor_zeta::mailbox::message_id cmd,
-        Args&&... args
-    ) {
-        using R = typename actor_zeta::type_traits::is_unique_future<ReturnType>::value_type;
-
+    // Balancer behavior: forwards messages to child actors
+    void behavior(actor_zeta::mailbox::message* msg) {
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
-            return actor_zeta::make_error<R>(resource_, std::make_error_code(std::errc::no_child_process));
+            return;
         }
 
         auto index = cursor_ % actors_.size();
         ++cursor_;
         ++count_balancer;
 
-        auto child_future = actors_[index]->template enqueue_impl<ReturnType>(
-            sender,
-            cmd,
-            std::forward<Args>(args)...
-        );
+        auto& child = actors_[index];
+        auto sender = msg->sender();
+        auto cmd = msg->command();
+        auto& args = msg->body();
 
-        if (child_future.needs_scheduling()) {
-            auto& child = actors_[index];
-            while (!child_future.available()) {
-                child->resume(1);
+        using insert_args = actor_zeta::type_traits::type_list<std::string, std::string>;
+        using remove_args = actor_zeta::type_traits::type_list<std::string>;
+        using update_args = actor_zeta::type_traits::type_list<std::string, std::string>;
+        using find_args = actor_zeta::type_traits::type_list<std::string>;
+
+        // Forward based on command
+        switch (cmd) {
+            case actor_zeta::msg_id<collection_t, &collection_t::insert>: {
+                auto future = actor_zeta::send(child.get(), sender,
+                    &collection_part_t::insert,
+                    actor_zeta::detail::get<0, insert_args>(args),
+                    actor_zeta::detail::get<1, insert_args>(args));
+                while (!future.available()) {
+                    child->resume(1);
+                }
+                msg->get_result_promise<void>().set_value();
+                break;
+            }
+            case actor_zeta::msg_id<collection_t, &collection_t::remove>: {
+                auto future = actor_zeta::send(child.get(), sender,
+                    &collection_part_t::remove,
+                    actor_zeta::detail::get<0, remove_args>(args));
+                while (!future.available()) {
+                    child->resume(1);
+                }
+                msg->get_result_promise<void>().set_value();
+                break;
+            }
+            case actor_zeta::msg_id<collection_t, &collection_t::update>: {
+                auto future = actor_zeta::send(child.get(), sender,
+                    &collection_part_t::update,
+                    actor_zeta::detail::get<0, update_args>(args),
+                    actor_zeta::detail::get<1, update_args>(args));
+                while (!future.available()) {
+                    child->resume(1);
+                }
+                msg->get_result_promise<void>().set_value();
+                break;
+            }
+            case actor_zeta::msg_id<collection_t, &collection_t::find>: {
+                auto future = actor_zeta::send(child.get(), sender,
+                    &collection_part_t::find,
+                    actor_zeta::detail::get<0, find_args>(args));
+                while (!future.available()) {
+                    child->resume(1);
+                }
+                auto result = std::move(future).get();
+                msg->get_result_promise<std::string>().set_value(std::move(result));
+                break;
             }
         }
-
-        actor_zeta::promise<R> p(resource_);
-
-        if constexpr (std::is_same_v<R, void>) {
-            std::move(child_future).get();
-            p.set_value();
-        } else {
-            R result = std::move(child_future).get();
-            p.set_value(std::move(result));
-        }
-
-        return p.get_future();
     }
-
-protected:
 
 private:
     std::pmr::memory_resource* resource_;

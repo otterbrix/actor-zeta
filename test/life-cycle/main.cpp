@@ -19,7 +19,7 @@ TEST_CASE("life-cycle") {
         }
         // singal supervisor
         {
-            auto supervisor = actor_zeta::spawn<dummy_supervisor>(resource.get(), 1, 100);
+            auto supervisor = actor_zeta::spawn<dummy_supervisor>(resource.get(), 1ULL, 100ULL);
             REQUIRE(dummy_supervisor::constructor_counter == 1);
             auto fut1 = actor_zeta::send(supervisor.get(), supervisor->address(), &dummy_supervisor::create_storage);
             auto fut2 = actor_zeta::send(supervisor.get(), supervisor->address(), &dummy_supervisor::create_test_handlers);

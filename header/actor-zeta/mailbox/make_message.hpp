@@ -1,7 +1,6 @@
 #pragma once
 
 // clang-format off
-#include <actor-zeta/detail/type_traits.hpp>
 #include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
 #include <actor-zeta/detail/future.hpp>
@@ -41,17 +40,6 @@ namespace actor_zeta::detail {
         typedef typename std::decay<Name>::type decayed_type;
         static const bool value = valid_message_name<Name>;
     };
-
-    // Type must be storable in RTT: not reference, not abstract, move or copy constructible
-    template<typename T>
-    concept valid_rtt_type =
-        !std::is_reference_v<T> &&
-        !std::is_abstract_v<std::decay_t<T>> &&
-        (std::is_copy_constructible_v<std::decay_t<T>> ||
-         std::is_move_constructible_v<std::decay_t<T>>);
-
-    template<typename T>
-    inline constexpr bool is_valid_rtt_type_v = valid_rtt_type<T>;
 
     template<typename Expected, typename Provided>
     concept convertible_arg =

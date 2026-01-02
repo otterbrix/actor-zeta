@@ -83,7 +83,7 @@ namespace actor_zeta { namespace mailbox {
         if (sender_ == nullptr) {
             return actor::address_t::empty_address();
         }
-        return actor::address_t(sender_);
+        return actor::address_t(body_.memory_resource(), sender_);
     }
 
 }} // namespace actor_zeta::mailbox
