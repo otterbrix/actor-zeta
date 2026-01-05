@@ -98,4 +98,4 @@ ctest --test-dir build --output-on-failure
 
 ## License
 
-MIT
+BSD-3-Clause license
