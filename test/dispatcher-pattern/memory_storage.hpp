@@ -152,7 +152,7 @@ public:
     // =========================================================================
 
     /// @brief Main message handler
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
@@ -160,18 +160,15 @@ public:
             case msg_id<memory_storage_t, &memory_storage_t::size>: {
                 // dispatch() unpacks message arguments and calls method
                 // Returns future that chains result to sender's result_slot
-                auto future = dispatch(this, &memory_storage_t::size, msg);
-                actor_zeta::detail::ignore_unused(future);  // Result chaining handled by dispatch()
+                co_await dispatch(this, &memory_storage_t::size, msg);
                 break;
             }
             case msg_id<memory_storage_t, &memory_storage_t::execute_plan>: {
-                auto future = dispatch(this, &memory_storage_t::execute_plan, msg);
-                actor_zeta::detail::ignore_unused(future);
+                co_await dispatch(this, &memory_storage_t::execute_plan, msg);
                 break;
             }
             case msg_id<memory_storage_t, &memory_storage_t::stream_rows>: {
-                auto gen = dispatch(this, &memory_storage_t::stream_rows, msg);
-                actor_zeta::detail::ignore_unused(gen);
+                co_await dispatch(this, &memory_storage_t::stream_rows, msg);
                 break;
             }
             default:

@@ -75,9 +75,8 @@ public:
                   name_, tid, session.data(), database, collection);
 
         // Send request to dispatcher, wait for response
-        auto result = co_await send(
+        auto [_, result] = co_await send(
             dispatcher_,
-            address(),
             &manager_dispatcher_t::size,
             session,
             database,
@@ -102,9 +101,8 @@ public:
 
         std::vector<std::string> rows;
 
-        auto gen = send(
+        auto [_, gen] = send(
             dispatcher_,
-            address(),
             &manager_dispatcher_t::create_row_stream,
             session,
             collection);
@@ -144,37 +142,24 @@ public:
     // behavior()
     // =========================================================================
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
         switch (msg->command()) {
             case msg_id<client_t, &client_t::poll>:
-                poll();
+                co_await poll();
                 break;
-            case msg_id<client_t, &client_t::request_collection_size>: {
-                auto future = dispatch(this, &client_t::request_collection_size, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] request_collection_size() suspended, storing pending", name_);
-                    pending_.push_back(std::move(future));
-                }
+            case msg_id<client_t, &client_t::request_collection_size>:
+                co_await dispatch(this, &client_t::request_collection_size, msg);
                 break;
-            }
-            case msg_id<client_t, &client_t::consume_stream>: {
-                auto future = dispatch(this, &client_t::consume_stream, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] consume_stream() suspended, storing pending", name_);
-                    pending_stream_.push_back(std::move(future));
-                }
+            case msg_id<client_t, &client_t::consume_stream>:
+                co_await dispatch(this, &client_t::consume_stream, msg);
                 break;
-            }
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
         }
-
-        // Process pending coroutines after each message
-        poll_pending();
     }
 
     // =========================================================================

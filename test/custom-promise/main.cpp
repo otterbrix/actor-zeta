@@ -6,71 +6,56 @@
 #include <vector>
 
 // ============================================================================
-// Test: unique_future type erasure to void
+// Test: promise basic API
 // ============================================================================
 
-TEST_CASE("unique_future type erasure - int to void") {
+TEST_CASE("promise<int> - basic set_value and get_future") {
     auto* resource = std::pmr::get_default_resource();
 
     actor_zeta::promise<int> p(resource);
+    REQUIRE(p.valid());
+
+    auto future = p.get_future();
+    REQUIRE(future.valid());
+    REQUIRE_FALSE(future.available());
+
     p.set_value(42);
-    auto typed_future = p.get_future();
+    REQUIRE_FALSE(p.valid());  // Promise invalidated after set_value
 
-    REQUIRE(typed_future.available());
-
-    // Type erasure: unique_future<int> -> unique_future<void>
-    actor_zeta::unique_future<void> erased = std::move(typed_future);
-
-    REQUIRE(erased.available());
-    REQUIRE(erased.valid());
-
-    // Original is now invalid
-    REQUIRE(!typed_future.valid());
+    REQUIRE(future.available());
+    REQUIRE(std::move(future).get() == 42);
 }
 
-TEST_CASE("unique_future type erasure - string to void") {
+TEST_CASE("promise<void> - basic set_value and get_future") {
+    auto* resource = std::pmr::get_default_resource();
+
+    actor_zeta::promise<void> p(resource);
+    REQUIRE(p.valid());
+
+    auto future = p.get_future();
+    REQUIRE(future.valid());
+    REQUIRE_FALSE(future.available());
+
+    p.set_value();
+    REQUIRE_FALSE(p.valid());
+
+    REQUIRE(future.available());
+}
+
+TEST_CASE("promise<string> - complex type") {
     auto* resource = std::pmr::get_default_resource();
 
     actor_zeta::promise<std::string> p(resource);
-    p.set_value("hello");
-    auto typed_future = p.get_future();
+    auto future = p.get_future();
 
-    REQUIRE(typed_future.available());
+    p.set_value("hello world");
 
-    // Type erasure: unique_future<string> -> unique_future<void>
-    actor_zeta::unique_future<void> erased = std::move(typed_future);
-
-    REQUIRE(erased.available());
+    REQUIRE(future.available());
+    REQUIRE(std::move(future).get() == "hello world");
 }
 
 // ============================================================================
-// Test: from_state() factory method
-// ============================================================================
-
-TEST_CASE("from_state - create future from raw state") {
-    auto* resource = std::pmr::get_default_resource();
-
-    // Create a promise and get its state
-    actor_zeta::promise<int> p(resource);
-    p.set_value(100);
-    auto original = p.get_future();
-
-    // Get raw state
-    auto* state = original.internal_release_state();
-
-    // Create new future from state using from_state()
-    auto restored = actor_zeta::unique_future<int>::from_state(
-        static_cast<actor_zeta::detail::future_state_base*>(state),
-        resource,
-        false  // don't add ref, we already own it
-    );
-
-    REQUIRE(restored.available());
-    REQUIRE(std::move(restored).get() == 100);
-}
-
-// ============================================================================
-// Test: vector of futures (key requirement)
+// Test: vector of futures - key requirement!
 // ============================================================================
 
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
@@ -85,9 +70,9 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::compute>) {
-            actor_zeta::dispatch(this, &worker_actor::compute, msg);
+            co_await actor_zeta::dispatch(this, &worker_actor::compute, msg);
         }
     }
 
@@ -107,24 +92,30 @@ TEST_CASE("vector of futures - same type from different actors") {
     std::vector<actor_zeta::unique_future<int>> futures;
     futures.reserve(3);  // Important: reserve to avoid reallocation
 
-    futures.push_back(actor_zeta::send(
-        worker1.get(),
-        actor_zeta::address_t::empty_address(),
-        &worker_actor::compute,
-        10
-    ));
-    futures.push_back(actor_zeta::send(
-        worker2.get(),
-        actor_zeta::address_t::empty_address(),
-        &worker_actor::compute,
-        10
-    ));
-    futures.push_back(actor_zeta::send(
-        worker3.get(),
-        actor_zeta::address_t::empty_address(),
-        &worker_actor::compute,
-        10
-    ));
+    {
+        auto [needs_sched, future] = actor_zeta::send(
+            worker1.get(),
+            &worker_actor::compute,
+            10
+        );
+        futures.push_back(std::move(future));
+    }
+    {
+        auto [needs_sched, future] = actor_zeta::send(
+            worker2.get(),
+            &worker_actor::compute,
+            10
+        );
+        futures.push_back(std::move(future));
+    }
+    {
+        auto [needs_sched, future] = actor_zeta::send(
+            worker3.get(),
+            &worker_actor::compute,
+            10
+        );
+        futures.push_back(std::move(future));
+    }
 
     // Process messages
     worker1->resume(10);
@@ -139,37 +130,6 @@ TEST_CASE("vector of futures - same type from different actors") {
     REQUIRE(std::move(futures[0]).get() == 20);  // 10 * 2
     REQUIRE(std::move(futures[1]).get() == 30);  // 10 * 3
     REQUIRE(std::move(futures[2]).get() == 50);  // 10 * 5
-}
-
-// ============================================================================
-// Test: vector of type-erased futures
-// ============================================================================
-
-TEST_CASE("vector of type-erased futures") {
-    auto* resource = std::pmr::get_default_resource();
-
-    // Create futures of different types
-    actor_zeta::promise<int> p1(resource);
-    p1.set_value(42);
-
-    actor_zeta::promise<std::string> p2(resource);
-    p2.set_value("hello");
-
-    actor_zeta::promise<double> p3(resource);
-    p3.set_value(3.14);
-
-    // Type-erase all into vector<unique_future<void>>
-    std::vector<actor_zeta::unique_future<void>> futures;
-    futures.reserve(3);
-
-    futures.push_back(p1.get_future());  // int -> void
-    futures.push_back(p2.get_future());  // string -> void
-    futures.push_back(p3.get_future());  // double -> void
-
-    // All should be available
-    for (auto& f : futures) {
-        REQUIRE(f.available());
-    }
 }
 
 // ============================================================================
@@ -224,13 +184,13 @@ public:
         &old_style_actor::do_work
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<old_style_actor, &old_style_actor::compute>:
-                actor_zeta::dispatch(this, &old_style_actor::compute, msg);
+                co_await actor_zeta::dispatch(this, &old_style_actor::compute, msg);
                 break;
             case actor_zeta::msg_id<old_style_actor, &old_style_actor::do_work>:
-                actor_zeta::dispatch(this, &old_style_actor::do_work, msg);
+                co_await actor_zeta::dispatch(this, &old_style_actor::do_work, msg);
                 break;
         }
     }
@@ -246,10 +206,9 @@ TEST_CASE("backward compatibility - old actor code works") {
     auto actor = actor_zeta::spawn<old_style_actor>(resource);
 
     // Send to typed method
-    auto future1 = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &old_style_actor::compute,
+    auto [needs_sched1, future1] = actor_zeta::send(
+            actor.get(),
+            &old_style_actor::compute,
         21
     );
 
@@ -260,10 +219,9 @@ TEST_CASE("backward compatibility - old actor code works") {
     REQUIRE(actor->call_count() == 1);
 
     // Send to void method
-    auto future2 = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &old_style_actor::do_work
+    auto [needs_sched2, future2] = actor_zeta::send(
+            actor.get(),
+            &old_style_actor::do_work
     );
 
     actor->resume(10);
@@ -283,7 +241,7 @@ public:
         : actor_zeta::basic_actor<actor_without_custom_promise>(ptr) {}
 
     using dispatch_traits = actor_zeta::dispatch_traits<>;
-    void behavior(actor_zeta::mailbox::message*) {}
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message*) { co_return; }
 };
 
 class actor_with_custom_promise : public actor_zeta::basic_actor<actor_with_custom_promise> {
@@ -296,7 +254,7 @@ public:
     using promise_type = typename actor_zeta::unique_future<T>::promise_type;
 
     using dispatch_traits = actor_zeta::dispatch_traits<>;
-    void behavior(actor_zeta::mailbox::message*) {}
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message*) { co_return; }
 };
 
 TEST_CASE("has_custom_promise_type concept") {
@@ -334,4 +292,41 @@ TEST_CASE("make_ready_future - all overloads") {
     auto int_default = actor_zeta::make_ready_future<int>(resource);
     REQUIRE(int_default.available());
     REQUIRE(std::move(int_default).get() == 0);
+}
+
+// ============================================================================
+// Test: Promise destruction without set_value sets error
+// ============================================================================
+
+TEST_CASE("promise destruction without set_value - sets broken_pipe") {
+    auto* resource = std::pmr::get_default_resource();
+
+    actor_zeta::unique_future<int> future([resource]() {
+        actor_zeta::promise<int> p(resource);
+        auto f = p.get_future();
+        // Promise destroyed without set_value
+        return f;
+    }());
+
+    // Future should be in failed state with broken_pipe
+    REQUIRE(future.available());
+    REQUIRE(future.failed());
+    REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
+}
+
+// ============================================================================
+// Test: Promise set_error
+// ============================================================================
+
+TEST_CASE("promise set_error - propagates error to future") {
+    auto* resource = std::pmr::get_default_resource();
+
+    actor_zeta::promise<int> p(resource);
+    auto future = p.get_future();
+
+    p.set_error(std::make_error_code(std::errc::invalid_argument));
+
+    REQUIRE(future.available());
+    REQUIRE(future.failed());
+    REQUIRE(future.error() == std::make_error_code(std::errc::invalid_argument));
 }

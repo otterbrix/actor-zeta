@@ -25,7 +25,8 @@ public:
     actor_zeta::unique_future<void> ping(Args...) {
         ++ping_pong_counter;
         if (partner_) {
-            actor_zeta::detail::ignore_unused(actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...));
+            auto [needs_sched, future] = actor_zeta::send(partner_, &ping_pong_actor::pong, Args{}...);
+            actor_zeta::detail::ignore_unused(future);
         }
         co_return;
     }
@@ -41,14 +42,14 @@ public:
         &ping_pong_actor::pong
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
 
         switch (msg->command()) {
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>:
-                actor_zeta::dispatch(this, &ping_pong_actor::ping, msg);
+                co_await actor_zeta::dispatch(this, &ping_pong_actor::ping, msg);
                 break;
             case actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::pong>:
-                actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
+                co_await actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
                 break;
         }
     }
@@ -87,7 +88,8 @@ public:
     void DoPingPong() {
         ping_pong_counter = 0;
         ping_pong_done.store(false, std::memory_order_release);
-        actor_zeta::detail::ignore_unused(actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping));
+        auto [needs_sched, future] = actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping);
+        actor_zeta::detail::ignore_unused(future);
         scheduler_->enqueue(actor0_.get());
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
@@ -126,7 +128,8 @@ public:
     void DoPingPong() {
         ping_pong_counter = 0;
         ping_pong_done.store(false, std::memory_order_release);
-        actor_zeta::detail::ignore_unused(actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping, int64_t{}));
+        auto [needs_sched, future] = actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping, int64_t{});
+        actor_zeta::detail::ignore_unused(future);
         scheduler_->enqueue(actor0_.get());
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }

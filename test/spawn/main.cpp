@@ -36,16 +36,16 @@ public:
         &storage_t::remove
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<storage_t, &storage_t::update>:
-                actor_zeta::dispatch(this, &storage_t::update, msg);
+                co_await actor_zeta::dispatch(this, &storage_t::update, msg);
                 break;
             case actor_zeta::msg_id<storage_t, &storage_t::find>:
-                actor_zeta::dispatch(this, &storage_t::find, msg);
+                co_await actor_zeta::dispatch(this, &storage_t::find, msg);
                 break;
             case actor_zeta::msg_id<storage_t, &storage_t::remove>:
-                actor_zeta::dispatch(this, &storage_t::remove, msg);
+                co_await actor_zeta::dispatch(this, &storage_t::remove, msg);
                 break;
         }
     }
@@ -79,8 +79,8 @@ public:
         return executor_.get();
     }
 
-    void behavior(actor_zeta::mailbox::message*) {
-        // Empty behavior
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message*) {
+        co_return;
     }
 
 private:
@@ -124,13 +124,13 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_actor>) {
-            dispatch(this, &dummy_supervisor::create_actor, msg);
+            co_await dispatch(this, &dummy_supervisor::create_actor, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor>) {
-            dispatch(this, &dummy_supervisor::create_supervisor, msg);
+            co_await dispatch(this, &dummy_supervisor::create_supervisor, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_supervisor_custom_resource>) {
-            dispatch(this, &dummy_supervisor::create_supervisor_custom_resource, msg);
+            co_await dispatch(this, &dummy_supervisor::create_supervisor_custom_resource, msg);
         }
     }
 
@@ -175,7 +175,7 @@ TEST_CASE("spawn supervisor") {
     actor_counter = 0;
     auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
-    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor);
+    auto [needs_sched, fut] = actor_zeta::send(supervisor.get(), &dummy_supervisor::create_supervisor);
     supervisor->scheduler_test()->run_once();
     std::move(fut).get();
     REQUIRE(supervisor_counter == 1);
@@ -188,7 +188,7 @@ TEST_CASE("spawn supervisor custom resource") {
     actor_counter = 0;
     auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
-    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_supervisor_custom_resource);
+    auto [needs_sched, fut] = actor_zeta::send(supervisor.get(), &dummy_supervisor::create_supervisor_custom_resource);
     supervisor->scheduler_test()->run_once();
     std::move(fut).get();
     REQUIRE(supervisor_counter == 1);
@@ -200,7 +200,7 @@ TEST_CASE("spawn actor") {
     actor_counter = 0;
     auto* mr_ptr =std::pmr::get_default_resource();
     auto supervisor = actor_zeta::spawn<dummy_supervisor>(mr_ptr);
-    auto fut = actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &dummy_supervisor::create_actor);
+    auto [needs_sched, fut] = actor_zeta::send(supervisor.get(), &dummy_supervisor::create_actor);
     supervisor->scheduler_test()->run_once();
     std::move(fut).get();
     REQUIRE(actor_counter == 1);

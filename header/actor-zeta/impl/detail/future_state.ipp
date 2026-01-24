@@ -172,7 +172,17 @@ namespace actor_zeta { namespace detail {
     }
 
     bool future_state_base::is_available() const noexcept {
-        return state_.load(std::memory_order_acquire) >= future_state_enum::ready;
+        if (state_.load(std::memory_order_acquire) < future_state_enum::ready) {
+            return false;
+        }
+        
+        if (owns_coroutine_ && owning_coro_handle_) {
+            if (!owning_coro_handle_.done()) {
+                return false;  // Not safe to destroy yet!
+            }
+        }
+
+        return true;
     }
 
     void future_state_base::try_resume_continuation() noexcept {

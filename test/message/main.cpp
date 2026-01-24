@@ -30,27 +30,23 @@ constexpr static auto three = actor_zeta::mailbox::make_message_id(3);
 
 namespace {
 
-// Helper to create default result_slot for tests
-inline actor_zeta::intrusive_ptr<actor_zeta::detail::future_state_base>
-make_result_slot(std::pmr::memory_resource* res) {
-    actor_zeta::promise<void> p(res);
-    return p.internal_state_base();
-}
+// Helper functions for testing message in containers
+// Note: message constructor no longer takes result_slot parameter
 
 template<class Seq>
 void check_seq_push_back(Seq& v, std::pmr::memory_resource* res) {
-    v.emplace_back(res, address_t::empty_address(), one, make_result_slot(res));
-    v.emplace_back(res, address_t::empty_address(), two, make_result_slot(res));
-    v.emplace_back(res, address_t::empty_address(), three, make_result_slot(res));
+    v.emplace_back(res, one);
+    v.emplace_back(res, two);
+    v.emplace_back(res, three);
     REQUIRE(v.size() == 3);
     v.clear();
 }
 
 template<class Seq>
 void check_seq_insert_at_end(Seq& v, std::pmr::memory_resource* res) {
-    v.emplace(v.end(), res, address_t::empty_address(), one, make_result_slot(res));
-    v.emplace(v.end(), res, address_t::empty_address(), two, make_result_slot(res));
-    v.emplace(v.end(), res, address_t::empty_address(), three, make_result_slot(res));
+    v.emplace(v.end(), res, one);
+    v.emplace(v.end(), res, two);
+    v.emplace(v.end(), res, three);
     REQUIRE(v.size() == 3);
     v.clear();
 }
@@ -58,9 +54,9 @@ void check_seq_insert_at_end(Seq& v, std::pmr::memory_resource* res) {
 // For queue<message>
 inline void check_queue_push(std::queue<message>& q,
                              std::pmr::memory_resource* res) {
-    q.emplace(res, address_t::empty_address(), one, make_result_slot(res));
-    q.emplace(res, address_t::empty_address(), two, make_result_slot(res));
-    q.emplace(res, address_t::empty_address(), three, make_result_slot(res));
+    q.emplace(res, one);
+    q.emplace(res, two);
+    q.emplace(res, three);
     REQUIRE(q.size() == 3);
     while (!q.empty()) q.pop();
 }
@@ -71,13 +67,13 @@ inline void check_map_basic(std::map<size_t, message>& m,
                             std::pmr::memory_resource* res) {
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(0ul),
-              std::forward_as_tuple(res, address_t::empty_address(), one, make_result_slot(res)));
+              std::forward_as_tuple(res, one));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(1ul),
-              std::forward_as_tuple(res, address_t::empty_address(), two, make_result_slot(res)));
+              std::forward_as_tuple(res, two));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(2ul),
-              std::forward_as_tuple(res, address_t::empty_address(), three, make_result_slot(res)));
+              std::forward_as_tuple(res, three));
     REQUIRE(m.size() == 3);
     m.clear();
 }
@@ -86,13 +82,13 @@ inline void check_map_emplace(std::map<size_t, message>& m,
                               std::pmr::memory_resource* res) {
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(0ul),
-              std::forward_as_tuple(res, address_t::empty_address(), one, make_result_slot(res)));
+              std::forward_as_tuple(res, one));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(1ul),
-              std::forward_as_tuple(res, address_t::empty_address(), two, make_result_slot(res)));
+              std::forward_as_tuple(res, two));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(2ul),
-              std::forward_as_tuple(res, address_t::empty_address(), three, make_result_slot(res)));
+              std::forward_as_tuple(res, three));
     REQUIRE(m.size() == 3);
     m.clear();
 }
@@ -101,13 +97,13 @@ inline void check_map_zero_id(std::map<size_t, message>& m,
                               std::pmr::memory_resource* res) {
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(0ul),
-              std::forward_as_tuple(res, address_t::empty_address(), zero, make_result_slot(res)));
+              std::forward_as_tuple(res, zero));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(1ul),
-              std::forward_as_tuple(res, address_t::empty_address(), zero, make_result_slot(res)));
+              std::forward_as_tuple(res, zero));
     m.emplace(std::piecewise_construct,
               std::forward_as_tuple(2ul),
-              std::forward_as_tuple(res, address_t::empty_address(), zero, make_result_slot(res)));
+              std::forward_as_tuple(res, zero));
     REQUIRE(m.size() == 3);
     m.clear();
 }
@@ -149,20 +145,20 @@ TEST_CASE("message (no move/copy of message/rtt)") {
 
     SECTION("simple") {
         // 1) simple message via make_message
-        auto [msg, future] = actor_zeta::detail::make_message(resource, address_t::empty_address(), one);
+        auto [msg, future] = actor_zeta::detail::make_message(resource, one);
         REQUIRE( static_cast<bool>(msg) ); // message_ptr has operator bool
         REQUIRE( msg->command() == actor_zeta::mailbox::make_message_id(1) );
         actor_zeta::detail::ignore_unused(future); // unused in this test
 
         // 2) separate payload - use specialized rtt move constructor
         rtt body(resource, int(1));
-        message msg2(resource, address_t::empty_address(), one, std::move(body), make_result_slot(resource));
+        message msg2(resource, one, std::move(body));
         REQUIRE(msg2.body().get<int>(0) == 1);
     }
 
     SECTION("swap messages") {
-        message msg1(resource, address_t::empty_address(), one, make_result_slot(resource));
-        message msg2(resource, address_t::empty_address(), two, make_result_slot(resource));
+        message msg1(resource, one);
+        message msg2(resource, two);
 
         msg1.swap(msg2);
 
@@ -171,7 +167,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("allocator-extended move constructor") {
-        message msg1(resource, address_t::empty_address(), three, make_result_slot(resource));
+        message msg1(resource, three);
         REQUIRE( msg1.command() == actor_zeta::mailbox::make_message_id(3) );
 
         // Use allocator-extended move constructor (PMR migration)
@@ -180,7 +176,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("message with multiple payload values") {
-        auto [msg, future2] = actor_zeta::detail::make_message(resource, address_t::empty_address(), one,
+        auto [msg, future2] = actor_zeta::detail::make_message(resource, one,
                                            int(42), std::string("test"), double(3.14));
         REQUIRE( msg->body().get<int>(0) == 42 );
         REQUIRE( msg->body().get<std::string>(1) == "test" );
@@ -188,19 +184,8 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         actor_zeta::detail::ignore_unused(future2);
     }
 
-    SECTION("sender access") {
-        auto addr = address_t::empty_address();
-        message msg(resource, addr, one, make_result_slot(resource));
-
-        REQUIRE( msg.sender() == addr );
-
-        // Check different sender() overloads
-        const message& const_msg = msg;
-        REQUIRE( const_msg.sender() == addr );
-    }
-
     SECTION("zero message id") {
-        message msg(resource, address_t::empty_address(), zero, make_result_slot(resource));
+        message msg(resource, zero);
         REQUIRE( msg.command() == actor_zeta::mailbox::make_message_id(0) );
     }
 
@@ -224,4 +209,24 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         REQUIRE( rtt2.get<double>(2) == Approx(3.14) );
     }
 
+    SECTION("init_future_slot and transfer_ownership") {
+        // Test the new unified slot API
+        message msg(resource, one);
+        REQUIRE( !msg.has_result_slot() );
+
+        // Create a shared_state and init the slot
+        auto* state = actor_zeta::detail::allocate_shared_state<int>(resource);
+        msg.init_future_slot<int>(state);
+        REQUIRE( msg.has_result_slot() );
+
+        // Transfer ownership
+        msg.transfer_ownership();
+
+        // After transfer, destructor should NOT call cleanup_fn_
+        // (We can't directly test this, but it should not crash)
+
+        // Clean up manually since ownership was transferred
+        state->release_promise();
+        state->release_future();
+    }
 }

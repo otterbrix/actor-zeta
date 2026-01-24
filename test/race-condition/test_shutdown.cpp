@@ -42,10 +42,10 @@ public:
         co_return value * 2;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<shutdown_test_actor, &shutdown_test_actor::slow_task>) {
-            dispatch(this, &shutdown_test_actor::slow_task, msg);
+            co_await dispatch(this, &shutdown_test_actor::slow_task, msg);
         }
     }
 
@@ -91,10 +91,10 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
         // Send multiple messages and store futures
         constexpr int NUM_MESSAGES = 10;
         for (int i = 0; i < NUM_MESSAGES; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &shutdown_test_actor::slow_task, i);
 
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
 
@@ -163,10 +163,10 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
         // Send messages and store futures
         constexpr int NUM_MESSAGES = 10;
         for (int i = 0; i < NUM_MESSAGES; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &shutdown_test_actor::slow_task, i);
 
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
 
@@ -236,10 +236,10 @@ TEST_CASE("Shutdown Test 4.3: Resume during shutdown") {
             futures.reserve(NUM_MESSAGES);
 
             for (int i = 0; i < NUM_MESSAGES; ++i) {
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &shutdown_test_actor::slow_task, i);
 
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
 
@@ -294,10 +294,10 @@ TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
         auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
 
         // Send message
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &shutdown_test_actor::slow_task, i);
 
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 

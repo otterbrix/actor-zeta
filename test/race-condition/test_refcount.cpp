@@ -53,10 +53,10 @@ public:
         co_return value;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<refcount_test_actor, &refcount_test_actor::echo>) {
-            dispatch(this, &refcount_test_actor::echo, msg);
+            co_await dispatch(this, &refcount_test_actor::echo, msg);
         }
     }
 
@@ -98,10 +98,10 @@ TEST_CASE("Refcount Test 2.1: Concurrent actor + future release") {
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
         // Create future - refcount starts at 2 (actor + future both hold references)
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &refcount_test_actor::echo, i);
 
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 
@@ -180,10 +180,10 @@ TEST_CASE("Refcount Test 2.2: Stress test with 1000 concurrent futures") {
                 int value = thread_id * FUTURES_PER_THREAD + i;
 
                 // Create future
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &refcount_test_actor::echo, value);
 
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
 
@@ -266,9 +266,9 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
     SECTION("Scenario 1: Orphan futures") {
         for (int i = 0; i < ITERATIONS; ++i) {
             {
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &refcount_test_actor::echo, i);
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
                 // Future destroyed immediately - actor will process orphan message
@@ -281,9 +281,9 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
     // Scenario 2: Futures consumed via get()
     SECTION("Scenario 2: Consumed futures") {
         for (int i = 0; i < ITERATIONS; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &refcount_test_actor::echo, i);
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
 
@@ -297,9 +297,9 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
     // Scenario 3: Check availability then destroy without consuming
     SECTION("Scenario 3: Ready but not consumed") {
         for (int i = 0; i < ITERATIONS; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &refcount_test_actor::echo, i);
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
 
@@ -320,9 +320,9 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
         for (int t = 0; t < 4; ++t) {
             threads.emplace_back([&, pattern = t]() {
                 for (int i = 0; i < ITERATIONS / 4; ++i) {
-                    auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                    auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                                   &refcount_test_actor::echo, i);
-                    if (future.needs_scheduling()) {
+                    if (needs_sched) {
                         scheduler->enqueue(actor.get());
                     }
 

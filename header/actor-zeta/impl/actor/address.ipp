@@ -67,7 +67,7 @@ namespace actor_zeta { namespace actor {
         std::swap(enqueue_fn_, other.enqueue_fn_);
     }
 
-    std::pair<detail::enqueue_result, bool> address_t::enqueue_impl(mailbox::message_ptr msg) const {
+    std::pair<bool, detail::enqueue_result> address_t::enqueue_impl(mailbox::message_ptr msg) const {
         assert(enqueue_fn_ && "enqueue_fn_ is null - address was not created from actor");
         return enqueue_fn_(ptr_, msg.release());
     }

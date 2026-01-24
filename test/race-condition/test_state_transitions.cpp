@@ -27,12 +27,12 @@ public:
         co_return value + 1;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<state_test_actor, &state_test_actor::compute>) {
-            dispatch(this, &state_test_actor::compute, msg);
+            co_await dispatch(this, &state_test_actor::compute, msg);
         } else if (cmd == actor_zeta::msg_id<state_test_actor, &state_test_actor::fast_task>) {
-            dispatch(this, &state_test_actor::fast_task, msg);
+            co_await dispatch(this, &state_test_actor::fast_task, msg);
         }
     }
 
@@ -75,10 +75,10 @@ TEST_CASE("State Test 1.1: set_result vs cancel race") {
     std::atomic<int> races_detected{0};
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &state_test_actor::compute, i);
 
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 
@@ -132,7 +132,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
     std::atomic<int> invalid_transitions{0};  // Only count INVALID transitions (true→false)
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &state_test_actor::compute, i);
 
         // Thread that continuously polls is_ready()
@@ -156,7 +156,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
         });
 
         // Schedule AFTER poller starts to reduce timing sensitivity
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 
@@ -213,10 +213,10 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
     constexpr int NUM_OBSERVERS = 4;
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &state_test_actor::fast_task, i);
 
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 
@@ -304,10 +304,10 @@ TEST_CASE("State Test 1.4: State transition ordering") {
         // Use unique value to detect stale reads
         int expected_value = i + 1;  // fast_task returns value + 1
 
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &state_test_actor::fast_task, i);
 
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 
@@ -371,10 +371,10 @@ TEST_CASE("State Test 1.5: Happens-before across state transitions") {
     std::atomic<int> visibility_failures{0};
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &state_test_actor::compute, i);
 
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 

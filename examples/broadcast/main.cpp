@@ -21,14 +21,14 @@ public:
         : actor_zeta::basic_actor<worker_t>(ptr) {
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         switch (cmd) {
             case actor_zeta::msg_id<worker_t, &worker_t::download_with_result>:
-                actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
+                co_await actor_zeta::dispatch(this, &worker_t::download_with_result, msg);
                 break;
             case actor_zeta::msg_id<worker_t, &worker_t::work_data_with_result>:
-                actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
+                co_await actor_zeta::dispatch(this, &worker_t::work_data_with_result, msg);
                 break;
         }
     }
@@ -72,10 +72,10 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_lite, &supervisor_lite::create>) {
-            actor_zeta::dispatch(this, &supervisor_lite::create, msg);
+            co_await actor_zeta::dispatch(this, &supervisor_lite::create, msg);
         }
     }
 
@@ -118,7 +118,8 @@ int main() {
     std::vector<supervisor_lite::unique_future<void>> create_futures;
     create_futures.reserve(actors);
     for (auto i = actors; i > 0; --i) {
-        create_futures.push_back(actor_zeta::send(supervisor.get(), actor_zeta::address_t::empty_address(), &supervisor_lite::create));
+        auto [needs_sched, future] = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
+        create_futures.push_back(std::move(future));
     }
 
     for (auto& future : create_futures) {
@@ -130,16 +131,15 @@ int main() {
     for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
         auto* worker = supervisor->get_worker(i);
         if (worker) {
-            auto future = actor_zeta::send(
+            auto [needs_sched, future] = actor_zeta::send(
                 worker,
-                actor_zeta::address_t::empty_address(),
                 &worker_t::download_with_result,
                 std::string("test_data_" + std::to_string(i)),
                 std::string("user"),
                 std::string("pass")
             );
 
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 supervisor->schedule_worker(i);
             }
             futures.push_back(std::move(future));

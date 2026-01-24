@@ -1,306 +1,194 @@
-/**
- * @file main.cpp
- * @brief Tests for code review fixes in future/promise system
- *
- * These tests verify the fixes for issues found during code review:
- * - Issue #1: wait_until_ready() infinite loop (CRITICAL)
- * - Issue #2: cancelled() no CAS (HIGH)
- * - Issue #3: void/non-void terminate asymmetry (HIGH)
- * - Issue #5: operator= overwrites error (MEDIUM-HIGH)
- * - Issue #6: error_code_ write before CAS (MEDIUM)
- *
- * See CODE_REVIEW_FINDINGS.md for details.
- */
-
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
 #include <actor-zeta/detail/future.hpp>
-#include <actor-zeta/detail/future_state.hpp>
-#include <actor-zeta/detail/intrusive_ptr.hpp>
-#include <memory_resource>
+#include <actor-zeta/detail/shared_state.hpp>
 
 #include <atomic>
-#include <chrono>
 #include <thread>
 #include <vector>
+#include <memory_resource>
 
-using namespace actor_zeta::detail;
 using namespace actor_zeta;
-
-// Helper: allocate future_state using PMR (matches destroy() deallocation)
-template<typename T>
-future_state<T>* allocate_future_state(std::pmr::memory_resource* resource) {
-    void* mem = resource->allocate(sizeof(future_state<T>), alignof(future_state<T>));
-    return new (mem) future_state<T>(resource);
-}
+using namespace actor_zeta::detail;
 
 // =============================================================================
-// Issue #1: wait_until_ready() infinite loop fix
-// BEFORE: while (!is_ready()) - loops forever on error/cancelled
-// AFTER: while (!is_available()) - exits on any terminal state
+// Tests for the new shared_state architecture (replacing future_state_fixes)
 // =============================================================================
 
-TEST_CASE("Issue #1: wait_until_ready exits on error state", "[wait_until_ready][critical]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
-
-    // Set error state from another thread
-    std::thread setter([state]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        state->error(std::make_error_code(std::errc::invalid_argument));
-    });
-
-    // wait_until_ready should exit when error is set (not loop forever)
-    auto start = std::chrono::steady_clock::now();
-    state->wait_until_ready();
-    auto end = std::chrono::steady_clock::now();
-
-    setter.join();
-
-    // Should have exited quickly (within 1 second)
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    REQUIRE(duration.count() < 1000);
-
-    // State should be error
-    REQUIRE(state->is_failed());
-    REQUIRE(state->is_error());
-    REQUIRE(!state->is_ready());
-
-    // Terminal state reached (is_ready() || is_failed())
-    REQUIRE((state->is_ready() || state->is_failed()));
-}
-
-TEST_CASE("Issue #1: wait_until_ready exits on cancelled state", "[wait_until_ready][critical]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
-
-    // Set cancelled state from another thread
-    std::thread setter([state]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        state->cancelled();
-    });
-
-    // wait_until_ready should exit when cancelled (not loop forever)
-    auto start = std::chrono::steady_clock::now();
-    state->wait_until_ready();
-    auto end = std::chrono::steady_clock::now();
-
-    setter.join();
-
-    // Should have exited quickly (within 1 second)
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    REQUIRE(duration.count() < 1000);
-
-    // State should be cancelled
-    REQUIRE(state->is_cancelled());
-    REQUIRE(state->is_failed());
-
-    // Terminal state reached (is_ready() || is_failed())
-    REQUIRE((state->is_ready() || state->is_failed()));
-}
-
-TEST_CASE("Issue #1: wait_until_ready exits on ready state (normal case)", "[wait_until_ready]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
-
-    // Set value from another thread
-    std::thread setter([state]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        state->set_value(42);
-    });
-
-    // wait_until_ready should exit when ready
-    auto start = std::chrono::steady_clock::now();
-    state->wait_until_ready();
-    auto end = std::chrono::steady_clock::now();
-
-    setter.join();
-
-    // Should have exited quickly (within 1 second)
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    REQUIRE(duration.count() < 1000);
-
-    // State should be ready with value
-    REQUIRE(state->is_ready());
-    REQUIRE(state->get_value() == 42);
-}
-
 // =============================================================================
-// Issue #2: cancelled() returns bool and uses CAS
-// BEFORE: void cancelled() with direct store
-// AFTER: bool cancelled() with CAS from pending state only
+// Issue #1: Race between available() and final_suspend
+// NEW SOLUTION: is_ready() checks promise_released flag, not has_result()
 // =============================================================================
 
-TEST_CASE("Issue #2: cancelled() returns true on success", "[cancelled][cas]") {
+TEST_CASE("Issue #1: is_ready vs has_result distinction", "[race][availability]") {
     auto* resource = std::pmr::get_default_resource();
+    auto* state = allocate_shared_state<int>(resource);
 
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
+    // Initially both are false
+    REQUIRE_FALSE(state->has_result());
+    REQUIRE_FALSE(state->is_ready());
 
-    REQUIRE(state->is_pending());
-
-    // First cancel should succeed
-    bool result = state->cancelled();
-    REQUIRE(result == true);
-    REQUIRE(state->is_cancelled());
-}
-
-TEST_CASE("Issue #2: cancelled() returns false if already cancelled", "[cancelled][cas]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
-
-    // First cancel
-    bool first = state->cancelled();
-    REQUIRE(first == true);
-
-    // Second cancel should fail (already cancelled)
-    bool second = state->cancelled();
-    REQUIRE(second == false);
-}
-
-TEST_CASE("Issue #2: cancelled() returns false if already ready", "[cancelled][cas]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
-
-    // Set value first
+    // After set_value, has_result is true but is_ready is still false
     state->set_value(42);
+    REQUIRE(state->has_result());
+    REQUIRE_FALSE(state->is_ready());  // Promise not released yet!
+
+    // After release_promise, is_ready becomes true
+    state->release_promise();
     REQUIRE(state->is_ready());
 
-    // Cancel should fail (already ready)
-    bool result = state->cancelled();
-    REQUIRE(result == false);
-    REQUIRE(state->is_ready()); // Still ready, not cancelled
+    // Cleanup
+    state->release_future();
 }
 
-TEST_CASE("Issue #2: cancelled() returns false if already in error", "[cancelled][cas]") {
+TEST_CASE("Issue #1: void specialization", "[race][void]") {
     auto* resource = std::pmr::get_default_resource();
+    auto* state = allocate_shared_state<void>(resource);
 
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
+    // Same pattern for void
+    REQUIRE_FALSE(state->has_result());
+    REQUIRE_FALSE(state->is_ready());
 
-    // Set error first
-    state->error(std::make_error_code(std::errc::invalid_argument));
-    REQUIRE(state->is_error());
+    state->set_value();
+    REQUIRE(state->has_result());
+    REQUIRE_FALSE(state->is_ready());
 
-    // Cancel should fail (already in error)
-    bool result = state->cancelled();
-    REQUIRE(result == false);
-    REQUIRE(state->is_error()); // Still error, not cancelled
+    state->release_promise();
+    REQUIRE(state->is_ready());
+
+    state->release_future();
 }
 
-TEST_CASE("Issue #2: cancelled() is atomic under contention", "[cancelled][cas][threading]") {
+// =============================================================================
+// Issue #2: Data race on error_code write
+// NEW SOLUTION: Atomic flags ensure proper ordering
+// =============================================================================
+
+TEST_CASE("Issue #2: error state is atomic", "[error][atomic]") {
+    auto* resource = std::pmr::get_default_resource();
+    auto* state = allocate_shared_state<int>(resource);
+
+    auto ec = std::make_error_code(std::errc::invalid_argument);
+    state->set_error(ec);
+
+    REQUIRE(state->has_error());
+    REQUIRE(state->has_result());  // error counts as result
+    REQUIRE(state->get_error() == ec);
+
+    state->release_promise();
+    state->release_future();
+}
+
+// =============================================================================
+// Issue #3: Consistent error handling for void/non-void
+// =============================================================================
+
+TEST_CASE("Issue #3: error state handling is consistent for int type", "[error][consistency]") {
     auto* resource = std::pmr::get_default_resource();
 
-    constexpr int NUM_ITERATIONS = 100;
-    std::atomic<int> success_count{0};
+    promise<int> p(resource);
+    auto f = p.get_future();  // Get future BEFORE set_error
+    p.set_error(std::make_error_code(std::errc::invalid_argument));
 
-    for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
+    // Future should report failed state
+    REQUIRE(f.failed());
+    REQUIRE(f.error() == std::make_error_code(std::errc::invalid_argument));
+}
 
-        std::atomic<int> local_success{0};
-        constexpr int NUM_THREADS = 4;
+TEST_CASE("Issue #3: error state handling is consistent for void type", "[error][consistency]") {
+    auto* resource = std::pmr::get_default_resource();
 
-        // Multiple threads try to cancel simultaneously
-        std::vector<std::thread> threads;
-        for (int t = 0; t < NUM_THREADS; ++t) {
-            threads.emplace_back([state, &local_success]() {
-                if (state->cancelled()) {
-                    local_success.fetch_add(1);
-                }
-            });
+    promise<void> p(resource);
+    auto f = p.get_future();  // Get future BEFORE set_error
+    p.set_error(std::make_error_code(std::errc::invalid_argument));
+
+    // Future should report failed state
+    REQUIRE(f.failed());
+    REQUIRE(f.error() == std::make_error_code(std::errc::invalid_argument));
+}
+
+TEST_CASE("Issue #3: cancelled state handling is consistent for int type", "[cancel][consistency]") {
+    auto* resource = std::pmr::get_default_resource();
+
+    promise<int> p(resource);
+    unique_future<int> f = p.get_future();
+    f.cancel();
+
+    // Future should report cancelled state
+    REQUIRE(f.is_cancelled());
+    REQUIRE(f.failed());
+    REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
+}
+
+TEST_CASE("Issue #3: cancelled state handling is consistent for void type", "[cancel][consistency]") {
+    auto* resource = std::pmr::get_default_resource();
+
+    promise<void> p(resource);
+    unique_future<void> f = p.get_future();
+    f.cancel();
+
+    // Future should report cancelled state
+    REQUIRE(f.is_cancelled());
+    REQUIRE(f.failed());
+    REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
+}
+
+// =============================================================================
+// Issue #4: Last-One-Out deallocation
+// =============================================================================
+
+TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out]") {
+    std::atomic<int> deallocation_count{0};
+
+    struct tracking_resource : std::pmr::memory_resource {
+        std::pmr::memory_resource* upstream_;
+        std::atomic<int>* counter_;
+
+        tracking_resource(std::pmr::memory_resource* up, std::atomic<int>* c)
+            : upstream_(up), counter_(c) {}
+
+        void* do_allocate(std::size_t bytes, std::size_t align) override {
+            return upstream_->allocate(bytes, align);
         }
 
-        for (auto& t : threads) {
-            t.join();
+        void do_deallocate(void* p, std::size_t bytes, std::size_t align) override {
+            counter_->fetch_add(1, std::memory_order_relaxed);
+            upstream_->deallocate(p, bytes, align);
         }
 
-        // Exactly one thread should succeed
-        REQUIRE(local_success.load() == 1);
-        REQUIRE(state->is_cancelled());
+        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+            return this == &other;
+        }
+    };
 
-        success_count.fetch_add(local_success.load());
+    tracking_resource resource(std::pmr::get_default_resource(), &deallocation_count);
+
+    SECTION("Promise releases first") {
+        auto* state = allocate_shared_state<int>(&resource);
+        state->set_value(42);
+        state->release_promise();
+        REQUIRE(deallocation_count.load() == 0);  // Future still holds ref
+
+        state->release_future();
+        REQUIRE(deallocation_count.load() == 1);  // Last one out deallocates
     }
 
-    // Total successes = NUM_ITERATIONS (one per iteration)
-    REQUIRE(success_count.load() == NUM_ITERATIONS);
+    deallocation_count.store(0);
+
+    SECTION("Future releases first") {
+        auto* state = allocate_shared_state<int>(&resource);
+        state->release_future();
+        REQUIRE(deallocation_count.load() == 0);  // Promise still holds ref
+
+        state->set_value(42);
+        state->release_promise();
+        REQUIRE(deallocation_count.load() == 1);  // Last one out deallocates
+    }
 }
 
 // =============================================================================
-// Issue #3: void/non-void terminate asymmetry
-// BEFORE: Different handling for void vs non-void in wait_for_ready()
-// AFTER: Consistent std::terminate() for both via is_failed() check
-// =============================================================================
-
-TEST_CASE("Issue #3: error state handling is consistent for int type", "[terminate][consistency]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    promise<int> p(resource);
-    p.error(std::make_error_code(std::errc::invalid_argument));
-    unique_future<int> f = p.get_future();
-
-    // Future should report failed state
-    REQUIRE(f.failed());
-    REQUIRE(f.error() == std::make_error_code(std::errc::invalid_argument));
-
-    // Note: We can't test std::terminate() directly, but we verify the state
-}
-
-TEST_CASE("Issue #3: error state handling is consistent for void type", "[terminate][consistency]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    promise<void> p(resource);
-    p.error(std::make_error_code(std::errc::invalid_argument));
-    unique_future<void> f = p.get_future();
-
-    // Future should report failed state
-    REQUIRE(f.failed());
-    REQUIRE(f.error() == std::make_error_code(std::errc::invalid_argument));
-
-    // Note: We can't test std::terminate() directly, but we verify the state
-}
-
-TEST_CASE("Issue #3: cancelled state handling is consistent for int type", "[terminate][consistency]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    promise<int> p(resource);
-    unique_future<int> f = p.get_future();
-    f.cancel();
-
-    // Future should report cancelled state
-    REQUIRE(f.is_cancelled());
-    REQUIRE(f.failed());
-    REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
-}
-
-TEST_CASE("Issue #3: cancelled state handling is consistent for void type", "[terminate][consistency]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    promise<void> p(resource);
-    unique_future<void> f = p.get_future();
-    f.cancel();
-
-    // Future should report cancelled state
-    REQUIRE(f.is_cancelled());
-    REQUIRE(f.failed());
-    REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
-}
-
-// =============================================================================
-// Issue #5: operator= overwrites error
-// BEFORE: !is_ready() would overwrite error/cancelled states
-// AFTER: is_pending() only cancels truly pending futures
+// Issue #5: operator= should not cancel already-completed futures
 // =============================================================================
 
 TEST_CASE("Issue #5: operator= does not overwrite error state", "[operator=][error]") {
@@ -308,16 +196,15 @@ TEST_CASE("Issue #5: operator= does not overwrite error state", "[operator=][err
 
     // Create first future with error
     promise<int> p1(resource);
-    p1.error(std::make_error_code(std::errc::invalid_argument));
     unique_future<int> f1 = p1.get_future();
+    p1.set_error(std::make_error_code(std::errc::invalid_argument));
 
     // Create second future
     promise<int> p2(resource);
-    p2.set_value(42);
     unique_future<int> f2 = p2.get_future();
+    p2.set_value(42);
 
-    // Move f2 into f1 - should NOT overwrite f1's error state
-    // f1 is already in error state, should not call cancelled()
+    // Move f2 into f1 - old state released, new state acquired
     f1 = std::move(f2);
 
     // f1 now holds f2's state (which has value 42)
@@ -325,227 +212,190 @@ TEST_CASE("Issue #5: operator= does not overwrite error state", "[operator=][err
     REQUIRE(std::move(f1).get() == 42);
 }
 
-TEST_CASE("Issue #5: operator= does not overwrite cancelled state", "[operator=][cancelled]") {
-    auto* resource = std::pmr::get_default_resource();
+TEST_CASE("Issue #5: operator= releases old state properly", "[operator=][memory]") {
+    std::atomic<int> deallocation_count{0};
 
-    // Create first future and cancel it
-    promise<int> p1(resource);
-    unique_future<int> f1 = p1.get_future();
-    f1.cancel();
-    REQUIRE(f1.is_cancelled());
+    struct tracking_resource : std::pmr::memory_resource {
+        std::pmr::memory_resource* upstream_;
+        std::atomic<int>* counter_;
 
-    // Create second future
-    promise<int> p2(resource);
-    p2.set_value(42);
-    unique_future<int> f2 = p2.get_future();
+        tracking_resource(std::pmr::memory_resource* up, std::atomic<int>* c)
+            : upstream_(up), counter_(c) {}
 
-    // Move f2 into f1 - should NOT try to cancel f1 again
-    // f1 is already cancelled, is_pending() returns false
-    f1 = std::move(f2);
-
-    // f1 now holds f2's state (which has value 42)
-    REQUIRE(f1.available());
-    REQUIRE(std::move(f1).get() == 42);
-}
-
-TEST_CASE("Issue #5: operator= cancels pending future", "[operator=][pending]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    // Create first future (pending)
-    promise<int> p1(resource);
-    unique_future<int> f1 = p1.get_future();
-    REQUIRE(!f1.available()); // Still pending
-
-    // Create second future
-    promise<int> p2(resource);
-    p2.set_value(42);
-    unique_future<int> f2 = p2.get_future();
-
-    // Move f2 into f1 - should cancel f1 (which is pending)
-    f1 = std::move(f2);
-
-    // f1 now holds f2's state (which has value 42)
-    REQUIRE(f1.available());
-    REQUIRE(std::move(f1).get() == 42);
-
-    // p1's state should now be cancelled
-    // (Can't verify directly, but the operation should not crash)
-}
-
-// =============================================================================
-// Issue #6: error_code_ write after CAS
-// BEFORE: error_code_ = ec; then CAS (race window)
-// AFTER: CAS first, then error_code_ = ec inside success block
-// =============================================================================
-
-TEST_CASE("Issue #6: error() writes error_code_ only after successful CAS", "[error][cas]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
-
-    // Set error
-    bool success = state->error(std::make_error_code(std::errc::invalid_argument));
-    REQUIRE(success);
-    REQUIRE(state->is_error());
-    REQUIRE(state->error() == std::make_error_code(std::errc::invalid_argument));
-}
-
-TEST_CASE("Issue #6: cancelled() writes error_code_ only after successful CAS", "[cancelled][cas]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    auto* state = allocate_future_state<int>(resource);
-    intrusive_ptr<future_state_base> holder(state, false);
-
-    // Cancel
-    bool success = state->cancelled();
-    REQUIRE(success);
-    REQUIRE(state->is_cancelled());
-    REQUIRE(state->error() == std::make_error_code(std::errc::operation_canceled));
-}
-
-TEST_CASE("Issue #6: concurrent error/cancelled race - error_code_ consistent", "[error][cancelled][race]") {
-    auto* resource = std::pmr::get_default_resource();
-
-    constexpr int NUM_ITERATIONS = 100;
-
-    for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
-
-        std::atomic<int> error_success{0};
-        std::atomic<int> cancel_success{0};
-
-        // Two threads race: one sets error, one cancels
-        std::thread error_thread([state, &error_success]() {
-            if (state->error(std::make_error_code(std::errc::invalid_argument))) {
-                error_success.fetch_add(1);
-            }
-        });
-
-        std::thread cancel_thread([state, &cancel_success]() {
-            if (state->cancelled()) {
-                cancel_success.fetch_add(1);
-            }
-        });
-
-        error_thread.join();
-        cancel_thread.join();
-
-        // Exactly one should succeed
-        REQUIRE(error_success.load() + cancel_success.load() == 1);
-
-        // Verify error_code_ is consistent with state
-        if (state->is_error()) {
-            REQUIRE(state->error() == std::make_error_code(std::errc::invalid_argument));
-        } else {
-            REQUIRE(state->is_cancelled());
-            REQUIRE(state->error() == std::make_error_code(std::errc::operation_canceled));
+        void* do_allocate(std::size_t bytes, std::size_t align) override {
+            return upstream_->allocate(bytes, align);
         }
+
+        void do_deallocate(void* p, std::size_t bytes, std::size_t align) override {
+            counter_->fetch_add(1, std::memory_order_relaxed);
+            upstream_->deallocate(p, bytes, align);
+        }
+
+        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+            return this == &other;
+        }
+    };
+
+    tracking_resource resource(std::pmr::get_default_resource(), &deallocation_count);
+
+    {
+        promise<int> p1(&resource);
+        promise<int> p2(&resource);
+
+        unique_future<int> f1 = p1.get_future();
+        unique_future<int> f2 = p2.get_future();
+
+        p1.set_value(1);
+        p2.set_value(2);
+
+        // Move f2 into f1
+        f1 = std::move(f2);
+
+        // f1's old state should be deallocated (promise+future both released)
+        REQUIRE(deallocation_count.load() == 1);
+    }
+
+    // All states should be deallocated after scope
+    REQUIRE(deallocation_count.load() == 2);
+}
+
+// =============================================================================
+// Concurrent stress tests
+// =============================================================================
+
+TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]") {
+    constexpr int NUM_ITERATIONS = 1000;
+    std::atomic<int> deallocation_count{0};
+
+    struct tracking_resource : std::pmr::memory_resource {
+        std::pmr::memory_resource* upstream_;
+        std::atomic<int>* counter_;
+
+        tracking_resource(std::pmr::memory_resource* up, std::atomic<int>* c)
+            : upstream_(up), counter_(c) {}
+
+        void* do_allocate(std::size_t bytes, std::size_t align) override {
+            return upstream_->allocate(bytes, align);
+        }
+
+        void do_deallocate(void* p, std::size_t bytes, std::size_t align) override {
+            counter_->fetch_add(1, std::memory_order_relaxed);
+            upstream_->deallocate(p, bytes, align);
+        }
+
+        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+            return this == &other;
+        }
+    };
+
+    tracking_resource resource(std::pmr::get_default_resource(), &deallocation_count);
+
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+        auto* state = allocate_shared_state<int>(&resource);
+        state->set_value(int(i));
+
+        std::thread t1([state]() {
+            state->release_promise();
+        });
+
+        std::thread t2([state]() {
+            state->release_future();
+        });
+
+        t1.join();
+        t2.join();
+    }
+
+    // Exactly one deallocation per iteration
+    REQUIRE(deallocation_count.load() == NUM_ITERATIONS);
+}
+
+TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
+    constexpr int NUM_ITERATIONS = 1000;
+
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+        auto* resource = std::pmr::get_default_resource();
+        auto* state = allocate_shared_state<int>(resource);
+
+        std::atomic<bool> producer_done{false};
+        std::atomic<int> read_value{-1};
+
+        std::thread producer([state, i, &producer_done]() {
+            state->set_value(int(i));
+            state->release_promise();
+            producer_done.store(true, std::memory_order_release);
+        });
+
+        std::thread consumer([state, &read_value]() {
+            // Poll is_ready (safe after release_promise)
+            while (!state->is_ready()) {
+                std::this_thread::yield();
+            }
+            read_value.store(state->get_value(), std::memory_order_relaxed);
+        });
+
+        producer.join();
+        consumer.join();
+
+        REQUIRE(read_value.load() == i);
+        state->release_future();
     }
 }
 
 // =============================================================================
-// Additional regression tests for stability
+// Promise/Future integration tests
 // =============================================================================
 
-TEST_CASE("Regression: terminal state detection for all terminal states", "[terminal][regression]") {
+TEST_CASE("Integration: basic promise-future flow", "[integration]") {
     auto* resource = std::pmr::get_default_resource();
 
-    SECTION("ready state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
+    promise<int> p(resource);
+    auto f = p.get_future();
 
-        state->set_value(42);
-        REQUIRE((state->is_ready() || state->is_failed()));
-        REQUIRE(state->is_ready());
-    }
+    REQUIRE(f.valid());
+    REQUIRE_FALSE(f.available());
 
-    SECTION("error state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
+    p.set_value(42);
 
-        state->error(std::make_error_code(std::errc::invalid_argument));
-        REQUIRE((state->is_ready() || state->is_failed()));
-        REQUIRE(state->is_error());
-    }
-
-    SECTION("cancelled state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
-
-        state->cancelled();
-        REQUIRE((state->is_ready() || state->is_failed()));
-        REQUIRE(state->is_cancelled());
-    }
+    REQUIRE(f.available());
+    REQUIRE(std::move(f).get() == 42);
 }
 
-TEST_CASE("Regression: is_pending() returns false for all terminal states", "[is_pending][regression]") {
+TEST_CASE("Integration: promise destruction without set_value", "[integration][error]") {
     auto* resource = std::pmr::get_default_resource();
 
-    SECTION("ready state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
+    unique_future<int> future([resource]() {
+        promise<int> p(resource);
+        auto f = p.get_future();
+        // Promise destroyed without set_value
+        return f;
+    }());
 
-        state->set_value(42);
-        REQUIRE(!state->is_pending());
-    }
-
-    SECTION("error state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
-
-        state->error(std::make_error_code(std::errc::invalid_argument));
-        REQUIRE(!state->is_pending());
-    }
-
-    SECTION("cancelled state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
-
-        state->cancelled();
-        REQUIRE(!state->is_pending());
-    }
-
-    SECTION("consumed state") {
-        auto* state = allocate_future_state<int>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
-
-        state->set_value(42);
-        actor_zeta::detail::ignore_unused(state->take_value());
-        REQUIRE(!state->is_pending());
-    }
+    // Future should be in failed state with broken_pipe
+    REQUIRE(future.available());
+    REQUIRE(future.failed());
+    REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
 }
 
-TEST_CASE("Regression: void future state transitions", "[void][state][regression]") {
+TEST_CASE("Integration: move semantics", "[integration][move]") {
     auto* resource = std::pmr::get_default_resource();
 
-    SECTION("set_ready()") {
-        auto* state = allocate_future_state<void>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
+    promise<int> p1(resource);
+    auto f1 = p1.get_future();
+    auto* original_state = f1.internal_state();
 
-        REQUIRE(state->is_pending());
-        state->set_ready();
-        REQUIRE(state->is_ready());
-    }
+    // Move promise
+    promise<int> p2(std::move(p1));
+    REQUIRE_FALSE(p1.valid());
+    REQUIRE(p2.valid());
 
-    SECTION("error()") {
-        auto* state = allocate_future_state<void>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
+    // Move future
+    unique_future<int> f2(std::move(f1));
+    REQUIRE_FALSE(f1.valid());
+    REQUIRE(f2.valid());
+    REQUIRE(f2.internal_state() == original_state);
 
-        REQUIRE(state->is_pending());
-        state->error(std::make_error_code(std::errc::invalid_argument));
-        REQUIRE(state->is_error());
-        REQUIRE(state->is_failed());
-    }
-
-    SECTION("cancelled()") {
-        auto* state = allocate_future_state<void>(resource);
-        intrusive_ptr<future_state_base> holder(state, false);
-
-        REQUIRE(state->is_pending());
-        state->cancelled();
-        REQUIRE(state->is_cancelled());
-        REQUIRE(state->is_failed());
-    }
+    p2.set_value(123);
+    REQUIRE(f2.available());
+    REQUIRE(std::move(f2).get() == 123);
 }

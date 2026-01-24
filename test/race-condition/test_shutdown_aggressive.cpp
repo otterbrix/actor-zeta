@@ -49,10 +49,10 @@ public:
         co_return value * 2;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<good_shutdown_actor, &good_shutdown_actor::slow_task>) {
-            dispatch(this, &good_shutdown_actor::slow_task, msg);
+            co_await dispatch(this, &good_shutdown_actor::slow_task, msg);
         }
     }
 
@@ -92,10 +92,10 @@ TEST_CASE("Aggressive Shutdown Test: Automatic shutdown_guard protection") {
 
             constexpr int NUM_MESSAGES = 100;
             for (int i = 0; i < NUM_MESSAGES; ++i) {
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &good_shutdown_actor::slow_task, i);
 
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
 
@@ -143,9 +143,9 @@ TEST_CASE("Stress Test: Concurrent actor creation/destruction") {
 
                     // Send a few messages
                     for (int j = 0; j < 10; ++j) {
-                        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                                       &good_shutdown_actor::slow_task, j);
-                        if (future.needs_scheduling()) {
+                        if (needs_sched) {
                             scheduler->enqueue(actor.get());
                         }
                     }

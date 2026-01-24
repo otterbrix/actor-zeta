@@ -42,10 +42,12 @@ public:
 
     actor_zeta::unique_future<void> send() {
         if (actor_0_ && scheduler_) {
-            actor_zeta::detail::ignore_unused(actor_zeta::send(actor_0_.get(), this->address(), &Actor::start));
+            auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
+            actor_zeta::detail::ignore_unused(future);
             scheduler_->enqueue(actor_0_.get());
         } else if (actor_0_) {
-            actor_zeta::detail::ignore_unused(actor_zeta::send(actor_0_.get(), this->address(), &Actor::start));
+            auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
+            actor_zeta::detail::ignore_unused(future);
             actor_0_->resume(1);
             actor_1_->resume(1);
             actor_0_->resume(1);
@@ -53,13 +55,13 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
 
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<simple_supervisor, &simple_supervisor::prepare>) {
-            actor_zeta::dispatch(this, &simple_supervisor::prepare, msg);
+            co_await actor_zeta::dispatch(this, &simple_supervisor::prepare, msg);
         } else if (cmd == actor_zeta::msg_id<simple_supervisor, &simple_supervisor::send>) {
-            actor_zeta::dispatch(this, &simple_supervisor::send, msg);
+            co_await actor_zeta::dispatch(this, &simple_supervisor::send, msg);
         }
 
 

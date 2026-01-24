@@ -10,6 +10,7 @@
 #include <system_error>
 
 #include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
 namespace actor_zeta {
@@ -363,9 +364,14 @@ struct generator_future_awaiter {
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
         gen_state_->set_producer_handle(caller);
 
-        auto* future_state = future_.internal_state();
-        if (future_state) {
-            future_state->set_coroutine(caller);
+        // Use CAS to set continuation in the new shared_state
+        auto* state = future_.internal_state();
+        if (state) {
+            std::coroutine_handle<> expected = nullptr;
+            state->continuation_.compare_exchange_strong(
+                expected, caller,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire);
         }
 
         // Check if became ready during setup (race condition)

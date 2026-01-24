@@ -29,7 +29,7 @@ public:
     actor_zeta::unique_future<int> square(int x) {
         std::cout << "[Calculator] ASYNC square(" << x << ") - START\n";
 
-        auto future = actor_zeta::send(this, address(), &calculator_actor::multiply, x, x);
+        auto [needs_sched, future] = actor_zeta::send(this, &calculator_actor::multiply, x, x);
 
         std::cout << "[Calculator] ASYNC square - awaiting multiply...\n";
         int result = co_await std::move(future);
@@ -44,20 +44,17 @@ public:
         &calculator_actor::square
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::add>:
-                actor_zeta::dispatch(this, &calculator_actor::add, msg);
+                co_await actor_zeta::dispatch(this, &calculator_actor::add, msg);
                 break;
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::multiply>:
-                actor_zeta::dispatch(this, &calculator_actor::multiply, msg);
+                co_await actor_zeta::dispatch(this, &calculator_actor::multiply, msg);
                 break;
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::square>: {
-                // Store pending coroutine to prevent premature destruction
-                auto future = actor_zeta::dispatch(this, &calculator_actor::square, msg);
-                if (!future.available()) {
-                    pending_.push_back(std::move(future));
-                }
+                // dispatch() returns unique_future<void> which forwards to caller's promise
+                co_await actor_zeta::dispatch(this, &calculator_actor::square, msg);
                 break;
             }
             default:
@@ -90,7 +87,7 @@ int main() {
     std::cout << "\n--- Testing SYNC methods ---\n\n";
 
     {
-        auto future = actor_zeta::send(calculator.get(), calculator->address(),
+        auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::add, 10, 20);
         calculator->resume(100);
         int result = std::move(future).get();
@@ -98,7 +95,7 @@ int main() {
     }
 
     {
-        auto future = actor_zeta::send(calculator.get(), calculator->address(),
+        auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::multiply, 7, 8);
         calculator->resume(100);
         int result = std::move(future).get();
@@ -108,7 +105,7 @@ int main() {
     std::cout << "--- Testing ASYNC method (coroutine) ---\n\n";
 
     {
-        auto future = actor_zeta::send(calculator.get(), calculator->address(),
+        auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::square, 5);
 
         while (!future.available()) {

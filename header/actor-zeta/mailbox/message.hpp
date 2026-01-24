@@ -4,11 +4,20 @@
 
 #include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/forwards.hpp>
-#include <actor-zeta/detail/intrusive_ptr.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
 #include <actor-zeta/detail/rtt.hpp>
 #include <actor-zeta/mailbox/forwards.hpp>
 #include <actor-zeta/mailbox/id.hpp>
+
+// Forward declarations for new shared_state
+namespace actor_zeta::detail {
+    template<typename T> struct shared_state;
+}
+
+namespace actor_zeta {
+    template<typename T> class promise;
+    template<typename T> class generator;
+}
 
 namespace actor_zeta { namespace mailbox {
 
@@ -17,12 +26,12 @@ namespace actor_zeta { namespace mailbox {
         message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;
-        message(message&& other) noexcept; // Cannot be default due to atomic fields
+        message(message&& other) noexcept;
         message& operator=(message&& other) noexcept;
 
         explicit message(std::pmr::memory_resource* /* resource */);
-        message(std::pmr::memory_resource* /* resource */, actor::address_t /*sender*/, message_id /*name*/, intrusive_ptr<actor_zeta::detail::future_state_base> result_slot);
-        message(std::pmr::memory_resource* /* resource */, actor::address_t /*sender*/, message_id /*name*/, actor_zeta::detail::rtt&& /*body*/, intrusive_ptr<actor_zeta::detail::future_state_base> result_slot);
+        message(std::pmr::memory_resource* /* resource */, message_id /*name*/);
+        message(std::pmr::memory_resource* /* resource */, message_id /*name*/, actor_zeta::detail::rtt&& /*body*/);
 
         // Allocator-extended move constructor (PMR migration)
         message(std::allocator_arg_t, std::pmr::memory_resource* resource, message&& other) noexcept;
@@ -30,24 +39,66 @@ namespace actor_zeta { namespace mailbox {
         ~message() noexcept;
         message* prev;
         auto command() const noexcept -> message_id;
-        auto sender() const noexcept -> actor::address_t;
 
         auto body() -> actor_zeta::detail::rtt&;
         operator bool();
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
+        // === Unified type-erased result slot API ===
+
+        // Initialize future slot with shared_state
+        template<typename T>
+        void init_future_slot(::actor_zeta::detail::shared_state<T>* state) noexcept {
+            result_slot_ = state;
+            cleanup_fn_ = [](void* p) {
+                auto* s = static_cast<::actor_zeta::detail::shared_state<T>*>(p);
+                s->set_error(std::make_error_code(std::errc::operation_canceled));
+                s->release_promise();
+            };
+        }
+
+        // Initialize generator slot with generator_state
+        template<typename T>
+        void init_generator_slot(::actor_zeta::detail::generator_state<T>* state) noexcept {
+            result_slot_ = state;
+            // Generator state uses refcount, add ref for message
+            state->add_ref();
+            cleanup_fn_ = [](void* p) {
+                auto* s = static_cast<::actor_zeta::detail::generator_state<T>*>(p);
+                s->release();  // decrement refcount
+            };
+        }
+
+        // Get promise view for dispatch (returns promise that doesn't own the state)
         template<typename T>
         [[nodiscard]] actor_zeta::promise<T> get_result_promise() const noexcept;
 
+        // Get generator state for dispatch
         template<typename T>
-        [[nodiscard]] actor_zeta::detail::generator_state<T>* get_generator_state() const noexcept;
+        [[nodiscard]] ::actor_zeta::detail::generator_state<T>* get_generator_state() const noexcept {
+            return static_cast<::actor_zeta::detail::generator_state<T>*>(result_slot_);
+        }
+
+        // Transfer ownership from message to dispatch coroutine
+        // After this call, ~message() will NOT call cleanup_fn_
+        void transfer_ownership() noexcept {
+            ownership_transferred_ = true;
+        }
+
+        // Check if slot is initialized
+        [[nodiscard]] bool has_result_slot() const noexcept {
+            return result_slot_ != nullptr;
+        }
 
     private:
-        void* sender_;
         message_id command_;
         actor_zeta::detail::rtt body_;
-        intrusive_ptr<actor_zeta::detail::future_state_base> result_slot_;
+
+        // === Unified result slot ===
+        void* result_slot_ = nullptr;
+        void (*cleanup_fn_)(void*) = nullptr;
+        bool ownership_transferred_ = false;
     };
 
     static_assert(std::is_move_constructible_v<message>);
@@ -118,3 +169,17 @@ namespace actor_zeta { namespace mailbox {
 inline void swap(actor_zeta::mailbox::message& lhs, actor_zeta::mailbox::message& rhs) noexcept {
     lhs.swap(rhs);
 }
+
+// Include future.hpp for promise<T> full definition (needed for get_result_promise template)
+#include <actor-zeta/detail/future.hpp>
+
+// Template method implementation (must be in header for template instantiation)
+namespace actor_zeta { namespace mailbox {
+
+template<typename T>
+actor_zeta::promise<T> message::get_result_promise() const noexcept {
+    auto* state = static_cast<::actor_zeta::detail::shared_state<T>*>(result_slot_);
+    return actor_zeta::promise<T>(state);
+}
+
+}} // namespace actor_zeta::mailbox

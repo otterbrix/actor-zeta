@@ -4,6 +4,8 @@
 
 #include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
+#include <actor-zeta/detail/future.hpp>
+#include <actor-zeta/detail/shared_state.hpp>
 
 namespace actor_zeta { namespace mailbox {
 
@@ -12,43 +14,53 @@ namespace actor_zeta { namespace mailbox {
     }
 
     message::operator bool() {
-        return command_ != 0 || bool(sender_) || !body_.empty();
+        return command_ != 0 || !body_.empty();
     }
 
-    message::message(std::pmr::memory_resource* resource, address_t sender, message_id name, intrusive_ptr<actor_zeta::detail::future_state_base> result_slot)
-        : sender_(sender.get())
-        , command_(std::move(name))
+    message::message(std::pmr::memory_resource* resource, message_id name)
+        : command_(std::move(name))
         , body_(resource)
-        , result_slot_(std::move(result_slot)) {}
+        , result_slot_(nullptr)
+        , cleanup_fn_(nullptr)
+        , ownership_transferred_(false) {}
 
-    message::message(std::pmr::memory_resource* resource, address_t sender, message_id name, actor_zeta::detail::rtt&& body, intrusive_ptr<actor_zeta::detail::future_state_base> result_slot)
-        : sender_(sender.get())
-        , command_(std::move(name))
+    message::message(std::pmr::memory_resource* resource, message_id name, actor_zeta::detail::rtt&& body)
+        : command_(std::move(name))
         , body_(std::allocator_arg, resource, std::move(body))
-        , result_slot_(std::move(result_slot)) {}
+        , result_slot_(nullptr)
+        , cleanup_fn_(nullptr)
+        , ownership_transferred_(false) {}
 
     message::message(message&& other) noexcept
-        : sender_(std::move(other.sender_))
-        , command_(std::move(other.command_))
+        : command_(std::move(other.command_))
         , body_(std::move(other.body_))
-        , result_slot_(std::move(other.result_slot_)) {
+        , result_slot_(std::exchange(other.result_slot_, nullptr))
+        , cleanup_fn_(std::exchange(other.cleanup_fn_, nullptr))
+        , ownership_transferred_(std::exchange(other.ownership_transferred_, false)) {
     }
 
     message::message(std::allocator_arg_t, std::pmr::memory_resource* resource, message&& other) noexcept
-        : sender_(std::move(other.sender_))
-        , command_(std::move(other.command_))
+        : command_(std::move(other.command_))
         , body_(std::allocator_arg, resource, std::move(other.body_))
-        , result_slot_(std::move(other.result_slot_)) {
+        , result_slot_(std::exchange(other.result_slot_, nullptr))
+        , cleanup_fn_(std::exchange(other.cleanup_fn_, nullptr))
+        , ownership_transferred_(std::exchange(other.ownership_transferred_, false)) {
     }
 
     message& message::operator=(message&& other) noexcept {
         if (this == &other)
             return *this;
 
-        sender_ = std::move(other.sender_);
+        // Call cleanup on current slot if not transferred
+        if (!ownership_transferred_ && cleanup_fn_ && result_slot_) {
+            cleanup_fn_(result_slot_);
+        }
+
         command_ = std::move(other.command_);
         body_ = std::move(other.body_);
-        result_slot_ = std::move(other.result_slot_);
+        result_slot_ = std::exchange(other.result_slot_, nullptr);
+        cleanup_fn_ = std::exchange(other.cleanup_fn_, nullptr);
+        ownership_transferred_ = std::exchange(other.ownership_transferred_, false);
 
         return *this;
     }
@@ -56,18 +68,25 @@ namespace actor_zeta { namespace mailbox {
     message::message(std::pmr::memory_resource* resource)
         : singly_linked(nullptr)
         , prev(nullptr)
-        , sender_(address_t::empty_address().get())
         , body_(resource)
-        , result_slot_(nullptr) {}
+        , result_slot_(nullptr)
+        , cleanup_fn_(nullptr)
+        , ownership_transferred_(false) {}
 
-    message::~message() noexcept {}
+    message::~message() noexcept {
+        // Call cleanup if ownership was not transferred
+        if (!ownership_transferred_ && cleanup_fn_ && result_slot_) {
+            cleanup_fn_(result_slot_);
+        }
+    }
 
     void message::swap(message& other) noexcept {
         using std::swap;
-        swap(sender_, other.sender_);
         swap(command_, other.command_);
         swap(body_, other.body_);
         swap(result_slot_, other.result_slot_);
+        swap(cleanup_fn_, other.cleanup_fn_);
+        swap(ownership_transferred_, other.ownership_transferred_);
     }
 
     bool message::is_high_priority() const {
@@ -79,11 +98,6 @@ namespace actor_zeta { namespace mailbox {
         return body_;
     }
 
-    auto message::sender() const noexcept -> actor::address_t {
-        if (sender_ == nullptr) {
-            return actor::address_t::empty_address();
-        }
-        return actor::address_t(body_.memory_resource(), sender_);
-    }
+    // NOTE: get_result_promise<T> is now defined in message.hpp (template must be in header)
 
 }} // namespace actor_zeta::mailbox

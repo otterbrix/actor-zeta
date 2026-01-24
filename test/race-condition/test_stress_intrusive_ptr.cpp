@@ -25,12 +25,12 @@ public:
         co_return value_.load(std::memory_order_relaxed);
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<refcount_stress_actor, &refcount_stress_actor::increment>) {
-            dispatch(this, &refcount_stress_actor::increment, msg);
+            co_await dispatch(this, &refcount_stress_actor::increment, msg);
         } else if (cmd == actor_zeta::msg_id<refcount_stress_actor, &refcount_stress_actor::get_value>) {
-            dispatch(this, &refcount_stress_actor::get_value, msg);
+            co_await dispatch(this, &refcount_stress_actor::get_value, msg);
         }
     }
 
@@ -117,10 +117,10 @@ TEST_CASE("Refcount Stress 1: Concurrent future creation/destruction") {
         threads.emplace_back([&]() {
             for (int i = 0; i < OPERATIONS_PER_THREAD; ++i) {
                 // Send message - creates future → increments refcount
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &refcount_stress_actor::increment, 1);
 
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
 
@@ -165,10 +165,10 @@ TEST_CASE("Refcount Stress 2: Future move and copy operations") {
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
         // Create future
-        auto future1 = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, future1] = actor_zeta::send(actor.get(),
                                         &refcount_stress_actor::get_value);
 
-        if (future1.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 
@@ -215,9 +215,9 @@ TEST_CASE("Refcount Stress 3: Concurrent message enqueue and future get") {
     // Thread 1: Send messages and wait for results
     threads.emplace_back([&]() {
         for (int i = 0; i < NUM_ITERATIONS; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &refcount_stress_actor::get_value);
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
 
@@ -230,9 +230,9 @@ TEST_CASE("Refcount Stress 3: Concurrent message enqueue and future get") {
     // Thread 2: Send fire-and-forget messages (create and drop futures)
     threads.emplace_back([&]() {
         for (int i = 0; i < NUM_ITERATIONS; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &refcount_stress_actor::increment, 1);
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
             // Future destroyed immediately - orphaned message
@@ -243,9 +243,9 @@ TEST_CASE("Refcount Stress 3: Concurrent message enqueue and future get") {
     threads.emplace_back([&]() {
         for (int i = 0; i < NUM_ITERATIONS; ++i) {
             {
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &refcount_stress_actor::increment, -1);
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
             }  // Future destroyed here
@@ -292,18 +292,18 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                 switch (op) {
                     case 0: {
                         // Send and immediately destroy (orphan)
-                        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                                       &refcount_stress_actor::increment, 1);
-                        if (future.needs_scheduling()) {
+                        if (needs_sched) {
                             scheduler->enqueue(actor.get());
                         }
                         break;
                     }
                     case 1: {
                         // Send and wait for result
-                        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                        auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                                       &refcount_stress_actor::get_value);
-                        if (future.needs_scheduling()) {
+                        if (needs_sched) {
                             scheduler->enqueue(actor.get());
                         }
                         int result = smart_get<int>(std::move(future), actor.get(), scheduler.get());
@@ -312,9 +312,9 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                     }
                     case 2: {
                         // Send, move, then destroy
-                        auto future1 = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                        auto [needs_sched, future1] = actor_zeta::send(actor.get(),
                                                        &refcount_stress_actor::increment, -1);
-                        if (future1.needs_scheduling()) {
+                        if (needs_sched) {
                             scheduler->enqueue(actor.get());
                         }
                         auto future2 = std::move(future1);
@@ -322,9 +322,9 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                     }
                     case 3: {
                         // Send, move, get result
-                        auto future1 = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                        auto [needs_sched, future1] = actor_zeta::send(actor.get(),
                                                        &refcount_stress_actor::get_value);
-                        if (future1.needs_scheduling()) {
+                        if (needs_sched) {
                             scheduler->enqueue(actor.get());
                         }
                         auto future2 = std::move(future1);
@@ -334,9 +334,9 @@ TEST_CASE("Refcount Stress 4: Mixed operations stress test") {
                     }
                     case 4: {
                         // Multiple moves then destroy
-                        auto future1 = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                        auto [needs_sched, future1] = actor_zeta::send(actor.get(),
                                                        &refcount_stress_actor::increment, 1);
-                        if (future1.needs_scheduling()) {
+                        if (needs_sched) {
                             scheduler->enqueue(actor.get());
                         }
                         auto future2 = std::move(future1);
@@ -388,9 +388,9 @@ TEST_CASE("Refcount Stress 5: Actor destruction with pending messages") {
         futures.reserve(MESSAGES);
 
         for (int i = 0; i < MESSAGES; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &refcount_stress_actor::get_value);
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
             futures.push_back(std::move(future));

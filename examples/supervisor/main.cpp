@@ -22,13 +22,13 @@ public:
         , name_(std::move(name)) {
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<worker_actor, &worker_actor::process_task>:
-                actor_zeta::dispatch(this, &worker_actor::process_task, msg);
+                co_await actor_zeta::dispatch(this, &worker_actor::process_task, msg);
                 break;
             case actor_zeta::msg_id<worker_actor, &worker_actor::get_status>:
-                actor_zeta::dispatch(this, &worker_actor::get_status, msg);
+                co_await actor_zeta::dispatch(this, &worker_actor::get_status, msg);
                 break;
         }
     }
@@ -82,8 +82,8 @@ public:
 
         std::cerr << "[Supervisor] Assigning task '" << task << "' to " << worker->name() << std::endl;
 
-        auto future = actor_zeta::send(worker.get(), address(), &worker_actor::process_task, task);
-        if (future.needs_scheduling()) {
+        auto [needs_sched, future] = actor_zeta::send(worker.get(), &worker_actor::process_task, task);
+        if (needs_sched) {
             scheduler_->enqueue(worker.get());
         }
         co_return;
@@ -97,24 +97,24 @@ public:
     actor_zeta::unique_future<void> check_status() {
         std::cerr << "[Supervisor] Status check - " << workers_.size() << " workers:" << std::endl;
         for (auto& worker : workers_) {
-            auto future = actor_zeta::send(worker.get(), address(), &worker_actor::get_status);
-            if (future.needs_scheduling()) {
+            auto [needs_sched, future] = actor_zeta::send(worker.get(), &worker_actor::get_status);
+            if (needs_sched) {
                 scheduler_->enqueue(worker.get());
             }
         }
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::create_worker>) {
-            actor_zeta::dispatch(this, &supervisor_actor::create_worker, msg);
+            co_await actor_zeta::dispatch(this, &supervisor_actor::create_worker, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::assign_task>) {
-            actor_zeta::dispatch(this, &supervisor_actor::assign_task, msg);
+            co_await actor_zeta::dispatch(this, &supervisor_actor::assign_task, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::stop_workers>) {
-            actor_zeta::dispatch(this, &supervisor_actor::stop_workers, msg);
+            co_await actor_zeta::dispatch(this, &supervisor_actor::stop_workers, msg);
         } else if (cmd == actor_zeta::msg_id<supervisor_actor, &supervisor_actor::check_status>) {
-            actor_zeta::dispatch(this, &supervisor_actor::check_status, msg);
+            co_await actor_zeta::dispatch(this, &supervisor_actor::check_status, msg);
         }
     }
 
@@ -152,11 +152,11 @@ int main() {
         std::vector<actor_zeta::unique_future<void>> create_futures;
         create_futures.reserve(3);
         for (int i = 1; i <= 3; ++i) {
-            create_futures.push_back(actor_zeta::send(
-                supervisor.get(),
-                actor_zeta::address_t::empty_address(),
-                &supervisor_actor::create_worker,
-                std::string("Worker-") + std::to_string(i)));
+            auto [needs_sched, future] = actor_zeta::send(
+            supervisor.get(),
+            &supervisor_actor::create_worker,
+                std::string("Worker-") + std::to_string(i));
+            create_futures.push_back(std::move(future));
         }
         // Wait for all workers to be created before assigning tasks
         for (auto& f : create_futures) {
@@ -179,11 +179,11 @@ int main() {
         std::vector<actor_zeta::unique_future<void>> task_futures;
         task_futures.reserve(tasks.size());
         for (const auto& task : tasks) {
-            task_futures.push_back(actor_zeta::send(
-                supervisor.get(),
-                actor_zeta::address_t::empty_address(),
-                &supervisor_actor::assign_task,
-                task));
+            auto [needs_sched, future] = actor_zeta::send(
+            supervisor.get(),
+            &supervisor_actor::assign_task,
+                task);
+            task_futures.push_back(std::move(future));
         }
         // Wait for all tasks to be assigned
         for (auto& f : task_futures) {
@@ -194,9 +194,8 @@ int main() {
 
     std::cerr << "--- Checking Status ---" << std::endl;
     {
-        auto status_future = actor_zeta::send(
+        auto [needs_sched, status_future] = actor_zeta::send(
             supervisor.get(),
-            actor_zeta::address_t::empty_address(),
             &supervisor_actor::check_status);
         std::move(status_future).get();
     }
@@ -204,9 +203,8 @@ int main() {
     std::cerr << std::endl;
     std::cerr << "--- Stopping ---" << std::endl;
     {
-        auto stop_future = actor_zeta::send(
+        auto [needs_sched, stop_future] = actor_zeta::send(
             supervisor.get(),
-            actor_zeta::address_t::empty_address(),
             &supervisor_actor::stop_workers);
         std::move(stop_future).get();
     }

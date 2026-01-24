@@ -30,8 +30,8 @@ public:
 
     actor_zeta::unique_future<void> start() {
         if (partner_ && scheduler_) {
-            auto future = actor_zeta::send(partner_, this->address(), &coro_ping_pong_actor::ping, Args{}...);
-            if (future.needs_scheduling()) {
+            auto [needs_sched, future] = actor_zeta::send(partner_, &coro_ping_pong_actor::ping, Args{}...);
+            if (needs_sched) {
                 scheduler_->enqueue(partner_);
             }
         }
@@ -40,8 +40,8 @@ public:
 
     actor_zeta::unique_future<void> ping(Args...) {
         if (partner_ && scheduler_) {
-            auto future = actor_zeta::send(partner_, this->address(), &coro_ping_pong_actor::pong, Args{}...);
-            if (future.needs_scheduling()) {
+            auto [needs_sched, future] = actor_zeta::send(partner_, &coro_ping_pong_actor::pong, Args{}...);
+            if (needs_sched) {
                 scheduler_->enqueue(partner_);
             }
         }
@@ -52,15 +52,15 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
 
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<coro_ping_pong_actor, &coro_ping_pong_actor::start>) {
-            actor_zeta::dispatch(this, &coro_ping_pong_actor::start, msg);
+            co_await actor_zeta::dispatch(this, &coro_ping_pong_actor::start, msg);
         } else if (cmd == actor_zeta::msg_id<coro_ping_pong_actor, &coro_ping_pong_actor::ping>) {
-            actor_zeta::dispatch(this, &coro_ping_pong_actor::ping, msg);
+            co_await actor_zeta::dispatch(this, &coro_ping_pong_actor::ping, msg);
         } else if (cmd == actor_zeta::msg_id<coro_ping_pong_actor, &coro_ping_pong_actor::pong>) {
-            actor_zeta::dispatch(this, &coro_ping_pong_actor::pong, msg);
+            co_await actor_zeta::dispatch(this, &coro_ping_pong_actor::pong, msg);
         }
     }
 

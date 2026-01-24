@@ -33,11 +33,11 @@ namespace {
         }
 
         // Base enqueue_impl - sync processing
-        std::pair<enqueue_result, bool> enqueue_impl(int msg) {
+        std::pair<bool, enqueue_result> enqueue_impl(int msg) {
             call_tracker::base_calls++;
             // Sync: call behavior directly via CRTP
             static_cast<Derived*>(this)->behavior(msg);
-            return {enqueue_result::success, false};
+            return {false, enqueue_result::success};
         }
 
     protected:
@@ -52,11 +52,11 @@ namespace {
     class actor_with_mailbox : public base_mixin<Actor> {
     public:
         // Derived enqueue_impl - async processing (hides base class method)
-        std::pair<enqueue_result, bool> enqueue_impl(int msg) {
+        std::pair<bool, enqueue_result> enqueue_impl(int msg) {
             call_tracker::derived_calls++;
             // Async: would queue to mailbox, but for test just call behavior
             static_cast<Actor*>(this)->behavior(msg);
-            return {enqueue_result::success, true};  // needs_scheduling = true
+            return {true, enqueue_result::success};  // needs_scheduling = true
         }
 
     protected:
@@ -69,7 +69,7 @@ namespace {
     // ========================================================================
     class test_address {
     public:
-        using enqueue_fn_t = std::pair<enqueue_result, bool>(*)(void*, int);
+        using enqueue_fn_t = std::pair<bool, enqueue_result>(*)(void*, int);
 
         template<typename Target>
         explicit test_address(Target* ptr)
@@ -79,7 +79,7 @@ namespace {
                   return static_cast<Target*>(p)->enqueue_impl(msg);
               }) {}
 
-        std::pair<enqueue_result, bool> enqueue(int msg) {
+        std::pair<bool, enqueue_result> enqueue(int msg) {
             return enqueue_fn_(ptr_, msg);
         }
 
@@ -118,7 +118,7 @@ TEST_CASE("CRTP enqueue_impl without virtual methods", "[crtp][enqueue]") {
         call_tracker::reset();
         sync_actor actor;
 
-        auto [result, needs_sched] = actor.enqueue_impl(42);
+        auto [needs_sched, result] = actor.enqueue_impl(42);
 
         REQUIRE(result == enqueue_result::success);
         REQUIRE(needs_sched == false);  // sync returns false
@@ -131,7 +131,7 @@ TEST_CASE("CRTP enqueue_impl without virtual methods", "[crtp][enqueue]") {
         call_tracker::reset();
         async_actor actor;
 
-        auto [result, needs_sched] = actor.enqueue_impl(42);
+        auto [needs_sched, result] = actor.enqueue_impl(42);
 
         REQUIRE(result == enqueue_result::success);
         REQUIRE(needs_sched == true);  // async returns true
@@ -145,7 +145,7 @@ TEST_CASE("CRTP enqueue_impl without virtual methods", "[crtp][enqueue]") {
         sync_actor actor;
         test_address addr(&actor);
 
-        auto [result, needs_sched] = addr.enqueue(100);
+        auto [needs_sched, result] = addr.enqueue(100);
 
         REQUIRE(result == enqueue_result::success);
         REQUIRE(needs_sched == false);  // sync
@@ -159,7 +159,7 @@ TEST_CASE("CRTP enqueue_impl without virtual methods", "[crtp][enqueue]") {
         async_actor actor;
         test_address addr(&actor);
 
-        auto [result, needs_sched] = addr.enqueue(200);
+        auto [needs_sched, result] = addr.enqueue(200);
 
         REQUIRE(result == enqueue_result::success);
         REQUIRE(needs_sched == true);  // async

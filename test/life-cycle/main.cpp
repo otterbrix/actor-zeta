@@ -11,7 +11,7 @@ TEST_CASE("life-cycle") {
         {
             REQUIRE(test_handlers::ptr_0_counter == 0);
             auto actor = actor_zeta::spawn<test_handlers>(resource.get());
-            auto fut = actor_zeta::send(actor.get(), actor->address(), &test_handlers::ptr_0);
+            auto [needs_sched, fut] = actor_zeta::send(actor.get(), &test_handlers::ptr_0);
             actor->resume(10);
             std::move(fut).get();
             REQUIRE(test_handlers::ptr_0_counter == 1);
@@ -21,8 +21,8 @@ TEST_CASE("life-cycle") {
         {
             auto supervisor = actor_zeta::spawn<dummy_supervisor>(resource.get(), 1ULL, 100ULL);
             REQUIRE(dummy_supervisor::constructor_counter == 1);
-            auto fut1 = actor_zeta::send(supervisor.get(), supervisor->address(), &dummy_supervisor::create_storage);
-            auto fut2 = actor_zeta::send(supervisor.get(), supervisor->address(), &dummy_supervisor::create_test_handlers);
+            auto [needs_sched1, fut1] = actor_zeta::send(supervisor.get(), &dummy_supervisor::create_storage);
+            auto [needs_sched2, fut2] = actor_zeta::send(supervisor.get(), &dummy_supervisor::create_test_handlers);
             std::move(fut1).get();
             std::move(fut2).get();
             REQUIRE(dummy_supervisor::enqueue_base_counter == 2);

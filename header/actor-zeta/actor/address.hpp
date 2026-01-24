@@ -26,15 +26,15 @@ namespace actor_zeta::actor {
     // Concept to detect actors with enqueue_impl
     template<typename T>
     concept has_enqueue_impl = requires(T* t, mailbox::message_ptr msg) {
-        { t->enqueue_impl(std::move(msg)) } -> std::same_as<std::pair<detail::enqueue_result, bool>>;
+        { t->enqueue_impl(std::move(msg)) } -> std::same_as<std::pair<bool, detail::enqueue_result>>;
     };
 
     class address_t final {
     public:
         /// Type-erased enqueue function pointer
         /// Uses raw message* because function pointers can't take unique_ptr by value
-        /// Returns: {enqueue_result, needs_scheduling}
-        using enqueue_fn_t = std::pair<detail::enqueue_result, bool>(*)(void*, mailbox::message*);
+        /// Returns: {needs_scheduling, enqueue_result}
+        using enqueue_fn_t = std::pair<bool, detail::enqueue_result>(*)(void*, mailbox::message*);
 
         address_t(address_t&& other) noexcept;
         address_t(const address_t& other);
@@ -65,7 +65,7 @@ namespace actor_zeta::actor {
         void swap(address_t& other);
 
         /// Type-erased enqueue - transfers message ownership
-        std::pair<detail::enqueue_result, bool> enqueue_impl(mailbox::message_ptr msg) const;
+        std::pair<bool, detail::enqueue_result> enqueue_impl(mailbox::message_ptr msg) const;
 
     private:
         address_t() noexcept;

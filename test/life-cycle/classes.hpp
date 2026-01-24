@@ -39,11 +39,11 @@ public:
         destructor_counter++;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_storage>) {
-            dispatch(this, &dummy_supervisor::create_storage, msg);
+            co_await dispatch(this, &dummy_supervisor::create_storage, msg);
         } else if (msg->command() == actor_zeta::msg_id<dummy_supervisor, &dummy_supervisor::create_test_handlers>) {
-            dispatch(this, &dummy_supervisor::create_test_handlers, msg);
+            co_await dispatch(this, &dummy_supervisor::create_test_handlers, msg);
         }
     }
 
@@ -63,10 +63,10 @@ public:
 
     /// Type-erased enqueue for address_t polymorphism
     [[nodiscard]]
-    std::pair<actor_zeta::detail::enqueue_result, bool> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+    std::pair<bool, actor_zeta::detail::enqueue_result> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
         enqueue_base_counter++;
         behavior(msg.get());
-        return {actor_zeta::detail::enqueue_result::success, false};
+        return {false, actor_zeta::detail::enqueue_result::success};
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
@@ -114,18 +114,18 @@ public:
         constructor_counter++;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<storage_t, &storage_t::init>) {
-            dispatch(this, &storage_t::init, msg);
+            co_await dispatch(this, &storage_t::init, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::search>) {
-            dispatch(this, &storage_t::search, msg);
+            co_await dispatch(this, &storage_t::search, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::add>) {
-            dispatch(this, &storage_t::add, msg);
+            co_await dispatch(this, &storage_t::add, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::delete_table>) {
-            dispatch(this, &storage_t::delete_table, msg);
+            co_await dispatch(this, &storage_t::delete_table, msg);
         } else if (cmd == actor_zeta::msg_id<storage_t, &storage_t::create_table>) {
-            dispatch(this, &storage_t::create_table, msg);
+            co_await dispatch(this, &storage_t::create_table, msg);
         }
     }
 
@@ -212,18 +212,18 @@ public:
     }
 
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_0>) {
-            dispatch(this, &test_handlers::ptr_0, msg);
+            co_await dispatch(this, &test_handlers::ptr_0, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_1>) {
-            dispatch(this, &test_handlers::ptr_1, msg);
+            co_await dispatch(this, &test_handlers::ptr_1, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_2>) {
-            dispatch(this, &test_handlers::ptr_2, msg);
+            co_await dispatch(this, &test_handlers::ptr_2, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_3>) {
-            dispatch(this, &test_handlers::ptr_3, msg);
+            co_await dispatch(this, &test_handlers::ptr_3, msg);
         } else if (cmd == actor_zeta::msg_id<test_handlers, &test_handlers::ptr_4>) {
-            dispatch(this, &test_handlers::ptr_4, msg);
+            co_await dispatch(this, &test_handlers::ptr_4, msg);
         } else {
             TRACE("+++");
         }
