@@ -176,8 +176,10 @@ TEST_CASE("Race condition stress test - concurrent future destruction") {
 
     for (int i = 0; i < MAX_ITERATIONS; ++i) {
         // Create future
-        auto [needs_sched, future] = actor_zeta::send(actor.get(),
+        auto [needs_sched, fut] = actor_zeta::send(actor.get(),
                                       &stress_actor::compute, i);
+        // Move out of structured binding for lambda capture (clang-14 compatibility)
+        auto future = std::move(fut);
 
         // Schedule actor if it was unblocked by this enqueue
         if (needs_sched) {
