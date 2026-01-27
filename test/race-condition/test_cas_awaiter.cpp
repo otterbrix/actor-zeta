@@ -40,7 +40,7 @@ TEST_CASE("CAS awaiter: initial continuation is nullptr") {
 
     REQUIRE(state->continuation_.load() == nullptr);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -59,7 +59,7 @@ TEST_CASE("CAS awaiter: CAS sets continuation successfully") {
     REQUIRE(cas_success);
     REQUIRE(state->continuation_.load() == handle);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -85,7 +85,7 @@ TEST_CASE("CAS awaiter: second CAS fails (double-await detection)") {
     REQUIRE_FALSE(cas2);
     REQUIRE(expected2 == handle1);  // expected updated to current value
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -102,7 +102,7 @@ TEST_CASE("CAS awaiter: exchange takes continuation atomically") {
     REQUIRE(cont == handle);
     REQUIRE(state->continuation_.load() == nullptr);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -124,7 +124,7 @@ TEST_CASE("CAS awaiter: await_ready returns true if has_result") {
     // Now has_result is true — await_ready should return true
     REQUIRE(state->has_result());
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -141,7 +141,7 @@ TEST_CASE("CAS awaiter: await_ready uses has_result, not is_ready") {
     // await_ready should check has_result → returns true
     // This is the fast path for already-completed coroutines
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -158,7 +158,7 @@ TEST_CASE("CAS awaiter: await_suspend - producer finished before CAS") {
 
     // Producer finishes first
     state->set_value(42);
-    state->release_promise();
+    (void)state->release_promise();
 
     // Awaiter comes late
     std::coroutine_handle<> handle = std::noop_coroutine();
@@ -206,7 +206,7 @@ TEST_CASE("CAS awaiter: await_suspend - producer not finished yet") {
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
     REQUIRE(cont == handle);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -230,7 +230,7 @@ TEST_CASE("CAS awaiter: final_awaiter takes continuation") {
     REQUIRE(cont == handle);
 
     // Then release promise
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
 
     // Then self.destroy() (simulated - we can't test actual destroy)
@@ -253,7 +253,7 @@ TEST_CASE("CAS awaiter: final_awaiter with no waiter") {
     REQUIRE(cont == nullptr);
 
     // Then release promise
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
 
     // Symmetric transfer to noop_coroutine
@@ -301,7 +301,7 @@ TEST_CASE("CAS awaiter: concurrent CAS - only one succeeds") {
         REQUIRE(success_count.load() == 1);
         REQUIRE(failure_count.load() == 3);
 
-        state->release_promise();
+        (void)state->release_promise();
         state->release_future();
     }
 }
@@ -321,7 +321,7 @@ TEST_CASE("CAS awaiter: concurrent producer-consumer") {
             // Take continuation
             auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
 
-            state->release_promise();
+            (void)state->release_promise();
 
             // Would resume cont here via symmetric transfer
             (void)cont;
@@ -374,7 +374,7 @@ TEST_CASE("CAS awaiter: memory ordering - value visible after exchange") {
             // Exchange continuation (with acq_rel)
             state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
 
-            state->release_promise();
+            (void)state->release_promise();
         });
 
         std::thread consumer([state, &read_value]() {
@@ -415,7 +415,7 @@ TEST_CASE("CAS awaiter: multiple set_value forbidden") {
     // Implementation should assert or ignore
     // (This test documents expected behavior)
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -430,6 +430,6 @@ TEST_CASE("CAS awaiter: error then value forbidden") {
     // set_value after set_error should be forbidden
     // (This test documents expected behavior)
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }

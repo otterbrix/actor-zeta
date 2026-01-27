@@ -192,7 +192,7 @@ namespace actor_zeta::detail {
 
             // Something else changed (shouldn't happen normally)
             // Try clearing finalizing anyway for safety
-            flags_.fetch_and(~state_flags::promise_finalizing, std::memory_order_release);
+            flags_.fetch_and(static_cast<std::uint8_t>(~state_flags::promise_finalizing), std::memory_order_release);
             return true;
         }
 
@@ -333,7 +333,7 @@ namespace actor_zeta::detail {
                 return false;
             }
 
-            flags_.fetch_and(~state_flags::promise_finalizing, std::memory_order_release);
+            flags_.fetch_and(static_cast<std::uint8_t>(~state_flags::promise_finalizing), std::memory_order_release);
             return true;
         }
 

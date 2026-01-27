@@ -332,7 +332,7 @@ TEST_CASE("available race chaining: is_ready vs has_result") {
     REQUIRE_FALSE(state->is_ready());  // Promise not released!
 
     // After release_promise, is_ready becomes true
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
 
     // Cleanup

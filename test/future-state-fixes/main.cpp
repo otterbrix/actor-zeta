@@ -35,7 +35,7 @@ TEST_CASE("Issue #1: is_ready vs has_result distinction", "[race][availability]"
     REQUIRE_FALSE(state->is_ready());  // Promise not released yet!
 
     // After release_promise, is_ready becomes true
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
 
     // Cleanup
@@ -54,7 +54,7 @@ TEST_CASE("Issue #1: void specialization", "[race][void]") {
     REQUIRE(state->has_result());
     REQUIRE_FALSE(state->is_ready());
 
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
 
     state->release_future();
@@ -76,7 +76,7 @@ TEST_CASE("Issue #2: error state is atomic", "[error][atomic]") {
     REQUIRE(state->has_result());  // error counts as result
     REQUIRE(state->get_error() == ec);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -167,7 +167,7 @@ TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out
     SECTION("Promise releases first") {
         auto* state = allocate_shared_state<int>(&resource);
         state->set_value(42);
-        state->release_promise();
+        (void)state->release_promise();
         REQUIRE(deallocation_count.load() == 0);  // Future still holds ref
 
         state->release_future();
@@ -182,7 +182,7 @@ TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out
         REQUIRE(deallocation_count.load() == 0);  // Promise still holds ref
 
         state->set_value(42);
-        state->release_promise();
+        (void)state->release_promise();
         REQUIRE(deallocation_count.load() == 1);  // Last one out deallocates
     }
 }
@@ -295,7 +295,7 @@ TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]")
         state->set_value(int(i));
 
         std::thread t1([state]() {
-            state->release_promise();
+            (void)state->release_promise();
         });
 
         std::thread t2([state]() {
@@ -322,7 +322,7 @@ TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
 
         std::thread producer([state, i, &producer_done]() {
             state->set_value(int(i));
-            state->release_promise();
+            (void)state->release_promise();
             producer_done.store(true, std::memory_order_release);
         });
 

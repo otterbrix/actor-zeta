@@ -123,7 +123,6 @@ namespace actor_zeta {
 
         if constexpr (type_traits::is_generator_v<result_type>) {
             // Generator path - link to external state (streaming, not one-shot)
-            using value_type = typename result_type::value_type;
             auto method_gen = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
             detail::setup_generator_linking_inline(method_gen, msg);
             co_return;

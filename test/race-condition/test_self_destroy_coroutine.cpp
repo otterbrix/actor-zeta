@@ -132,7 +132,7 @@ TEST_CASE("is_ready: true means coroutine already self-destroyed") {
     // Coroutine is now destroyed
 
     // 4. final_suspend: release_promise
-    state->release_promise();
+    (void)state->release_promise();
 
     // NOW is_ready is true — coroutine is ALREADY destroyed
     REQUIRE(state->is_ready());
@@ -174,7 +174,7 @@ TEST_CASE("Race window: has_result vs is_ready timing") {
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
     (void)cont;
     // self.destroy() happens here
-    state->release_promise();
+    (void)state->release_promise();
 
     // Step 4: is_ready=true, race window closed
     REQUIRE(state->is_ready());
@@ -202,7 +202,7 @@ TEST_CASE("final_suspend order: take cont, release, destroy, transfer") {
     REQUIRE(state->continuation_.load() == nullptr);
 
     // 2. Release promise (Last-One-Out)
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
 
     // 3. self.destroy() (can't test actual destroy)
@@ -234,7 +234,7 @@ TEST_CASE("self-destroy: concurrent is_ready polling stress") {
             (void)cont;
             // self.destroy() would happen here
 
-            state->release_promise();
+            (void)state->release_promise();
             producer_done.store(true, std::memory_order_release);
         });
 
@@ -291,7 +291,7 @@ TEST_CASE("self-destroy: concurrent release stress") {
         state->set_value(int(i));
 
         std::thread t1([state]() {
-            state->release_promise();
+            (void)state->release_promise();
         });
 
         std::thread t2([state]() {
@@ -403,7 +403,7 @@ TEST_CASE("self-destroy: future released before is_ready") {
     (void)cont;
 
     // Promise releases — Last-One-Out deallocates
-    state->release_promise();
+    (void)state->release_promise();
 
     REQUIRE(deallocation_count.load() == 1);
 }
@@ -430,7 +430,7 @@ TEST_CASE("self-destroy: value visible after is_ready") {
             (void)cont;
 
             // Release promise (with release semantics)
-            state->release_promise();
+            (void)state->release_promise();
         });
 
         std::thread consumer([state, &read_value]() {

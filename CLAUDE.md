@@ -64,6 +64,33 @@ examples/                       # Usage examples
 4. Spawn: `auto actor = spawn<MyActor>(memory_resource, args...)`
 5. Send: `send(actor, sender, &MyActor::method, args...)`
 
+### Actor Shutdown (CRITICAL)
+
+**`scheduler->stop()` MUST be called BEFORE destroying actors.**
+
+The scheduler holds raw pointers (`job_ptr`) to actors. If an actor is destroyed while the scheduler is running, worker threads may call `resume()` on freed memory (use-after-free).
+
+```cpp
+// CORRECT: Stop scheduler first
+scheduler->stop();      // All workers exit
+// Now safe to destroy actors
+
+// WRONG: Actor destroyed while scheduler running
+{
+    auto actor = spawn<MyActor>(resource);
+    send(actor.get(), &MyActor::process, data);
+    scheduler->enqueue(actor.get());
+}  // 💥 CRASH: actor destroyed, but worker may call resume()
+scheduler->stop();
+```
+
+**Safe patterns:**
+1. Call `scheduler->stop()` before any actor destruction
+2. Wait for all futures before destroying actor (ensures work complete)
+3. Declare actor BEFORE scheduler (reverse destruction order)
+
+**See [`docs/actor-lifecycle-and-shutdown.md`](docs/actor-lifecycle-and-shutdown.md) for detailed flow diagrams.**
+
 ### Memory Management
 - Uses `std::pmr::memory_resource`
 - **spawn()** returns `unique_ptr<Actor, pmr::deleter_t>`
@@ -207,6 +234,7 @@ while (co_await gen) {
 - **[CHANGELOG.md](CHANGELOG.md)** - Change history
 - **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Promise/Future guide
 - **[GENERATOR_GUIDE.md](GENERATOR_GUIDE.md)** - Generator guide
+- **[docs/actor-lifecycle-and-shutdown.md](docs/actor-lifecycle-and-shutdown.md)** - Actor lifecycle and shutdown details
 - **[docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md](docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md)** - GCC 11.4 bug workaround
 - **Examples:** `examples/` directory
 - **Tests:** `test/` directory

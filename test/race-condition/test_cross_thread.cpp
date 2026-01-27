@@ -189,6 +189,7 @@ TEST_CASE("cross-thread: slow computation stress") {
 
     constexpr int NUM_ITERATIONS = 100;
     std::atomic<int> completed{0};
+    std::atomic<int> correct_results{0};  // Track correct results atomically
 
     std::vector<std::thread> consumers;
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
@@ -199,12 +200,15 @@ TEST_CASE("cross-thread: slow computation stress") {
             scheduler->enqueue(actor.get());
         }
 
-        consumers.emplace_back([fut = std::move(future), i, &completed]() mutable {
+        consumers.emplace_back([fut = std::move(future), i, &completed, &correct_results]() mutable {
             while (!fut.available()) {
                 std::this_thread::yield();
             }
             int result = std::move(fut).get();
-            REQUIRE(result == i * 2);
+            // Don't use REQUIRE in threads - Catch2 is not thread-safe
+            if (result == i * 2) {
+                correct_results.fetch_add(1, std::memory_order_relaxed);
+            }
             completed.fetch_add(1, std::memory_order_relaxed);
         });
     }
@@ -215,7 +219,9 @@ TEST_CASE("cross-thread: slow computation stress") {
 
     scheduler->stop();
 
+    // Check results after all threads have joined (thread-safe)
     REQUIRE(completed.load() == NUM_ITERATIONS);
+    REQUIRE(correct_results.load() == NUM_ITERATIONS);
     REQUIRE(actor->processed() == NUM_ITERATIONS);
 }
 
@@ -252,10 +258,10 @@ TEST_CASE("cross-thread: batch processing") {
         // Wait for all futures in batch
         int completed = 0;
         while (completed < BATCH_SIZE) {
-            for (int i = 0; i < BATCH_SIZE; ++i) {
+            for (size_t i = 0; i < static_cast<size_t>(BATCH_SIZE); ++i) {
                 if (futures[i].valid() && futures[i].available()) {
                     int result = std::move(futures[i]).get();
-                    int expected = (batch * BATCH_SIZE + i) * 2;
+                    int expected = (batch * BATCH_SIZE + static_cast<int>(i)) * 2;
                     REQUIRE(result == expected);
                     ++completed;
                 }
@@ -285,14 +291,15 @@ TEST_CASE("cross-thread: multiple actors") {
     }
 
     std::atomic<int> total_completed{0};
+    std::atomic<int> correct_results{0};  // Track correct results atomically
     std::vector<std::thread> threads;
 
-    for (int a = 0; a < NUM_ACTORS; ++a) {
+    for (size_t a = 0; a < static_cast<size_t>(NUM_ACTORS); ++a) {
         threads.emplace_back([&, a]() {
             for (int i = 0; i < ITERATIONS_PER_ACTOR; ++i) {
                 auto [needs_sched, future] = actor_zeta::send(actors[a].get(),
                                                &cross_thread_worker::compute,
-                                               a * ITERATIONS_PER_ACTOR + i);
+                                               static_cast<int>(a) * ITERATIONS_PER_ACTOR + i);
 
                 if (needs_sched) {
                     scheduler->enqueue(actors[a].get());
@@ -303,8 +310,11 @@ TEST_CASE("cross-thread: multiple actors") {
                 }
 
                 int result = std::move(future).get();
-                int expected = (a * ITERATIONS_PER_ACTOR + i) * 2;
-                REQUIRE(result == expected);
+                int expected = (static_cast<int>(a) * ITERATIONS_PER_ACTOR + i) * 2;
+                // Don't use REQUIRE in threads - Catch2 is not thread-safe
+                if (result == expected) {
+                    correct_results.fetch_add(1, std::memory_order_relaxed);
+                }
 
                 total_completed.fetch_add(1, std::memory_order_relaxed);
             }
@@ -317,9 +327,11 @@ TEST_CASE("cross-thread: multiple actors") {
 
     scheduler->stop();
 
+    // Check results after all threads have joined (thread-safe)
     REQUIRE(total_completed.load() == NUM_ACTORS * ITERATIONS_PER_ACTOR);
+    REQUIRE(correct_results.load() == NUM_ACTORS * ITERATIONS_PER_ACTOR);
 
-    for (int a = 0; a < NUM_ACTORS; ++a) {
+    for (size_t a = 0; a < static_cast<size_t>(NUM_ACTORS); ++a) {
         REQUIRE(actors[a]->processed() == ITERATIONS_PER_ACTOR);
     }
 }
@@ -398,6 +410,7 @@ TEST_CASE("cross-thread: high contention") {
     constexpr int ITERATIONS_PER_THREAD = 30;
 
     std::atomic<int> total_completed{0};
+    std::atomic<int> correct_results{0};  // Track correct results atomically
     std::vector<std::thread> threads;
 
     for (int t = 0; t < NUM_THREADS; ++t) {
@@ -420,7 +433,10 @@ TEST_CASE("cross-thread: high contention") {
                 if (future.available()) {
                     int result = std::move(future).get();
                     int expected = (t * ITERATIONS_PER_THREAD + i) * 2;
-                    REQUIRE(result == expected);
+                    // Don't use REQUIRE in threads - Catch2 is not thread-safe
+                    if (result == expected) {
+                        correct_results.fetch_add(1, std::memory_order_relaxed);
+                    }
                     total_completed.fetch_add(1, std::memory_order_relaxed);
                 }
             }
@@ -433,7 +449,9 @@ TEST_CASE("cross-thread: high contention") {
 
     scheduler->stop();
 
+    // Check results after all threads have joined (thread-safe)
     REQUIRE(total_completed.load() == NUM_THREADS * ITERATIONS_PER_THREAD);
+    REQUIRE(correct_results.load() == NUM_THREADS * ITERATIONS_PER_THREAD);
 }
 
 // =============================================================================

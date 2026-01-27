@@ -69,7 +69,7 @@ TEST_CASE("shared_state<int>: initial state") {
     REQUIRE(state->continuation_.load() == nullptr);
 
     // Cleanup: both release
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -84,7 +84,7 @@ TEST_CASE("shared_state<int>: set_value") {
     REQUIRE_FALSE(state->is_ready());  // is_ready checks promise_released!
     REQUIRE(state->get_value() == 42);
 
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());  // Now ready
 
     state->release_future();  // Deallocates
@@ -99,7 +99,7 @@ TEST_CASE("shared_state<int>: take_value") {
     int value = state->take_value();
     REQUIRE(value == 123);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -114,7 +114,7 @@ TEST_CASE("shared_state<int>: set_error") {
     REQUIRE(state->has_error());
     REQUIRE(state->get_error() == ec);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -130,7 +130,7 @@ TEST_CASE("shared_state<void>: initial state") {
     REQUIRE_FALSE(state->is_ready());
     REQUIRE_FALSE(state->has_result());
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -143,7 +143,7 @@ TEST_CASE("shared_state<void>: set_value") {
     REQUIRE(state->has_result());
     REQUIRE_FALSE(state->is_ready());  // is_ready checks promise_released
 
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
 
     state->release_future();
@@ -160,7 +160,7 @@ TEST_CASE("Last-One-Out: promise releases first") {
     state->set_value(42);
 
     // Promise releases first
-    state->release_promise();
+    (void)state->release_promise();
 
     // State should still be accessible
     REQUIRE(state->is_ready());
@@ -186,7 +186,7 @@ TEST_CASE("Last-One-Out: future releases first") {
     REQUIRE(state->has_result());
 
     // Promise releases — deallocates
-    state->release_promise();
+    (void)state->release_promise();
     // State is now deallocated — no access!
 }
 
@@ -209,7 +209,7 @@ TEST_CASE("is_ready checks promise_released, has_result checks value/error") {
     REQUIRE(state->has_result());
 
     // After release_promise: is_ready=true
-    state->release_promise();
+    (void)state->release_promise();
     REQUIRE(state->is_ready());
     REQUIRE(state->has_result());
 
@@ -243,7 +243,7 @@ TEST_CASE("shared_state: continuation atomic operations") {
     REQUIRE(cont == dummy_handle);
     REQUIRE(state->continuation_.load() == nullptr);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -269,7 +269,7 @@ TEST_CASE("shared_state: double CAS detects double-await") {
     REQUIRE_FALSE(cas2);
     REQUIRE(expected2 == handle1);  // expected updated to current value
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -309,7 +309,7 @@ TEST_CASE("shared_state: concurrent set_value and release") {
 
         std::thread t1([state, i]() {
             state->set_value(int(i));
-            state->release_promise();
+            (void)state->release_promise();
         });
 
         std::thread t2([state]() {
@@ -359,7 +359,7 @@ TEST_CASE("shared_state: concurrent release_promise and release_future") {
         state->set_value(int(i));
 
         std::thread t1([state]() {
-            state->release_promise();
+            (void)state->release_promise();
         });
 
         std::thread t2([state]() {
@@ -409,7 +409,7 @@ TEST_CASE("shared_state: memory ordering - value visible after has_result") {
 
         REQUIRE(read_value.load() == i);
 
-        state->release_promise();
+        (void)state->release_promise();
         state->release_future();
     }
 }
@@ -445,7 +445,7 @@ TEST_CASE("shared_state<string>: non-trivial type") {
     std::string taken = state->take_value();
     REQUIRE(taken == test_value);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }
 
@@ -459,6 +459,6 @@ TEST_CASE("shared_state<vector>: container type") {
     REQUIRE(state->has_result());
     REQUIRE(state->get_value() == test_value);
 
-    state->release_promise();
+    (void)state->release_promise();
     state->release_future();
 }

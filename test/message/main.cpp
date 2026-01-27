@@ -226,7 +226,7 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         // (We can't directly test this, but it should not crash)
 
         // Clean up manually since ownership was transferred
-        state->release_promise();
+        (void)state->release_promise();
         state->release_future();
     }
 }
