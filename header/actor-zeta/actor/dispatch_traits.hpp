@@ -96,18 +96,19 @@ namespace actor_zeta {
             typename T::dispatch_traits::methods;
         };
 
+        /// Detects cooperative_actor via marker type (mailbox() is protected)
         template<typename T>
-        concept has_mailbox = requires(T* t) {
-            { t->mailbox() };
+        concept is_cooperative_actor = requires {
+            typename T::is_cooperative_actor_type;
         };
 
-        /// Interface: has dispatch_traits but no mailbox (pure contract)
+        /// Actor: has dispatch_traits and is cooperative_actor (concrete implementation)
         template<typename T>
-        concept is_interface = has_dispatch_traits<T> && !has_mailbox<T>;
+        concept is_actor = has_dispatch_traits<T> && is_cooperative_actor<T>;
 
-        /// Actor: has both dispatch_traits and mailbox (concrete implementation)
+        /// Interface: has dispatch_traits but is NOT an actor (pure contract)
         template<typename T>
-        concept is_actor = has_dispatch_traits<T> && has_mailbox<T>;
+        concept is_interface = has_dispatch_traits<T> && !is_cooperative_actor<T>;
 
     } // namespace detail
 
@@ -232,6 +233,62 @@ namespace actor_zeta {
             }
             return 0;
         }
+
+        // =======================================================================
+        // Compile-time method validation helpers
+        // =======================================================================
+
+        /// Check if method signature (type) exists in method list
+        /// This catches errors when method with wrong signature is passed to send()
+        template<typename Method, typename MethodList>
+        struct method_signature_exists;
+
+        template<typename Method>
+        struct method_signature_exists<Method, type_traits::type_list<>> {
+            static constexpr bool value = false;
+        };
+
+        template<typename Method, auto FirstPtr, auto... RestPtrs>
+        struct method_signature_exists<Method, type_traits::type_list<method_map_entry<FirstPtr>, method_map_entry<RestPtrs>...>> {
+            static constexpr bool value =
+                std::is_same_v<Method, decltype(FirstPtr)> ||
+                method_signature_exists<Method, type_traits::type_list<method_map_entry<RestPtrs>...>>::value;
+        };
+
+        template<typename Method, typename MethodList>
+        inline constexpr bool method_signature_exists_v = method_signature_exists<Method, MethodList>::value;
+
+        /// Check that method belongs to the expected class
+        template<typename Method, typename ExpectedClass>
+        struct method_belongs_to_class {
+            using actual_class = typename type_traits::callable_trait<Method>::class_type;
+            static constexpr bool value = std::is_same_v<actual_class, ExpectedClass> ||
+                                          std::is_base_of_v<actual_class, ExpectedClass>;
+        };
+
+        template<typename Method, typename ExpectedClass>
+        inline constexpr bool method_belongs_to_class_v = method_belongs_to_class<Method, ExpectedClass>::value;
+
+        /// Combined validation for send()
+        template<typename Actor, typename Method>
+        struct validate_method_for_send {
+            using methods = typename Actor::dispatch_traits::methods;
+            using method_class = typename type_traits::callable_trait<Method>::class_type;
+
+            static_assert(
+                method_signature_exists_v<Method, methods>,
+                "send(): Method signature not found in Actor::dispatch_traits. "
+                "Ensure the method is registered: using dispatch_traits = actor_zeta::dispatch_traits<&Actor::method, ...>;");
+
+            static_assert(
+                method_belongs_to_class_v<Method, Actor>,
+                "send(): Method does not belong to this Actor class. "
+                "Check that you're calling the correct actor's method.");
+
+            static constexpr bool valid = method_signature_exists_v<Method, methods> &&
+                                          method_belongs_to_class_v<Method, Actor>;
+        };
+
     } // namespace detail
 
     template<typename Actor, auto MethodPtr, typename MethodList>

@@ -117,10 +117,13 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures") {
     for (auto& future : futures) {
         if (future.available()) {
             // Some messages may have been processed before actor destruction
-            // Note: get() may return error state - we just count successful completions
-            auto result = std::move(future).get();
-            actor_zeta::detail::ignore_unused(result);
-            ++successful;
+            // Check for error state before calling get() - actor destruction sets broken_pipe
+            if (!future.failed()) {
+                auto result = std::move(future).get();
+                actor_zeta::detail::ignore_unused(result);
+                ++successful;
+            }
+            // If failed(), the future was orphaned when actor destroyed - expected
         }
     }
 

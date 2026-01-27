@@ -103,6 +103,9 @@ namespace actor_zeta { namespace actor {
         }
 
     public:
+        /// Marker type to identify cooperative actors (for concept detection)
+        using is_cooperative_actor_type = void;
+
         using typename actor_mixin<Actor>::id_t;
         using typename actor_mixin<Actor>::placement_tag;
         using actor_mixin<Actor>::placement;
@@ -148,6 +151,59 @@ namespace actor_zeta { namespace actor {
         scheduler::resume_info resume(size_t max_throughput) noexcept {
             assert(max_throughput > 0 && "max_throughput must be greater than 0");
 
+            // Try to acquire running state. If actor is already running,
+            // mark it as scheduled so it will re-run, and return early.
+            auto try_acquire_running = [this]() -> bool {
+                auto current = state_.load(std::memory_order_acquire);
+                actor_state desired;
+                int cas_attempts = 0;
+
+                while (true) {
+                    exponential_backoff(cas_attempts);
+                    ++cas_attempts;
+
+#ifndef NDEBUG
+                    assert(cas_attempts < kMaxCasAttempts && "try_acquire_running: CAS livelock!");
+#else
+                    if (cas_attempts >= kMaxCasAttempts) {
+                        std::terminate();
+                    }
+#endif
+
+                    // If already running, mark as scheduled so the running actor will re-run
+                    if (is_running(current)) {
+                        desired = set_scheduled(current, true);
+                        if (state_.compare_exchange_weak(current, desired,
+                                                         std::memory_order_acq_rel,
+                                                         std::memory_order_acquire)) {
+                            return false;  // Not acquired, but marked for re-run
+                        }
+                        continue;
+                    }
+
+#ifndef NDEBUG
+                    assert((current == actor_state::idle ||
+                            current == actor_state::scheduled ||
+                            current == actor_state::idle_destroying ||
+                            current == actor_state::scheduled_destroying) &&
+                           "try_acquire_running: unexpected state!");
+#endif
+
+                    desired = set_scheduled(set_running(current, true), false);
+
+                    if (state_.compare_exchange_weak(current, desired,
+                                                     std::memory_order_acq_rel,
+                                                     std::memory_order_acquire)) {
+                        return true;  // Successfully acquired
+                    }
+                }
+            };
+
+            // Try to acquire - if actor already running, return immediately
+            if (!try_acquire_running()) {
+                return scheduler::resume_info(scheduler::resume_result::done, 0);
+            }
+
             struct resume_guard {
                 std::atomic<actor_state>& state_ref_;
                 bool keep_scheduled_;
@@ -157,46 +213,6 @@ namespace actor_zeta { namespace actor {
                     : state_ref_(state)
                     , keep_scheduled_(false)
                     , scheduled_while_running_(scheduled_while_running) {
-                    auto current = state_ref_.load(std::memory_order_acquire);
-                    actor_state desired;
-                    int cas_attempts = 0;
-
-                    while (true) {
-                        exponential_backoff(cas_attempts);
-                        ++cas_attempts;
-
-#ifndef NDEBUG
-                        assert(cas_attempts < kMaxCasAttempts && "resume_guard: CAS livelock!");
-#else
-                        if (cas_attempts >= kMaxCasAttempts) {
-                            std::terminate();
-                        }
-#endif
-
-                        if (is_running(current)) {
-#ifndef NDEBUG
-                            assert(false && "Concurrent resume() detected!");
-#else
-                            std::terminate();
-#endif
-                        }
-
-#ifndef NDEBUG
-                        assert((current == actor_state::idle ||
-                                current == actor_state::scheduled ||
-                                current == actor_state::idle_destroying ||
-                                current == actor_state::scheduled_destroying) &&
-                               "resume_guard: unexpected state!");
-#endif
-
-                        desired = set_scheduled(set_running(current, true), false);
-
-                        if (state_ref_.compare_exchange_weak(current, desired,
-                                                             std::memory_order_acq_rel,
-                                                             std::memory_order_acquire)) {
-                            break;
-                        }
-                    }
                 }
 
                 ~resume_guard() {
@@ -254,7 +270,7 @@ namespace actor_zeta { namespace actor {
 
                 result_info = resume_impl(max_throughput, finalize, check_race_window);
             }
-            
+
             if (result_info.result == scheduler::resume_result::awaiting && scheduled_while_running) {
                 result_info.result = scheduler::resume_result::resume;
             }
@@ -277,6 +293,23 @@ namespace actor_zeta { namespace actor {
 
             if (mailbox().blocked()) {
                 return finalize(scheduler::resume_result::awaiting, 0, false);
+            }
+
+            // Q6: If behavior is suspended on co_await, check if deepest future is ready
+            if (current_behavior_.is_busy()) {
+                if (current_behavior_.is_awaited_ready()) {
+                    // Deepest future ready — take and resume its continuation
+                    // This unwinds the coroutine chain via symmetric transfer in final_suspend
+                    auto cont = current_behavior_.take_awaited_continuation();
+                    if (cont) {
+                        cont.resume();  // Unwinds chain: process → dispatch → behavior_t
+                    }
+                    // After unwinding, behavior may be done or not busy
+                    // Continue to process messages if not busy
+                } else {
+                    // Future not ready — spinning, keep actor scheduled
+                    return finalize(scheduler::resume_result::resume, 0, true);
+                }
             }
 
             if (mailbox().empty()) {
@@ -302,6 +335,26 @@ namespace actor_zeta { namespace actor {
 
                 if (mailbox().blocked()) {
                     return finalize(scheduler::resume_result::awaiting, handled, false);
+                }
+
+                // Q6: Check if behavior became busy after processing previous message
+                if (current_behavior_.is_busy()) {
+                    if (current_behavior_.is_awaited_ready()) {
+                        // Deepest future ready — take and resume its continuation
+                        auto cont = current_behavior_.take_awaited_continuation();
+                        if (cont) {
+                            cont.resume();  // Unwinds chain via symmetric transfer
+                        }
+                        // Continue loop if not busy anymore
+                    } else {
+                        // Future not ready — spinning, keep actor scheduled
+                        return finalize(scheduler::resume_result::resume, handled, true);
+                    }
+                }
+
+                // Skip message processing if still busy after resume attempt
+                if (current_behavior_.is_busy()) {
+                    return finalize(scheduler::resume_result::resume, handled, true);
                 }
 
                 const size_t before = handled;
@@ -354,6 +407,11 @@ namespace actor_zeta { namespace actor {
 
             if (mailbox().closed()) {
                 return finalize(scheduler::resume_result::done, handled, false);
+            }
+
+            // If still busy after processing messages, keep spinning
+            if (current_behavior_.is_busy()) {
+                return finalize(scheduler::resume_result::resume, handled, true);
             }
 
             auto result = mailbox().try_block()

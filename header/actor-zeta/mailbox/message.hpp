@@ -54,7 +54,10 @@ namespace actor_zeta { namespace mailbox {
             cleanup_fn_ = [](void* p) {
                 auto* s = static_cast<::actor_zeta::detail::shared_state<T>*>(p);
                 s->set_error(std::make_error_code(std::errc::operation_canceled));
-                s->release_promise();
+                // Cleanup doesn't resume continuations - just release the promise side.
+                // The return value indicates if deallocation happened, but we don't
+                // need to take any action in either case.
+                [[maybe_unused]] bool deallocated = s->release_promise();
             };
         }
 

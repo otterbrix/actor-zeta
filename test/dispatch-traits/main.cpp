@@ -209,23 +209,28 @@ private:
     int call_count_;
 };
 
-TEST_CASE("optional send - returns ready future with default value") {
+TEST_CASE("send via address_t - actor method dispatched correctly") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_test_actor>(resource);
 
     REQUIRE(actor != nullptr);
 
-    // Optional send - no target, just sender and method
-    // Uses sender.resource() to create ready future
+    // Send to actor via address_t (dispatches to actor's queue)
     auto [needs_sched, future] = actor_zeta::send(
-        actor->address(),  // sender with valid resource
+        actor->address(),
         &optional_test_actor::process,
         5);
 
-    // Result is immediately available with default value
+    // Future is not ready until actor processes the message
+    REQUIRE(future.valid());
+
+    // Process message by running actor's behavior
+    actor->resume(1);
+
+    // Now future should be available
     REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 0);  // Default int is 0
-    REQUIRE(actor->call_count() == 0);  // Method was not called
+    REQUIRE(std::move(future).get() == 15);  // 5 + 10
+    REQUIRE(actor->call_count() == 1);  // Method was called
 }
 
 TEST_CASE("optional send - address_t stores resource from actor") {
@@ -584,35 +589,45 @@ private:
     bool called_;
 };
 
-TEST_CASE("optional send - void return type") {
+TEST_CASE("send via address_t - void return type") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_void_actor>(resource);
 
     REQUIRE(actor != nullptr);
 
-    // Optional send for void method - should return ready void future
+    // Send to actor via address_t for void method
     auto [needs_sched, future] = actor_zeta::send(
         actor->address(),
         &optional_void_actor::do_work);
 
+    REQUIRE(future.valid());
+
+    // Process message
+    actor->resume(1);
+
     REQUIRE(future.available());
     std::move(future).get();  // Should not crash
-    REQUIRE(actor->called() == false);  // Method was not called
+    REQUIRE(actor->called() == true);  // Method was called
 }
 
-TEST_CASE("optional send - string return type") {
+TEST_CASE("send via address_t - string return type") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_void_actor>(resource);
 
     REQUIRE(actor != nullptr);
 
-    // Optional send for string method - returns empty string
+    // Send to actor via address_t for string method
     auto [needs_sched, future] = actor_zeta::send(
         actor->address(),
         &optional_void_actor::get_name);
 
+    REQUIRE(future.valid());
+
+    // Process message
+    actor->resume(1);
+
     REQUIRE(future.available());
-    REQUIRE(std::move(future).get().empty());  // Default string is empty
+    REQUIRE(std::move(future).get() == "test_name");  // Value from coroutine
 }
 
 TEST_CASE("dispatch_traits - empty traits") {

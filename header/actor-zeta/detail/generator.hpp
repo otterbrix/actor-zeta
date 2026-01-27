@@ -275,11 +275,21 @@ struct next_awaiter {
     generator_state<T>* state_;
 
     bool await_ready() noexcept {
-        return state_->is_ready() || state_->is_terminal();
+        // Only skip await_suspend for terminal states (exhausted/cancelled)
+        // For suspended state (has value), we still need to go through await_suspend
+        // to properly handle advancing to the next value
+        return state_->is_terminal();
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> consumer) noexcept {
         state_->set_consumer_handle(consumer);
+
+        // If we have a value from previous yield (state is suspended),
+        // mark it as consumed and advance to next value
+        if (state_->is_ready()) {
+            state_->reset_to_created();
+            // Fall through to resume producer for next value
+        }
 
         if (state_->is_created()) {
             auto producer = state_->take_producer_handle();

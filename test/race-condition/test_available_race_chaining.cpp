@@ -170,9 +170,12 @@ TEST_CASE("available race chaining: basic chain is safe") {
 
         // Wait for future to become available
         // With new architecture, available() is true only after coroutine fully completes
+        // Re-enqueue actors periodically to handle cross-actor messaging where
+        // send() inside coroutine cannot schedule the target actor directly
         while (!future.available()) {
+            scheduler->enqueue(dispatcher.get());
+            scheduler->enqueue(worker.get());
             std::this_thread::yield();
-            // Scheduler threads are running, they will process the actors
         }
 
         // Destroy future - this should be SAFE with new architecture
@@ -228,6 +231,8 @@ TEST_CASE("available race chaining: poll_pending pattern") {
 
         // poll_pending() pattern - drain completed futures
         while (!pending.empty()) {
+            scheduler->enqueue(dispatcher.get());
+            scheduler->enqueue(worker.get());
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->available()) {
                     // Safe to destroy - available() is true only after full completion
@@ -282,6 +287,8 @@ TEST_CASE("available race chaining: concurrent senders") {
 
                 // Wait for completion
                 while (!future.available()) {
+                    scheduler->enqueue(dispatcher.get());
+                    scheduler->enqueue(worker.get());
                     std::this_thread::yield();
                 }
 

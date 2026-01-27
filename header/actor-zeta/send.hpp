@@ -134,6 +134,10 @@ namespace actor_zeta {
         -> detail::send_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
 
+        // Compile-time validation: method must be registered in dispatch_traits
+        static_assert(detail::validate_method_for_send<Actor, Method>::valid,
+                      "send(): Method validation failed - see above for details");
+
         static_assert(!std::is_same_v<result_type, bool>,
                       "Actor methods must not return bool. "
                       "Use void or other types - all return results via promise/future.");
@@ -153,6 +157,10 @@ namespace actor_zeta {
         -> detail::send_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
 
+        // Compile-time validation: method must be registered in dispatch_traits
+        static_assert(detail::validate_method_for_send<Interface, Method>::valid,
+                      "send(): Method validation failed - see above for details");
+
         static_assert(!std::is_same_v<result_type, bool>,
                       "Actor methods must not return bool. "
                       "Use void or other types - all return results via promise/future.");
@@ -163,6 +171,34 @@ namespace actor_zeta {
 
         return runtime_dispatch_helper_address<Interface, Method, methods>::dispatch(
             method, target, std::forward<Args>(args)...);
+    }
+
+    // send() for address_t when Method belongs to Actor (not Interface)
+    // This allows sending to an actor via its address
+
+    template<typename Method, typename... Args,
+             typename Actor = typename type_traits::callable_trait<Method>::class_type>
+        requires detail::is_actor<Actor>
+    [[nodiscard]] inline auto send(actor::address_t target, Method method, Args&&... args)
+        -> detail::send_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
+        using result_type = typename type_traits::callable_trait<Method>::result_type;
+
+        // Compile-time validation: method must be registered in dispatch_traits
+        static_assert(detail::validate_method_for_send<Actor, Method>::valid,
+                      "send(): Method validation failed - see above for details");
+
+        static_assert(!std::is_same_v<result_type, bool>,
+                      "Actor methods must not return bool. "
+                      "Use void or other types - all return results via promise/future.");
+
+        assert(target && "target address must not be empty");
+
+        // Cast address back to Actor* and use direct dispatch
+        auto* actor = static_cast<Actor*>(target.get());
+        using methods = typename Actor::dispatch_traits::methods;
+
+        return runtime_dispatch_helper<Actor, Method, methods>::dispatch(
+            method, actor, std::forward<Args>(args)...);
     }
 
 } // namespace actor_zeta
