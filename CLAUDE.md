@@ -60,9 +60,10 @@ examples/                       # Usage examples
 ### Actor Lifecycle
 1. Define actor class inheriting from `basic_actor<Actor>`
 2. Define `dispatch_traits<&Actor::method1, &Actor::method2>`
-3. Implement `behavior(message*)` to dispatch messages
+3. Implement `behavior_t behavior(message*)` - coroutine with `co_await dispatch(...)`
 4. Spawn: `auto actor = spawn<MyActor>(memory_resource, args...)`
-5. Send: `send(actor, sender, &MyActor::method, args...)`
+5. Send: `auto [needs_sched, future] = send(actor.get(), &MyActor::method, args...)`
+6. Schedule: `if (needs_sched) scheduler->enqueue(actor.get())`
 
 ### Actor Shutdown (CRITICAL)
 
@@ -70,26 +71,105 @@ examples/                       # Usage examples
 
 The scheduler holds raw pointers (`job_ptr`) to actors. If an actor is destroyed while the scheduler is running, worker threads may call `resume()` on freed memory (use-after-free).
 
-```cpp
-// CORRECT: Stop scheduler first
-scheduler->stop();      // All workers exit
-// Now safe to destroy actors
+#### Safe Pattern 1: Stop Scheduler First (Recommended)
 
+```cpp
+void safe_shutdown() {
+    auto scheduler = std::make_unique<sharing_scheduler>(4, 1000);
+    scheduler->start();
+
+    auto actor = spawn<MyActor>(resource);
+
+    // Send messages (fire-and-forget is OK)
+    for (int i = 0; i < 100; ++i) {
+        auto [needs_sched, future] = send(actor.get(), &MyActor::process, i);
+        if (needs_sched) scheduler->enqueue(actor.get());
+        future.detach();  // Fire-and-forget
+    }
+
+    scheduler->stop();  // All workers exit, no more resume() calls
+}  // Actor destroyed here - SAFE
+```
+
+#### Safe Pattern 2: Wait for All Work
+
+```cpp
+void wait_for_work() {
+    auto scheduler = std::make_unique<sharing_scheduler>(4, 1000);
+    scheduler->start();
+
+    std::vector<unique_future<int>> futures;
+
+    {
+        auto actor = spawn<MyActor>(resource);
+
+        for (int i = 0; i < 10; ++i) {
+            auto [needs_sched, future] = send(actor.get(), &MyActor::compute, i);
+            if (needs_sched) scheduler->enqueue(actor.get());
+            futures.push_back(std::move(future));  // Keep ALL futures
+        }
+
+        // Wait for ALL futures
+        for (auto& f : futures) {
+            while (!f.available()) std::this_thread::yield();
+            auto result = std::move(f).get();
+        }
+    }  // Actor destroyed - SAFE (all work complete)
+
+    scheduler->stop();
+}
+```
+
+#### Safe Pattern 3: Actor Outlives Scheduler (RAII)
+
+```cpp
+class Application {
+    std::unique_ptr<MyActor, pmr::deleter_t> actor_;    // Declared FIRST
+    std::unique_ptr<sharing_scheduler> scheduler_;       // Declared SECOND
+
+public:
+    Application(std::pmr::memory_resource* res)
+        : actor_(spawn<MyActor>(res))
+        , scheduler_(std::make_unique<sharing_scheduler>(4, 1000)) {
+        scheduler_->start();
+    }
+
+    ~Application() {
+        // C++ destroys in REVERSE order:
+        // 1. ~scheduler_ → stop() called, workers exit
+        // 2. ~actor_ → SAFE
+    }
+};
+```
+
+#### Unsafe Patterns (DO NOT USE)
+
+```cpp
 // WRONG: Actor destroyed while scheduler running
 {
     auto actor = spawn<MyActor>(resource);
-    send(actor.get(), &MyActor::process, data);
-    scheduler->enqueue(actor.get());
-}  // 💥 CRASH: actor destroyed, but worker may call resume()
+    auto [needs_sched, fut] = send(actor.get(), &MyActor::process, data);
+    if (needs_sched) scheduler->enqueue(actor.get());
+}  // CRASH: workers may call resume() on freed memory
 scheduler->stop();
+
+// WRONG: Destroy actor with pending futures
+unique_future<int> future;
+{
+    auto actor = spawn<MyActor>(resource);
+    auto [_, f] = send(actor.get(), &MyActor::slow_compute, 42);
+    future = std::move(f);
+}  // CRASH: Actor freed while slow_compute running
+auto result = std::move(future).get();  // Use-after-free
 ```
 
-**Safe patterns:**
-1. Call `scheduler->stop()` before any actor destruction
-2. Wait for all futures before destroying actor (ensures work complete)
-3. Declare actor BEFORE scheduler (reverse destruction order)
-
-**See [`docs/actor-lifecycle-and-shutdown.md`](docs/actor-lifecycle-and-shutdown.md) for detailed flow diagrams.**
+| Scenario | Safe? |
+|----------|-------|
+| `stop()` then destroy actor | Yes |
+| Wait all futures, then destroy | Yes |
+| Actor declared before scheduler (RAII) | Yes |
+| Destroy actor while scheduler running | **NO** |
+| Destroy actor with pending futures | **NO** |
 
 ### Memory Management
 - Uses `std::pmr::memory_resource`
@@ -129,12 +209,12 @@ public:
     explicit MyActor(std::pmr::memory_resource* ptr)
         : basic_actor<MyActor>(ptr) {}
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<MyActor, &MyActor::compute>) {
-            dispatch(this, &MyActor::compute, msg);
+            co_await dispatch(this, &MyActor::compute, msg);
         } else if (cmd == msg_id<MyActor, &MyActor::notify>) {
-            dispatch(this, &MyActor::notify, msg);
+            co_await dispatch(this, &MyActor::notify, msg);
         }
     }
 };
@@ -142,12 +222,19 @@ public:
 
 ### Message Sending
 ```cpp
-// Fire-and-forget
-send(target, sender, &Target::method, arg1, arg2);
+// send() returns std::pair<bool, unique_future<T>>
+// - first (needs_sched): true if actor needs to be scheduled
+// - second: the future to get the result
 
 // Request-response
-auto future = send(target, sender, &Target::compute, arg);
+auto [needs_sched, future] = send(target.get(), &Target::compute, arg);
+if (needs_sched) scheduler->enqueue(target.get());
+while (!future.available()) std::this_thread::yield();
 int result = std::move(future).get();
+
+// Fire-and-forget
+auto [_, fut] = send(target.get(), &Target::method, arg1, arg2);
+fut.detach();
 ```
 
 ### Coroutine Parameters
@@ -186,13 +273,16 @@ Async request-response via `unique_future<T>`:
 // Handler as coroutine
 unique_future<int> compute(int x) { co_return x * x; }
 
-// Caller
-auto future = send(actor, sender, &Actor::compute, 42);
-int result = std::move(future).get();  // Blocks until ready
+// Caller - send() returns pair<bool, future>
+auto [needs_sched, future] = send(actor.get(), &Actor::compute, 42);
+if (needs_sched) scheduler->enqueue(actor.get());
+while (!future.available()) std::this_thread::yield();
+int result = std::move(future).get();
 
 // Coroutine chaining
 unique_future<int> chain(int x) {
-    auto f = send(other, address(), &Other::process, x);
+    auto [needs_sched, f] = send(other.get(), &Other::process, x);
+    if (needs_sched) scheduler->enqueue(other.get());
     int r = co_await std::move(f);
     co_return r + 10;
 }
@@ -222,6 +312,10 @@ while (co_await gen) {
 
 ## Recent Changes (2025-01)
 
+- **`send()` API simplified**: No sender address, returns `std::pair<bool, future>`
+- **`make_message()` simplified**: No sender address parameter
+- **`behavior()` is now a coroutine**: Returns `behavior_t`, use `co_await dispatch(...)`
+- **`enqueue_impl()` return type**: Now `std::pair<bool, enqueue_result>`
 - Messages created in receiver's memory resource
 - Unified actor state management (single atomic)
 - Exponential backoff in `future.get()` (99% CPU reduction)
@@ -229,12 +323,50 @@ while (co_await gen) {
 
 **See [`CHANGELOG.md`](CHANGELOG.md) for full history.**
 
+## Debugging
+
+### AddressSanitizer
+
+Detect use-after-free and other memory issues:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+cmake --build build
+cd build && ctest --output-on-failure
+```
+
+### ThreadSanitizer
+
+Detect data races:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_CXX_FLAGS="-fsanitize=thread"
+cmake --build build
+cd build && ctest --output-on-failure
+```
+
+### Typical ASan Error (Actor Lifetime Bug)
+
+```
+==PID==ERROR: AddressSanitizer: heap-use-after-free on address 0xXXXX
+READ of size 1 at 0xXXXX thread TNN
+    #0 ... in std::atomic<actor_state>::load()
+    #1 ... in cooperative_actor::resume()
+    #2 ... in resume_impl<MyActor>()
+
+freed by thread T0 here:
+    #0 ... in ~cooperative_actor()
+```
+
+**Solution:** Call `scheduler->stop()` BEFORE destroying actors.
+
 ## Additional Resources
 
 - **[CHANGELOG.md](CHANGELOG.md)** - Change history
 - **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Promise/Future guide
 - **[GENERATOR_GUIDE.md](GENERATOR_GUIDE.md)** - Generator guide
-- **[docs/actor-lifecycle-and-shutdown.md](docs/actor-lifecycle-and-shutdown.md)** - Actor lifecycle and shutdown details
 - **[docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md](docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md)** - GCC 11.4 bug workaround
 - **Examples:** `examples/` directory
 - **Tests:** `test/` directory

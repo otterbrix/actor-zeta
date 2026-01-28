@@ -32,15 +32,19 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&Worker::compute>;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    explicit Worker(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<Worker>(res) {}
+
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<Worker, &Worker::compute>) {
-            actor_zeta::dispatch(this, &Worker::compute, msg);
+            co_await actor_zeta::dispatch(this, &Worker::compute, msg);
         }
     }
 };
 
-// Usage
-auto future = actor_zeta::send(worker.get(), sender, &Worker::compute, 42);
+// Usage - send() returns pair<bool, future>
+auto [needs_sched, future] = actor_zeta::send(worker.get(), &Worker::compute, 42);
+if (needs_sched) scheduler->enqueue(worker.get());
 int result = co_await std::move(future);
 ```
 
@@ -56,10 +60,20 @@ public:
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&Producer::stream>;
+
+    explicit Producer(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<Producer>(res) {}
+
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
+        if (msg->command() == actor_zeta::msg_id<Producer, &Producer::stream>) {
+            co_await actor_zeta::dispatch(this, &Producer::stream, msg);
+        }
+    }
 };
 
-// Usage
-auto gen = actor_zeta::send(producer.get(), sender, &Producer::stream, 10);
+// Usage - send() returns pair<bool, generator>
+auto [needs_sched, gen] = actor_zeta::send(producer.get(), &Producer::stream, 10);
+if (needs_sched) scheduler->enqueue(producer.get());
 while (co_await gen) {
     process(gen.current());
 }
