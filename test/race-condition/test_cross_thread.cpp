@@ -416,29 +416,28 @@ TEST_CASE("cross-thread: high contention") {
     for (int t = 0; t < NUM_THREADS; ++t) {
         threads.emplace_back([&, t]() {
             for (int i = 0; i < ITERATIONS_PER_THREAD; ++i) {
-                auto [needs_sched, future] = actor_zeta::send(actor.get(),
+                auto send_result = actor_zeta::send(actor.get(),
                                                &cross_thread_worker::compute,
                                                t * ITERATIONS_PER_THREAD + i);
+                auto needs_sched = send_result.first;
+                auto& future = send_result.second;
 
                 if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
 
-                // Tight spin
-                int spins = 0;
-                while (!future.available() && spins < 100000) {
-                    ++spins;
+                // Wait for result with yield instead of pure spin
+                while (!future.available()) {
+                    std::this_thread::yield();
                 }
 
-                if (future.available()) {
-                    int result = std::move(future).get();
-                    int expected = (t * ITERATIONS_PER_THREAD + i) * 2;
-                    // Don't use REQUIRE in threads - Catch2 is not thread-safe
-                    if (result == expected) {
-                        correct_results.fetch_add(1, std::memory_order_relaxed);
-                    }
-                    total_completed.fetch_add(1, std::memory_order_relaxed);
+                int result = std::move(future).get();
+                int expected = (t * ITERATIONS_PER_THREAD + i) * 2;
+                // Don't use REQUIRE in threads - Catch2 is not thread-safe
+                if (result == expected) {
+                    correct_results.fetch_add(1, std::memory_order_relaxed);
                 }
+                total_completed.fetch_add(1, std::memory_order_relaxed);
             }
         });
     }
