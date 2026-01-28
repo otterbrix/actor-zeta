@@ -22,10 +22,10 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         switch (msg->command()) {
             case msg_id<worker_actor, &worker_actor::compute>:
-                dispatch(this, &worker_actor::compute, msg);
+                co_await dispatch(this, &worker_actor::compute, msg);
                 break;
             default:
                 break;
@@ -52,7 +52,7 @@ public:
         std::cerr << "[client::process] START x=" << x << std::endl;
 
         // Send request to worker via address_t (only address!)
-        auto future = send(worker_address_, address(), &worker_actor::compute, x);
+        auto [needs_sched, future] = send(worker_address_, &worker_actor::compute, x);
 
         // co_await - suspend if not ready
         // Supervisor will resume coroutine when future becomes ready
@@ -72,20 +72,13 @@ public:
         &client_actor::get_result
     >;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         switch (msg->command()) {
-            case msg_id<client_actor, &client_actor::process>: {
-                // CRITICAL: Must store pending coroutine future!
-                // If we just call dispatch() without storing, future gets destroyed immediately,
-                // which destroys the coroutine and causes refcount underflow.
-                auto future = dispatch(this, &client_actor::process, msg);
-                if (!future.available()) {
-                    pending_.push_back(std::move(future));
-                }
+            case msg_id<client_actor, &client_actor::process>:
+                co_await dispatch(this, &client_actor::process, msg);
                 break;
-            }
             case msg_id<client_actor, &client_actor::get_result>:
-                dispatch(this, &client_actor::get_result, msg);
+                co_await dispatch(this, &client_actor::get_result, msg);
                 break;
             default:
                 break;
@@ -114,7 +107,7 @@ public:
 private:
     address_t worker_address_;
     std::atomic<int> final_result_;
-    std::vector<unique_future<int>> pending_;  // Store pending coroutine futures
+    std::vector<unique_future<void>> pending_;  // Store pending dispatch futures
 };
 
 
@@ -142,8 +135,7 @@ public:
     void run_once() {
         if (client_) client_->resume(1);
         if (worker_) worker_->resume(1);
-        // Poll pending coroutines after processing messages
-        if (client_) client_->poll_pending();
+        // With behavior_t API, coroutines resume automatically when futures ready
     }
 
 private:
@@ -160,7 +152,7 @@ TEST_CASE("worker only") {
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get());
 
-    auto future = send(worker.get(), address_t::empty_address(), &worker_actor::compute, 21);
+    auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
 
     // Supervisor runs actors
     supervisor.run_until_ready(future);
@@ -180,7 +172,7 @@ TEST_CASE("client-worker coroutine with supervisor") {
     supervisor.set_actors(worker.get(), client.get());
 
     // Send message to client
-    auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+    auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
 
     // Supervisor controls resume of all actors
     supervisor.run_until_ready(future);
@@ -189,7 +181,7 @@ TEST_CASE("client-worker coroutine with supervisor") {
     REQUIRE(std::move(future).get() == 52);  // 21 * 2 + 10 = 52
 
     // Verify via get_result()
-    auto result_future = send(client.get(), address_t::empty_address(), &client_actor::get_result);
+    auto [needs_sched2, result_future] = send(client.get(), &client_actor::get_result);
     supervisor.run_until_ready(result_future);
 
     REQUIRE(result_future.available());

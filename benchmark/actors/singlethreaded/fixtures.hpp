@@ -22,7 +22,8 @@
         void SetUp(const benchmark::State&) override {                                      \
             resource_ =std::pmr::get_default_resource();                            \
             supervisor_ = actor_zeta::spawn<Supervisor>(resource_);                         \
-            actor_zeta::detail::ignore_unused(actor_zeta::send(supervisor_.get(), actor_zeta::address_t::empty_address(), &Supervisor::prepare)); \
+            auto [needs_sched, future] = actor_zeta::send(supervisor_.get(), &Supervisor::prepare); \
+            actor_zeta::detail::ignore_unused(future);                                      \
         }                                                                                    \
                                                                                              \
         void TearDown(const benchmark::State&) override {                                   \
@@ -30,7 +31,8 @@
         }                                                                                    \
                                                                                              \
         void DoPingPong() {                                                                 \
-            actor_zeta::detail::ignore_unused(actor_zeta::send(supervisor_.get(), actor_zeta::address_t::empty_address(), &Supervisor::send)); \
+            auto [needs_sched, future] = actor_zeta::send(supervisor_.get(), &Supervisor::send); \
+            actor_zeta::detail::ignore_unused(future);                                      \
         }                                                                                    \
     };                                                                                       \
                                                                                              \

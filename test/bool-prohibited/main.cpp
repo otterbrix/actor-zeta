@@ -30,16 +30,16 @@ public:
         co_return std::string("good_actor");
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<good_actor, &good_actor::ping>) {
-            dispatch(this, &good_actor::ping, msg);
+            co_await dispatch(this, &good_actor::ping, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::calculate>) {
-            dispatch(this, &good_actor::calculate, msg);
+            co_await dispatch(this, &good_actor::calculate, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::check_status>) {
-            dispatch(this, &good_actor::check_status, msg);
+            co_await dispatch(this, &good_actor::check_status, msg);
         } else if (cmd == actor_zeta::msg_id<good_actor, &good_actor::get_name>) {
-            dispatch(this, &good_actor::get_name, msg);
+            co_await dispatch(this, &good_actor::get_name, msg);
         }
     }
 
@@ -62,10 +62,9 @@ TEST_CASE("void methods work (fire-and-forget)") {
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
     // Send void method - fire-and-forget
-    auto future = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &good_actor::ping);
+    auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &good_actor::ping);
 
     // Execute actor synchronously
     actor->resume(10);
@@ -82,10 +81,9 @@ TEST_CASE("int methods work (request-response)") {
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
     // Send int method - request-response
-    auto future = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &good_actor::calculate);
+    auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &good_actor::calculate);
 
     // Execute actor synchronously
     actor->resume(10);
@@ -101,10 +99,9 @@ TEST_CASE("enum methods work (request-response)") {
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
     // Send enum method - request-response
-    auto future = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &good_actor::check_status);
+    auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &good_actor::check_status);
 
     // Execute actor synchronously
     actor->resume(10);
@@ -120,10 +117,9 @@ TEST_CASE("string methods work (request-response)") {
     auto actor = actor_zeta::spawn<good_actor>(resource);
 
     // Send string method - request-response
-    auto future = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &good_actor::get_name);
+    auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &good_actor::get_name);
 
     // Execute actor synchronously
     actor->resume(10);
@@ -141,9 +137,8 @@ TEST_CASE("address_t works with all method types") {
 
     // void via address_t
     {
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             addr,
-            actor_zeta::address_t::empty_address(),
             &good_actor::ping);
         actor->resume(10);
         std::move(future).get();
@@ -151,9 +146,8 @@ TEST_CASE("address_t works with all method types") {
 
     // int via address_t
     {
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             addr,
-            actor_zeta::address_t::empty_address(),
             &good_actor::calculate);
         actor->resume(10);
         REQUIRE(std::move(future).get() == 42);
@@ -161,9 +155,8 @@ TEST_CASE("address_t works with all method types") {
 
     // enum via address_t
     {
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             addr,
-            actor_zeta::address_t::empty_address(),
             &good_actor::check_status);
         actor->resume(10);
         REQUIRE(std::move(future).get() == good_actor::status::ok);
@@ -171,9 +164,8 @@ TEST_CASE("address_t works with all method types") {
 
     // string via address_t
     {
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             addr,
-            actor_zeta::address_t::empty_address(),
             &good_actor::get_name);
         actor->resume(10);
         REQUIRE(std::move(future).get() == "good_actor");
@@ -206,8 +198,7 @@ TEST_CASE("bool methods are prohibited") {
 
     // ❌ Compilation error: "Actor methods must not return bool"
     auto future = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &bad_actor::check_something);
+            actor.get(),
+            &bad_actor::check_something);
 }
 */

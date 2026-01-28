@@ -31,9 +31,9 @@ public:
     actor_zeta::unique_future<void> start() {
         // Send ping to partner and schedule only if needed
         if (partner_ && scheduler_) {
-            auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::ping, Args{}...);
+            auto [needs_sched, future] = actor_zeta::send(partner_, &ping_pong_actor::ping, Args{}...);
             // Only enqueue if actor was unblocked by this message
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler_->enqueue(partner_);
             }
         }
@@ -43,9 +43,9 @@ public:
     actor_zeta::unique_future<void> ping(Args...) {
         // Receive ping, send pong back
         if (partner_ && scheduler_) {
-            auto future = actor_zeta::send(partner_, this->address(), &ping_pong_actor::pong, Args{}...);
+            auto [needs_sched, future] = actor_zeta::send(partner_, &ping_pong_actor::pong, Args{}...);
             // Only enqueue if actor was unblocked by this message
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler_->enqueue(partner_);
             }
         }
@@ -57,15 +57,15 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
 
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::start>) {
-            actor_zeta::dispatch(this, &ping_pong_actor::start, msg);
+            co_await actor_zeta::dispatch(this, &ping_pong_actor::start, msg);
         } else if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::ping>) {
-            actor_zeta::dispatch(this, &ping_pong_actor::ping, msg);
+            co_await actor_zeta::dispatch(this, &ping_pong_actor::ping, msg);
         } else if (cmd == actor_zeta::msg_id<ping_pong_actor, &ping_pong_actor::pong>) {
-            actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
+            co_await actor_zeta::dispatch(this, &ping_pong_actor::pong, msg);
         }
     }
 

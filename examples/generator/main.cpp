@@ -57,14 +57,14 @@ public:
         &DataProducer::stream_fibonacci
     >;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<DataProducer, &DataProducer::stream_range>) {
-            dispatch(this, &DataProducer::stream_range, msg);
+            co_await dispatch(this, &DataProducer::stream_range, msg);
         } else if (cmd == msg_id<DataProducer, &DataProducer::stream_messages>) {
-            dispatch(this, &DataProducer::stream_messages, msg);
+            co_await dispatch(this, &DataProducer::stream_messages, msg);
         } else if (cmd == msg_id<DataProducer, &DataProducer::stream_fibonacci>) {
-            dispatch(this, &DataProducer::stream_fibonacci, msg);
+            co_await dispatch(this, &DataProducer::stream_fibonacci, msg);
         }
     }
 };
@@ -85,7 +85,7 @@ int main() {
 
     std::cout << "\n--- Example 2: Via send() API ---\n";
     {
-        auto gen = send(producer.get(), actor::address_t::empty_address(),
+        auto [needs_sched, gen] = send(producer.get(),
                         &DataProducer::stream_fibonacci, 8);
         std::cout << "Generator from send() valid: " << gen.valid() << "\n";
 
@@ -96,9 +96,9 @@ int main() {
 
     std::cout << "\n--- Example 3: Multiple generators ---\n";
     {
-        auto gen1 = send(producer.get(), actor::address_t::empty_address(),
+        auto [needs_sched1, gen1] = send(producer.get(),
                          &DataProducer::stream_range, 0, 3);
-        auto gen2 = send(producer.get(), actor::address_t::empty_address(),
+        auto [needs_sched2, gen2] = send(producer.get(),
                          &DataProducer::stream_messages, 2);
 
         std::cout << "Created 2 generators\n";
@@ -111,7 +111,7 @@ int main() {
 
     std::cout << "\n--- Example 4: Cancel generator ---\n";
     {
-        auto gen = send(producer.get(), actor::address_t::empty_address(),
+        auto [needs_sched, gen] = send(producer.get(),
                         &DataProducer::stream_range, 0, 100);
 
         std::cout << "Generator valid: " << gen.valid() << "\n";
@@ -128,7 +128,7 @@ int main() {
 
     std::cout << "\n--- Example 5: Detach generator ---\n";
     {
-        auto gen = send(producer.get(), actor::address_t::empty_address(),
+        auto [needs_sched, gen] = send(producer.get(),
                         &DataProducer::stream_messages, 3);
 
         std::cout << "Before detach - valid: " << gen.valid() << "\n";

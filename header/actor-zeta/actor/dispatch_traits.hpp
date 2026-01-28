@@ -96,18 +96,19 @@ namespace actor_zeta {
             typename T::dispatch_traits::methods;
         };
 
+        /// Detects cooperative_actor via marker type (mailbox() is protected)
         template<typename T>
-        concept has_mailbox = requires(T* t) {
-            { t->mailbox() };
+        concept is_cooperative_actor = requires {
+            typename T::is_cooperative_actor_type;
         };
 
-        /// Interface: has dispatch_traits but no mailbox (pure contract)
+        /// Actor: has dispatch_traits and is cooperative_actor (concrete implementation)
         template<typename T>
-        concept is_interface = has_dispatch_traits<T> && !has_mailbox<T>;
+        concept is_actor = has_dispatch_traits<T> && is_cooperative_actor<T>;
 
-        /// Actor: has both dispatch_traits and mailbox (concrete implementation)
+        /// Interface: has dispatch_traits but is NOT an actor (pure contract)
         template<typename T>
-        concept is_actor = has_dispatch_traits<T> && has_mailbox<T>;
+        concept is_interface = has_dispatch_traits<T> && !is_cooperative_actor<T>;
 
     } // namespace detail
 
@@ -192,6 +193,22 @@ namespace actor_zeta {
         template<typename Actor, typename ResultType>
         using dispatch_result_t = typename dispatch_result_type<Actor, ResultType>::type;
 
+        // send_result_t - wraps unique_future in pair<bool, future> for needs_scheduling
+        template<typename Actor, typename ResultType>
+        struct send_result_type {
+            using future_type = dispatch_result_t<Actor, ResultType>;
+            using type = std::pair<bool, future_type>;
+        };
+
+        // Generators also return pair<bool, generator<T>> for consistency
+        template<typename Actor, typename T>
+        struct send_result_type<Actor, generator<T>> {
+            using type = std::pair<bool, generator<T>>;
+        };
+
+        template<typename Actor, typename ResultType>
+        using send_result_t = typename send_result_type<Actor, ResultType>::type;
+
         template<auto SearchPtr, auto CurrentPtr>
         struct is_same_ptr {
             static constexpr bool value = false;
@@ -216,6 +233,62 @@ namespace actor_zeta {
             }
             return 0;
         }
+
+        // =======================================================================
+        // Compile-time method validation helpers
+        // =======================================================================
+
+        /// Check if method signature (type) exists in method list
+        /// This catches errors when method with wrong signature is passed to send()
+        template<typename Method, typename MethodList>
+        struct method_signature_exists;
+
+        template<typename Method>
+        struct method_signature_exists<Method, type_traits::type_list<>> {
+            static constexpr bool value = false;
+        };
+
+        template<typename Method, auto FirstPtr, auto... RestPtrs>
+        struct method_signature_exists<Method, type_traits::type_list<method_map_entry<FirstPtr>, method_map_entry<RestPtrs>...>> {
+            static constexpr bool value =
+                std::is_same_v<Method, decltype(FirstPtr)> ||
+                method_signature_exists<Method, type_traits::type_list<method_map_entry<RestPtrs>...>>::value;
+        };
+
+        template<typename Method, typename MethodList>
+        inline constexpr bool method_signature_exists_v = method_signature_exists<Method, MethodList>::value;
+
+        /// Check that method belongs to the expected class
+        template<typename Method, typename ExpectedClass>
+        struct method_belongs_to_class {
+            using actual_class = typename type_traits::callable_trait<Method>::class_type;
+            static constexpr bool value = std::is_same_v<actual_class, ExpectedClass> ||
+                                          std::is_base_of_v<actual_class, ExpectedClass>;
+        };
+
+        template<typename Method, typename ExpectedClass>
+        inline constexpr bool method_belongs_to_class_v = method_belongs_to_class<Method, ExpectedClass>::value;
+
+        /// Combined validation for send()
+        template<typename Actor, typename Method>
+        struct validate_method_for_send {
+            using methods = typename Actor::dispatch_traits::methods;
+            using method_class = typename type_traits::callable_trait<Method>::class_type;
+
+            static_assert(
+                method_signature_exists_v<Method, methods>,
+                "send(): Method signature not found in Actor::dispatch_traits. "
+                "Ensure the method is registered: using dispatch_traits = actor_zeta::dispatch_traits<&Actor::method, ...>;");
+
+            static_assert(
+                method_belongs_to_class_v<Method, Actor>,
+                "send(): Method does not belong to this Actor class. "
+                "Check that you're calling the correct actor's method.");
+
+            static constexpr bool valid = method_signature_exists_v<Method, methods> &&
+                                          method_belongs_to_class_v<Method, Actor>;
+        };
+
     } // namespace detail
 
     template<typename Actor, auto MethodPtr, typename MethodList>
@@ -234,62 +307,62 @@ namespace actor_zeta {
     struct runtime_dispatch_helper;
 
     namespace detail {
-        template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename Sender, typename... Args>
-        auto dispatch_method_impl(ActorPtr* actor, Sender sender, Args&&... args)
-            -> dispatch_result_t<Actor, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
+        template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename... Args>
+        auto dispatch_method_impl(ActorPtr* actor, Args&&... args)
+            -> send_result_t<Actor, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
 
-        template<typename Interface, auto MethodPtr, uint64_t ActionId, typename Sender, typename... Args>
-        auto dispatch_method_impl_address(actor::address_t target, Sender sender, Args&&... args)
-            -> dispatch_result_t<Interface, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
+        template<typename Interface, auto MethodPtr, uint64_t ActionId, typename... Args>
+        auto dispatch_method_impl_address(actor::address_t target, Args&&... args)
+            -> send_result_t<Interface, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type>;
     }
 
     template<typename Actor, typename Method>
     struct runtime_dispatch_helper<Actor, Method, type_traits::type_list<>> {
-        template<typename ActorPtr, typename Sender, typename... Args>
-        static auto dispatch(Method method, ActorPtr* actor, Sender sender, Args&&... args)
-            -> detail::dispatch_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
-            detail::ignore_unused(method, actor, sender, sizeof...(args));
+        template<typename ActorPtr, typename... Args>
+        static auto dispatch(Method method, ActorPtr* actor, Args&&... args)
+            -> detail::send_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
+            detail::ignore_unused(method, actor, sizeof...(args));
             assert(false && "Method not found in dispatch_traits");
             std::abort();
         }
     };
 
-    template<typename Actor, typename Method, typename ActorPtr, typename Sender, typename... Args>
+    template<typename Actor, typename Method, typename ActorPtr, typename... Args>
     struct dispatch_one_impl {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
-        using dispatch_return_type = detail::dispatch_result_t<Actor, result_type>;
+        using dispatch_return_type = detail::send_result_t<Actor, result_type>;
 
         template<std::size_t... Is>
-        static auto dispatch(Method method, ActorPtr* actor, Sender sender, std::index_sequence<>, Args&&... args)
+        static auto dispatch(Method method, ActorPtr* actor, std::index_sequence<>, Args&&... args)
             -> dispatch_return_type {
-            detail::ignore_unused(method, actor, sender, sizeof...(args));
+            detail::ignore_unused(method, actor, sizeof...(args));
             assert(false && "Method not found in dispatch_traits");
             std::abort();
         }
 
         template<auto FirstMethod, auto... RestMethods, std::size_t FirstIndex, std::size_t... RestIndices>
-        static auto dispatch(Method method, ActorPtr* actor, Sender sender,
+        static auto dispatch(Method method, ActorPtr* actor,
                              std::index_sequence<FirstIndex, RestIndices...>, Args&&... args)
             -> dispatch_return_type {
             if constexpr (std::same_as<Method, decltype(FirstMethod)>) {
                 if (method == FirstMethod) {
                     return detail::dispatch_method_impl<Actor, FirstMethod, FirstIndex>(
-                        actor, sender, std::forward<Args>(args)...);
+                        actor, std::forward<Args>(args)...);
                 }
             }
 
             return dispatch<RestMethods...>(
-                method, actor, sender,
+                method, actor,
                 std::index_sequence<RestIndices...>{},
                 std::forward<Args>(args)...);
         }
     };
 
-    template<typename Actor, typename Method, auto... MethodPtrs, typename ActorPtr, typename Sender, typename... Args, std::size_t... Is>
-    static auto dispatch_impl(Method method, ActorPtr* actor, Sender sender, std::index_sequence<Is...>, Args&&... args)
-        -> detail::dispatch_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
-        return dispatch_one_impl<Actor, Method, ActorPtr, Sender, Args...>::template dispatch<MethodPtrs...>(
-            method, actor, sender,
+    template<typename Actor, typename Method, auto... MethodPtrs, typename ActorPtr, typename... Args, std::size_t... Is>
+    static auto dispatch_impl(Method method, ActorPtr* actor, std::index_sequence<Is...>, Args&&... args)
+        -> detail::send_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
+        return dispatch_one_impl<Actor, Method, ActorPtr, Args...>::template dispatch<MethodPtrs...>(
+            method, actor,
             std::index_sequence<Is...>{},
             std::forward<Args>(args)...);
     }
@@ -297,23 +370,23 @@ namespace actor_zeta {
     template<typename Actor, typename Method, auto... MethodPtrs>
     struct runtime_dispatch_helper<Actor, Method, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
-        using dispatch_return_type = detail::dispatch_result_t<Actor, result_type>;
+        using dispatch_return_type = detail::send_result_t<Actor, result_type>;
 
-        template<typename ActorPtr, typename Sender, typename... Args>
-        static auto dispatch(Method method, ActorPtr* actor, Sender sender, Args&&... args)
+        template<typename ActorPtr, typename... Args>
+        static auto dispatch(Method method, ActorPtr* actor, Args&&... args)
             -> dispatch_return_type {
             return dispatch_impl<Actor, Method, MethodPtrs...>(
-                method, actor, sender,
+                method, actor,
                 std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
                 std::forward<Args>(args)...);
         }
 
-        template<typename Sender, typename... Args>
-        static auto dispatch(Method method, actor::address_t target, Sender sender, Args&&... args)
+        template<typename... Args>
+        static auto dispatch(Method method, actor::address_t target, Args&&... args)
             -> dispatch_return_type {
             auto* actor = static_cast<Actor*>(target.get());
             return dispatch_impl<Actor, Method, MethodPtrs...>(
-                method, actor, sender,
+                method, actor,
                 std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
                 std::forward<Args>(args)...);
         }
@@ -326,51 +399,51 @@ namespace actor_zeta {
 
     template<typename Interface, typename Method>
     struct runtime_dispatch_helper_address<Interface, Method, type_traits::type_list<>> {
-        template<typename Sender, typename... Args>
-        static auto dispatch(Method method, actor::address_t target, Sender sender, Args&&... args)
-            -> detail::dispatch_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
-            detail::ignore_unused(method, target, sender, sizeof...(args));
+        template<typename... Args>
+        static auto dispatch(Method method, actor::address_t target, Args&&... args)
+            -> detail::send_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
+            detail::ignore_unused(method, target, sizeof...(args));
             assert(false && "Method not found in dispatch_traits");
             std::abort();
         }
     };
 
-    template<typename Interface, typename Method, typename Sender, typename... Args>
+    template<typename Interface, typename Method, typename... Args>
     struct dispatch_one_impl_address {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
-        using dispatch_return_type = detail::dispatch_result_t<Interface, result_type>;
+        using dispatch_return_type = detail::send_result_t<Interface, result_type>;
 
         template<std::size_t... Is>
-        static auto dispatch(Method method, actor::address_t target, Sender sender, std::index_sequence<>, Args&&... args)
+        static auto dispatch(Method method, actor::address_t target, std::index_sequence<>, Args&&... args)
             -> dispatch_return_type {
-            detail::ignore_unused(method, target, sender, sizeof...(args));
+            detail::ignore_unused(method, target, sizeof...(args));
             assert(false && "Method not found in dispatch_traits");
             std::abort();
         }
 
         template<auto FirstMethod, auto... RestMethods, std::size_t FirstIndex, std::size_t... RestIndices>
-        static auto dispatch(Method method, actor::address_t target, Sender sender,
+        static auto dispatch(Method method, actor::address_t target,
                              std::index_sequence<FirstIndex, RestIndices...>, Args&&... args)
             -> dispatch_return_type {
             if constexpr (std::same_as<Method, decltype(FirstMethod)>) {
                 if (method == FirstMethod) {
                     return detail::dispatch_method_impl_address<Interface, FirstMethod, FirstIndex>(
-                        target, sender, std::forward<Args>(args)...);
+                        target, std::forward<Args>(args)...);
                 }
             }
 
             return dispatch<RestMethods...>(
-                method, target, sender,
+                method, target,
                 std::index_sequence<RestIndices...>{},
                 std::forward<Args>(args)...);
         }
     };
 
-    template<typename Interface, typename Method, auto... MethodPtrs, typename Sender, typename... Args, std::size_t... Is>
-    static auto dispatch_impl_address(Method method, actor::address_t target, Sender sender, std::index_sequence<Is...>, Args&&... args)
-        -> detail::dispatch_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
-        return dispatch_one_impl_address<Interface, Method, Sender, Args...>::template dispatch<MethodPtrs...>(
-            method, target, sender,
+    template<typename Interface, typename Method, auto... MethodPtrs, typename... Args, std::size_t... Is>
+    static auto dispatch_impl_address(Method method, actor::address_t target, std::index_sequence<Is...>, Args&&... args)
+        -> detail::send_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
+        return dispatch_one_impl_address<Interface, Method, Args...>::template dispatch<MethodPtrs...>(
+            method, target,
             std::index_sequence<Is...>{},
             std::forward<Args>(args)...);
     }
@@ -378,13 +451,13 @@ namespace actor_zeta {
     template<typename Interface, typename Method, auto... MethodPtrs>
     struct runtime_dispatch_helper_address<Interface, Method, type_traits::type_list<method_map_entry<MethodPtrs>...>> {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
-        using dispatch_return_type = detail::dispatch_result_t<Interface, result_type>;
+        using dispatch_return_type = detail::send_result_t<Interface, result_type>;
 
-        template<typename Sender, typename... Args>
-        static auto dispatch(Method method, actor::address_t target, Sender sender, Args&&... args)
+        template<typename... Args>
+        static auto dispatch(Method method, actor::address_t target, Args&&... args)
             -> dispatch_return_type {
             return dispatch_impl_address<Interface, Method, MethodPtrs...>(
-                method, target, sender,
+                method, target,
                 std::index_sequence_for<method_map_entry<MethodPtrs>...>{},
                 std::forward<Args>(args)...);
         }

@@ -4,12 +4,13 @@
 #include <concepts>
 #include <memory_resource>
 #include <new>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
 #include <actor-zeta/config.hpp>
 #include <actor-zeta/detail/coro_frame_header.hpp>
-#include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
 namespace actor_zeta {
@@ -31,330 +32,419 @@ namespace actor_zeta {
     template<typename T>
     class unique_future;
 
-    template<typename T>
-    class promise;
-
+    // This is the user-facing promise for explicit promise/future pairs
     template<typename T>
     class promise final {
     private:
         static constexpr bool is_void_type = std::is_void_v<T>;
-        using state_type = detail::future_state<T>;
+        using state_type = detail::shared_state<T>;
 
     public:
         promise() = delete;
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
+        // Constructor - creates new shared_state (owning)
         explicit promise(std::pmr::memory_resource* res)
-            : state_(nullptr)
-            , resource_(res) {
+            : state_(detail::allocate_shared_state<T>(res)) {
             assert(res && "promise constructed with null resource");
-            void* mem = resource_->allocate(sizeof(state_type), alignof(state_type));
-            state_ = new (mem) state_type(resource_);
         }
 
-        explicit promise(type_traits::internal_construct_tag, state_type* existing_state, std::pmr::memory_resource* res) noexcept
-            : state_(existing_state)
-            , resource_(res) {
-            if (state_) {
-                state_->add_ref();
-            }
-        }
+        // Constructor from existing shared_state (view, for message.get_result_promise)
+        explicit promise(state_type* state) noexcept
+            : state_(state) {}
 
+        // Move constructor
         promise(promise&& other) noexcept
-            : state_(other.state_)
-            , resource_(other.resource_) {
-            other.state_ = nullptr;
-        }
+            : state_(std::exchange(other.state_, nullptr)) {}
 
+        // Move assignment
         promise& operator=(promise&& other) noexcept {
             if (this != &other) {
-                release();
-                state_ = other.state_;
-                resource_ = other.resource_;
-                other.state_ = nullptr;
+                release_if_needed();
+                state_ = std::exchange(other.state_, nullptr);
             }
             return *this;
         }
 
+        // Destructor - sets broken_pipe if not set_value'd
         ~promise() noexcept {
-            release();
+            release_if_needed();
         }
 
+        // Get future for this promise
         [[nodiscard]] unique_future<T> get_future() noexcept;
 
+        // Set value (non-void)
         template<typename U>
             requires(!std::is_void_v<T> && std::is_constructible_v<T, U&&>)
-        void set_value(U&& value) {
+        void set_value(U&& value) noexcept {
             assert(state_ && "set_value() on moved-from promise");
-            if (state_->is_cancelled()) {
-                assert(false && "set_value() on orphaned/cancelled promise");
-                return;
-            }
             state_->set_value(T(std::forward<U>(value)));
+            // Thread safety (Q6): Do NOT take/resume continuation here.
+            // Consumer will resume in its own actor's resume_impl().
+            // Set finalizing flag before release to prevent race with release_future
+            state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
+            // Atomically release promise and check if cancelled.
+            bool cancelled = state_->release_promise();
+            if (cancelled) {
+                state_ = nullptr;
+                return;  // Future was already released
+            }
+            // Try to complete finalize phase (clears finalizing flag atomically)
+            // Returns false if future was released concurrently (already deallocated)
+            if (!state_->try_complete_finalize()) {
+                state_ = nullptr;
+                return;  // Cancelled after release_promise, state deallocated
+            }
+            state_ = nullptr;  // ownership transferred
+            // NO cont.resume() - consumer resumes in its own thread
         }
 
-        void set_value()
+        // Set value (void)
+        void set_value() noexcept
             requires(std::is_void_v<T>)
         {
             assert(state_ && "set_value() on moved-from promise");
-            if (state_->is_cancelled()) {
-                assert(false && "set_value() on orphaned/cancelled promise");
+            state_->set_value();
+            // Thread safety (Q6): Do NOT take/resume continuation here.
+            // Consumer will resume in its own actor's resume_impl().
+            // Set finalizing flag before release to prevent race with release_future
+            state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
+            bool cancelled = state_->release_promise();
+            if (cancelled) {
+                state_ = nullptr;
                 return;
             }
-            state_->set_ready();
+            // Try to complete finalize phase
+            if (!state_->try_complete_finalize()) {
+                state_ = nullptr;
+                return;
+            }
+            state_ = nullptr;
+            // NO cont.resume() - consumer resumes in its own thread
         }
 
-        void error(std::error_code ec) {
-            assert(state_ && "error() on moved-from promise");
-            state_->error(ec);
+        // Set error
+        void set_error(std::error_code ec) noexcept {
+            assert(state_ && "set_error() on moved-from promise");
+            state_->set_error(ec);
+            // Thread safety (Q6): Do NOT take/resume continuation here.
+            // Consumer will resume in its own actor's resume_impl().
+            // Set finalizing flag before release to prevent race with release_future
+            state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
+                                    std::memory_order_release);
+            bool cancelled = state_->release_promise();
+            if (cancelled) {
+                state_ = nullptr;
+                return;
+            }
+            // Try to complete finalize phase
+            if (!state_->try_complete_finalize()) {
+                state_ = nullptr;
+                return;
+            }
+            state_ = nullptr;
+            // NO cont.resume() - consumer resumes in its own thread
         }
 
         [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
         }
 
-        [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-            return resource_;
-        }
-
-        [[nodiscard]] detail::future_state_base* internal_state_base() const noexcept {
-            return static_cast<detail::future_state_base*>(state_);
+        [[nodiscard]] state_type* internal_state() const noexcept {
+            return state_;
         }
 
     private:
-        void release() noexcept {
+        void release_if_needed() noexcept {
             if (state_) {
-                intrusive_ptr_release(state_);
+                state_->set_error(std::make_error_code(std::errc::broken_pipe));
+                // Thread safety (Q6): Do NOT take/resume continuation here.
+                // Consumer will resume in its own actor's resume_impl().
+                // Set finalizing flag before release to prevent race with release_future
+                state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
+                bool cancelled = state_->release_promise();
+                if (cancelled) {
+                    state_ = nullptr;
+                    return;
+                }
+                // Try to complete finalize phase
+                if (!state_->try_complete_finalize()) {
+                    state_ = nullptr;
+                    return;
+                }
                 state_ = nullptr;
+                // NO cont.resume() - consumer resumes in its own thread
             }
         }
 
         state_type* state_;
-        std::pmr::memory_resource* resource_;
     };
 
     template<typename T>
     class unique_future final {
+    public:
+        // Forward declaration for promise_type (must be public for coroutine)
+        struct promise_type;
+
     private:
         static constexpr bool is_void_type = std::is_void_v<T>;
-        using state_type = std::conditional_t<is_void_type, detail::future_state_base, detail::future_state<T>>;
-        using coroutine_state_type = std::conditional_t<is_void_type, detail::future_state<void>, detail::future_state<T>>;
+        using state_type = detail::shared_state<T>;
 
     public:
         unique_future(const unique_future&) = delete;
         unique_future& operator=(const unique_future&) = delete;
 
-        explicit unique_future(promise<T>& p)
-            : state_(static_cast<state_type*>(p.internal_state_base()), true)
-            , resource_(p.resource())
-            , needs_scheduling_(false) {
-        }
+        // Default constructor
+        unique_future() noexcept
+            : state_(nullptr)
+            , handle_{} {}
 
+        // Constructor for caller's future (from promise.get_future())
+        explicit unique_future(state_type* s) noexcept
+            : state_(s)
+            , handle_{} {}
+
+        // Constructor for method's future (from promise_type.get_return_object())
+        unique_future(detail::coroutine_handle<promise_type> h, state_type* s) noexcept
+            : state_(s)
+            , handle_(h) {}
+
+        // Move constructor
         unique_future(unique_future&& other) noexcept
-            : state_(std::move(other.state_))
-            , resource_(other.resource_)
-            , needs_scheduling_(other.needs_scheduling_) {
-            other.needs_scheduling_ = false;
-        }
+            : state_(std::exchange(other.state_, nullptr))
+            , handle_(std::exchange(other.handle_, {})) {}
 
-        template<typename U>
-            requires(is_void_type && !std::is_void_v<U>)
-        unique_future(unique_future<U>&& other) noexcept
-            : state_()
-            , resource_(other.resource())
-            , needs_scheduling_(other.needs_scheduling()) {
-            state_ = intrusive_ptr<state_type>(
-                static_cast<state_type*>(other.internal_release_state()), false);
-            other.set_needs_scheduling(false);
-        }
-
+        // Move assignment
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
-                if (state_ && state_->is_pending()) {
-                    state_->cancelled();
-                }
-
-                state_ = std::move(other.state_);
-                resource_ = other.resource_;
-                needs_scheduling_ = other.needs_scheduling_;
-                other.needs_scheduling_ = false;
+                release();
+                state_ = std::exchange(other.state_, nullptr);
+                handle_ = std::exchange(other.handle_, {});
             }
             return *this;
         }
 
-        ~unique_future() noexcept = default;
+        // Destructor - Last-One-Out
+        ~unique_future() noexcept {
+            release();
+        }
 
-        [[nodiscard]] T get() &&
-            requires(!std::is_void_v<T>)
-        {
-            assert(state_ && "get() on invalid future");
-            assert(available() && "get() requires ready future - use co_await or check available() first!");
-            if (state_->is_failed()) {
-                state_ = nullptr;
-                assert(false && "get() on failed/cancelled future!");
-                std::terminate();
+        // === MAIN API: co_await ===
+
+        auto operator co_await() noexcept {
+            return awaiter{state_};
+        }
+
+        // === Backport API (optional, for legacy code) ===
+
+        // Smart wait - waits for promise_released (safe for destroy)
+        void wait() const noexcept {
+            if (!state_) return;
+
+            auto flags = state_->flags_.load(std::memory_order_acquire);
+
+            // Fast path
+            if (flags & detail::state_flags::promise_released) {
+                return;
             }
+
+            // Slow path: exponential backoff
+            int spin_count = 0;
+            constexpr int spin_limit = 100;
+
+            while (!(flags & detail::state_flags::promise_released)) {
+                if (spin_count < spin_limit) {
+                    ++spin_count;
+#if defined(__x86_64__) || defined(_M_X64)
+                    // _mm_pause() equivalent
+                    asm volatile("pause" ::: "memory");
+#elif defined(__aarch64__)
+                    asm volatile("yield" ::: "memory");
+#endif
+                } else {
+#if HAVE_ATOMIC_WAIT
+                    state_->flags_.wait(flags, std::memory_order_acquire);
+#else
+                    std::this_thread::yield();
+#endif
+                }
+                flags = state_->flags_.load(std::memory_order_acquire);
+            }
+        }
+
+        // Blocking get - uses smart wait
+        [[nodiscard]] T get() && requires(!std::is_void_v<T>) {
+            assert(state_ && "get() on invalid future");
+            wait();
+            assert(!state_->has_error() && "future completed with error");
             T result = state_->take_value();
-            state_ = nullptr;
+            release();
             return result;
         }
 
-        void get() &&
-            requires(std::is_void_v<T>)
-        {
+        void get() && requires(std::is_void_v<T>) {
             assert(state_ && "get() on invalid future");
-            assert(available() && "get() requires ready future - use co_await or check available() first!");
-            if (state_->is_failed()) {
-                state_ = nullptr;
-                assert(false && "get() on failed/cancelled future!");
-                std::terminate();
-            }
-            state_ = nullptr;
+            wait();
+            assert(!state_->has_error() && "future completed with error");
+            release();
         }
 
         T get() & requires(!std::is_void_v<T>) = delete;
         void get() & requires(std::is_void_v<T>) = delete;
 
-        [[nodiscard]] bool available() const noexcept {
+        // is_ready for polling - checks promise_released
+        [[nodiscard]] bool is_ready() const noexcept {
             return state_ && state_->is_ready();
         }
 
-        [[nodiscard]] bool failed() const noexcept {
-            return state_ && state_->is_failed();
-        }
-
-        [[nodiscard]] std::error_code error() const noexcept {
-            return state_ ? state_->error() : std::error_code{};
+        // Alias for compatibility
+        [[nodiscard]] bool available() const noexcept {
+            return is_ready();
         }
 
         [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
         }
 
+        [[nodiscard]] bool failed() const noexcept {
+            return state_ && state_->has_error();
+        }
+
+        [[nodiscard]] std::error_code error() const noexcept {
+            return state_ ? state_->get_error() : std::error_code{};
+        }
+
+        // Detach (fire-and-forget)
+        void detach() noexcept {
+            release();
+        }
+
+        // Cancel/ignore
         void ignore() noexcept {
-            state_ = nullptr;
+            release();
         }
 
-        [[nodiscard]] bool needs_scheduling() const noexcept { return needs_scheduling_; }
-        void set_needs_scheduling(bool value) noexcept { needs_scheduling_ = value; }
+        // === Backward compatibility methods ===
 
-        [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-            assert(state_ && "memory_resource() called on invalid future");
-            return resource_;
-        }
-
-        [[nodiscard]] state_type* internal_release_state() noexcept {
-            return state_.detach();
-        }
-
-        [[nodiscard]] state_type* internal_state() const noexcept {
-            return state_.get();
-        }
-
-        void cancel() noexcept {
-            if (state_) {
-                state_->cancelled();
-            }
-        }
-
+        // is_cancelled() - check if the future was cancelled
         [[nodiscard]] bool is_cancelled() const noexcept {
-            return state_ && state_->is_cancelled();
+            return state_ && state_->has_error() &&
+                   state_->get_error() == std::make_error_code(std::errc::operation_canceled);
         }
 
-        /// Factory method for custom promise_type implementations.
-        /// Creates unique_future from raw state pointer.
-        /// @param state Pointer to future_state (takes ownership if add_ref=false)
-        /// @param res Memory resource associated with the state
-        /// @param add_ref If true, increments refcount; if false, assumes ownership
-        [[nodiscard]] static unique_future from_state(
-            detail::future_state_base* state,
-            std::pmr::memory_resource* res,
-            bool add_ref
-        ) noexcept {
-            return unique_future(static_cast<state_type*>(state), res, add_ref);
+        // cancel() - cancel the future (set error)
+        void cancel() noexcept {
+            if (state_ && !state_->has_result()) {
+                state_->set_error(std::make_error_code(std::errc::operation_canceled));
+            }
         }
 
-        void forward_to(promise<T>& target)
-            requires(!std::is_void_v<T>)
-        {
-            if (!state_)
-                return;
-            auto* target_state = static_cast<detail::future_state<T>*>(target.internal_state_base());
-            state_->set_forward_target(target_state);
+        // Internal access (for message class)
+        [[nodiscard]] state_type* internal_state() const noexcept {
+            return state_;
         }
 
-        void forward_to(promise<void>& target)
-            requires(std::is_void_v<T>)
-        {
-            if (!state_)
-                return;
-            auto* target_state = static_cast<detail::future_state<void>*>(target.internal_state_base());
-            state_->set_forward_target_void(target_state);
+        // Access to coroutine handle (for propagating awaited state)
+        [[nodiscard]] detail::coroutine_handle<promise_type> coroutine_handle() const noexcept {
+            return handle_;
         }
 
-        struct awaiter_type {
-            unique_future<T>& future_;
-            detail::future_state_base* promise_state_;
+        // === Awaiter (Variant B+ with CAS) ===
+        // Public so await_transform can access it from other unique_future<U> instantiations
+        struct awaiter {
+            state_type* state_;
 
-            explicit awaiter_type(unique_future<T>& f, detail::future_state_base* prom_state = nullptr) noexcept
-                : future_(f)
-                , promise_state_(prom_state) {}
-
-            [[nodiscard]] bool await_ready() const noexcept {
-                return future_.available();
+            bool await_ready() const noexcept {
+                // Fast path: if result already exists - don't suspend
+                return state_->has_result();
             }
 
-            detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> caller) noexcept {
-                if (future_.available()) {
-                    return caller;
-                }
+            detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> h) noexcept {
+                // CAS for setting continuation
+                // This allows detecting double-await (programmer error)
 
-                auto* state = future_.get_state_internal();
-                if (!state) {
-                    return caller;
-                }
+                detail::coroutine_handle<> expected = nullptr;
+                if (state_->continuation_.compare_exchange_strong(
+                        expected, h,
+                        std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
 
-                state->set_coroutine(caller);
-                if (promise_state_) {
-                    promise_state_->set_awaiting_on(state);
-                }
+                    // CAS successful - we set continuation
+                    // Now check: maybe result is already ready?
+                    if (state_->flags_.load(std::memory_order_acquire)
+                            & detail::state_flags::result_set) {
+                        // Result is ready! Try to take continuation back
+                        auto cont = state_->continuation_.exchange(
+                            nullptr, std::memory_order_acquire);
+                        if (cont) {
+                            // We took it - resume ourselves
+                            return cont;
+                        }
+                        // Producer already took it - they will resume us
+                        return detail::noop_coroutine();
+                    }
 
-                if (future_.available()) {
-                    return caller;
-                }
+                    // Result not ready - wait, producer will resume us
+                    return detail::noop_coroutine();
 
-                return detail::noop_coroutine();
+                } else {
+                    // CAS failed - someone already set continuation
+                    // For single-consumer this is a programmer error
+                    assert(false && "double co_await on unique_future is undefined behavior");
+
+                    // In release: result should be ready (producer took old cont)
+                    return h;  // resume ourselves
+                }
             }
 
             auto await_resume() {
-                if (promise_state_) {
-                    promise_state_->clear_awaiting_on();
-                }
+                // Check error before returning value
+                assert(!state_->has_error() && "future completed with error");
                 if constexpr (std::is_void_v<T>) {
-                    std::move(future_).get();
+                    state_->take_value();
                 } else {
-                    return std::move(future_).get();
+                    return state_->take_value();
                 }
             }
         };
 
     private:
-        [[nodiscard]] state_type* get_state_internal() const noexcept {
-            return state_.get();
+        void release() noexcept {
+            if (state_) {
+                state_->release_future();
+                state_ = nullptr;
+            }
+            handle_ = {};
+            // DO NOT call handle_.destroy() - coroutine destroys itself in final_suspend
         }
 
-        unique_future(state_type* state, std::pmr::memory_resource* res, bool add_ref) noexcept
-            : state_(state, add_ref)
-            , resource_(res)
-            , needs_scheduling_(false) {
-        }
-
-        // CRTP base: PromiseDerived is the final promise type (promise_type or actor_promise<Actor>)
+        // CRTP base: PromiseDerived is the final promise type
         template<typename PromiseDerived>
         struct promise_type_base {
             using value_type = T;
 
+            std::pmr::memory_resource* resource_ = nullptr;
+            state_type* state_ = nullptr;
+
+            // Track deepest awaited future for spinning mechanism (propagated through chain)
+            std::atomic<std::uint8_t>* awaited_flags_ = nullptr;
+            std::atomic<detail::coroutine_handle<>>* awaited_continuation_ = nullptr;
+
+            // Track where our awaited state was propagated to (outer promise's pointers)
+            // Used to update outer's copy when we change awaited state, and clear when freeing
+            std::atomic<std::uint8_t>** propagated_to_flags_ = nullptr;
+            std::atomic<detail::coroutine_handle<>>** propagated_to_cont_ = nullptr;
+
+            // Type-erased pointer to outer promise for recursive chain clearing.
+            // This allows clear_awaited_chain() to walk up to the root and clear all levels.
+            // For behavior_t (root), this is nullptr.
+            void* outer_promise_raw_ = nullptr;
+            // Function to call update_propagated_outer() on the type-erased outer promise.
+            void (*outer_update_fn_)(void*) = nullptr;
+
+            // Creates OWN state, returns future with handle + state
             unique_future<T> get_return_object() {
                 assert(resource_ != nullptr &&
                        "Coroutine must be actor member function with resource() method");
@@ -362,38 +452,62 @@ namespace actor_zeta {
                     std::abort();
                 }
 
-                void* mem = resource_->allocate(sizeof(coroutine_state_type), alignof(coroutine_state_type));
-                assert(mem != nullptr && "allocation failed");
-                if (!mem) {
-                    std::abort();
-                }
-                state_ = new (mem) coroutine_state_type(resource_);
+                state_ = detail::allocate_shared_state<T>(resource_);
+                auto handle = detail::coroutine_handle<PromiseDerived>::from_promise(
+                    static_cast<PromiseDerived&>(*this));
 
-                // Use CRTP: PromiseDerived is the actual promise type
-                auto handle = detail::coroutine_handle<PromiseDerived>::from_promise(static_cast<PromiseDerived&>(*this));
-                state_->set_coroutine_owning(handle);
-
-                return unique_future<T>(static_cast<state_type*>(state_), resource_, false);
+                return unique_future<T>{handle, state_};
             }
 
+            // suspend_never - immediate start (dispatch does co_await)
             detail::suspend_never initial_suspend() noexcept { return {}; }
 
+            // final_suspend - self-destroy + symmetric transfer for method coroutines
+            // NOTE: This is DIFFERENT from promise::set_value() which does NOT resume.
+            // Method coroutines (unique_future<T>) run in the same actor context,
+            // so symmetric transfer is safe and necessary for coroutine chaining.
+            // Cross-actor futures (from send()) use promise::set_value() which spins.
             auto final_suspend() noexcept {
                 struct final_awaiter {
-                    coroutine_state_type* state_;
+                    state_type* state_;
 
                     bool await_ready() noexcept { return false; }
 
-                    // Use type-erased handle - the parameter is unused anyway
                     detail::coroutine_handle<> await_suspend(
-                        detail::coroutine_handle<> /*h*/
-                        ) noexcept {
-                        // state_ is guaranteed non-null here because get_return_object()
-                        // always sets it before any suspension point.
-                        if (auto cont = state_->take_continuation()) {
-                            return cont;
+                        detail::coroutine_handle<PromiseDerived> self) noexcept {
+                        // 1. Take continuation FIRST (atomic exchange)
+                        auto cont = state_->continuation_.exchange(nullptr,
+                                                                    std::memory_order_acq_rel);
+
+                        // 2. Set promise_finalizing flag BEFORE release_promise.
+                        //    This prevents release_future() from deallocating while we're
+                        //    still deciding whether to resume the continuation.
+                        state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
+                                                std::memory_order_release);
+
+                        // 3. Release promise. Returns true if future was already released
+                        //    at the time of the atomic fetch_or.
+                        bool cancelled = state_->release_promise();
+
+                        if (cancelled) {
+                            // Future was released before we set promise_released.
+                            // State was deallocated by release_promise.
+                            self.destroy();
+                            return detail::noop_coroutine();
                         }
-                        return detail::noop_coroutine();
+
+                        // 4. Try to complete finalize phase. Uses CAS to atomically
+                        //    clear finalizing and check if future was released.
+                        //    Returns false if future was released (state deallocated).
+                        if (!state_->try_complete_finalize()) {
+                            self.destroy();
+                            return detail::noop_coroutine();
+                        }
+
+                        // 5. Consumer is still alive - symmetric transfer to continuation
+                        // This is safe for method coroutines (same actor context)
+                        self.destroy();
+                        return cont ? cont : detail::noop_coroutine();
                     }
 
                     void await_resume() noexcept {}
@@ -403,7 +517,166 @@ namespace actor_zeta {
 
             template<typename U>
             auto await_transform(unique_future<U>&& future) noexcept {
-                return typename unique_future<U>::awaiter_type{future, static_cast<detail::future_state_base*>(state_)};
+                // CRITICAL: The awaiter must OWN the future to prevent premature destruction.
+                // If we just extract the state pointer, the temporary unique_future is destroyed
+                // right after await_transform returns, setting future_released flag.
+                // This causes final_suspend to not resume the waiter (treats as cancelled).
+
+                // Propagate deepest awaited state for spinning mechanism
+                propagate_awaited_state(future);
+
+                struct owning_awaiter {
+                    unique_future<U> owned_;
+                    // Store pointer to promise so we can call clear_awaited_chain() in await_resume.
+                    // This is necessary because root_flags_source_ may be set AFTER this awaiter
+                    // is created (outer coroutine calls propagate_awaited_state later).
+                    promise_type_base* promise_;
+
+                    bool await_ready() const noexcept {
+                        return owned_.internal_state()->has_result();
+                    }
+
+                    detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> h) noexcept {
+                        auto* state = owned_.internal_state();
+                        detail::coroutine_handle<> expected = nullptr;
+                        if (state->continuation_.compare_exchange_strong(
+                                expected, h,
+                                std::memory_order_acq_rel,
+                                std::memory_order_acquire)) {
+                            if (state->flags_.load(std::memory_order_acquire)
+                                    & detail::state_flags::result_set) {
+                                auto cont = state->continuation_.exchange(
+                                    nullptr, std::memory_order_acquire);
+                                if (cont) {
+                                    return cont;
+                                }
+                                return detail::noop_coroutine();
+                            }
+                            return detail::noop_coroutine();
+                        } else {
+                            assert(false && "double co_await on unique_future is undefined behavior");
+                            return h;
+                        }
+                    }
+
+                    auto await_resume() {
+                        // Clear the entire awaited chain BEFORE freeing the state.
+                        // This calls the promise method which has access to the current
+                        // (possibly updated) root_flags_source_.
+                        promise_->clear_awaited_chain();
+
+                        auto* state = owned_.internal_state();
+                        assert(!state->has_error() && "future completed with error");
+                        if constexpr (std::is_void_v<U>) {
+                            state->take_value();
+                        } else {
+                            return state->take_value();
+                        }
+                    }
+                };
+                return owning_awaiter{std::move(future), this};
+            }
+
+            // await_transform for pair<bool, unique_future<U>> from send()
+            // CRITICAL: Must own the future to prevent premature destruction (see owning_awaiter above)
+            template<typename U>
+            auto await_transform(std::pair<bool, unique_future<U>>&& p) noexcept {
+                // Propagate deepest awaited state for spinning mechanism
+                propagate_awaited_state(p.second);
+
+                struct owning_pair_awaiter {
+                    bool needs_sched_;
+                    unique_future<U> owned_;
+                    promise_type_base* promise_;
+
+                    bool await_ready() const noexcept {
+                        return owned_.internal_state()->has_result();
+                    }
+
+                    detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> h) noexcept {
+                        auto* state = owned_.internal_state();
+                        detail::coroutine_handle<> expected = nullptr;
+                        if (state->continuation_.compare_exchange_strong(
+                                expected, h,
+                                std::memory_order_acq_rel,
+                                std::memory_order_acquire)) {
+                            if (state->flags_.load(std::memory_order_acquire)
+                                    & detail::state_flags::result_set) {
+                                auto cont = state->continuation_.exchange(
+                                    nullptr, std::memory_order_acquire);
+                                if (cont) {
+                                    return cont;
+                                }
+                                return detail::noop_coroutine();
+                            }
+                            return detail::noop_coroutine();
+                        } else {
+                            assert(false && "double co_await on unique_future is undefined behavior");
+                            return h;
+                        }
+                    }
+
+                    std::pair<bool, U> await_resume() {
+                        // Clear the entire awaited chain BEFORE freeing the state
+                        promise_->clear_awaited_chain();
+
+                        auto* state = owned_.internal_state();
+                        assert(!state->has_error() && "future completed with error");
+                        return {needs_sched_, state->take_value()};
+                    }
+                };
+                return owning_pair_awaiter{p.first, std::move(p.second), this};
+            }
+
+            // await_transform for pair<bool, unique_future<void>> from send()
+            // CRITICAL: Must own the future to prevent premature destruction (see owning_awaiter above)
+            auto await_transform(std::pair<bool, unique_future<void>>&& p) noexcept {
+                // Propagate deepest awaited state for spinning mechanism
+                propagate_awaited_state(p.second);
+
+                struct owning_void_pair_awaiter {
+                    bool needs_sched_;
+                    unique_future<void> owned_;
+                    promise_type_base* promise_;
+
+                    bool await_ready() const noexcept {
+                        return owned_.internal_state()->has_result();
+                    }
+
+                    detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> h) noexcept {
+                        auto* state = owned_.internal_state();
+                        detail::coroutine_handle<> expected = nullptr;
+                        if (state->continuation_.compare_exchange_strong(
+                                expected, h,
+                                std::memory_order_acq_rel,
+                                std::memory_order_acquire)) {
+                            if (state->flags_.load(std::memory_order_acquire)
+                                    & detail::state_flags::result_set) {
+                                auto cont = state->continuation_.exchange(
+                                    nullptr, std::memory_order_acquire);
+                                if (cont) {
+                                    return cont;
+                                }
+                                return detail::noop_coroutine();
+                            }
+                            return detail::noop_coroutine();
+                        } else {
+                            assert(false && "double co_await on unique_future is undefined behavior");
+                            return h;
+                        }
+                    }
+
+                    bool await_resume() {
+                        // Clear the entire awaited chain BEFORE freeing the state
+                        promise_->clear_awaited_chain();
+
+                        auto* state = owned_.internal_state();
+                        assert(!state->has_error() && "future completed with error");
+                        state->take_value();
+                        return needs_sched_;
+                    }
+                };
+                return owning_void_pair_awaiter{p.first, std::move(p.second), this};
             }
 
             template<typename U>
@@ -415,22 +688,96 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
-            // Default constructor - required for edge cases where GCC fails to pass arguments.
-            // get_return_object() will abort if resource_ is nullptr.
+            // Default constructor
             promise_type_base() noexcept
                 : resource_(nullptr)
-                , state_(nullptr) {
-            }
+                , state_(nullptr) {}
 
             template<typename First, typename... Args>
             promise_type_base(First&& first, Args&&... args) noexcept
                 : resource_(extract_resource_or_abort(std::forward<First>(first), std::forward<Args>(args)...))
-                , state_(nullptr) {
-            }
+                , state_(nullptr) {}
 
             ~promise_type_base() noexcept = default;
 
         protected:
+            // Propagate deepest awaited state from inner coroutine (for spinning mechanism)
+            template<typename U>
+            void propagate_awaited_state(unique_future<U>& future) noexcept {
+                // If result is already set, coroutine may have been destroyed via final_suspend.
+                // No need to track awaited state — await_ready() will return true.
+                if (future.internal_state()->has_result()) {
+                    awaited_flags_ = nullptr;
+                    awaited_continuation_ = nullptr;
+                    // Also update outer promise if we propagated to it
+                    update_propagated_outer();
+                    return;
+                }
+
+                auto inner_handle = future.coroutine_handle();
+                if (inner_handle) {
+                    // Method coroutine — check if it has deeper awaited state
+                    auto& inner_promise = inner_handle.promise();
+
+                    // Set up back-reference for direct field updates
+                    inner_promise.propagated_to_flags_ = &awaited_flags_;
+                    inner_promise.propagated_to_cont_ = &awaited_continuation_;
+
+                    // Set up type-erased outer promise pointer for recursive chain clearing
+                    inner_promise.outer_promise_raw_ = this;
+                    inner_promise.outer_update_fn_ = &call_update_propagated_outer<promise_type_base>;
+
+                    if (inner_promise.awaited_flags_) {
+                        // Inner coroutine is waiting for something deeper — propagate
+                        awaited_flags_ = inner_promise.awaited_flags_;
+                        awaited_continuation_ = inner_promise.awaited_continuation_;
+                    } else {
+                        // Inner coroutine not waiting — this future is the deepest level
+                        awaited_flags_ = &future.internal_state()->flags_;
+                        awaited_continuation_ = &future.internal_state()->continuation_;
+                    }
+                } else {
+                    // Cross-actor future (from promise.get_future()) — this is the deepest level
+                    awaited_flags_ = &future.internal_state()->flags_;
+                    awaited_continuation_ = &future.internal_state()->continuation_;
+                }
+
+                // Update outer promise with our new awaited state
+                update_propagated_outer();
+            }
+
+            // Static helper to call update_propagated_outer() on a type-erased promise
+            template<typename PromiseType>
+            static void call_update_propagated_outer(void* promise) noexcept {
+                static_cast<PromiseType*>(promise)->update_propagated_outer();
+            }
+
+            // Update outer promise's copy of our awaited state
+            void update_propagated_outer() noexcept {
+                // Update immediate parent
+                if (propagated_to_flags_) {
+                    *propagated_to_flags_ = awaited_flags_;
+                }
+                if (propagated_to_cont_) {
+                    *propagated_to_cont_ = awaited_continuation_;
+                }
+                // Recursively update outer's outer (if any) to propagate all the way to root
+                if (outer_update_fn_ && outer_promise_raw_) {
+                    outer_update_fn_(outer_promise_raw_);
+                }
+            }
+
+            // Clear the awaited chain when an await completes.
+            // This clears our own awaited state and propagates nullptr up the chain.
+            // Called by awaiters in await_resume BEFORE the awaited future is destroyed.
+            void clear_awaited_chain() noexcept {
+                // Clear our own state
+                awaited_flags_ = nullptr;
+                awaited_continuation_ = nullptr;
+                // Propagate nullptr up the chain (clears outer and root)
+                update_propagated_outer();
+            }
+
             template<typename U>
             static std::pmr::memory_resource* try_get_resource(U* ptr) noexcept {
                 if constexpr (detail::has_resource_method<U>) {
@@ -470,7 +817,6 @@ namespace actor_zeta {
                 return nullptr;
             }
 
-            /// Empty args - aborts (coroutine must be inline actor method).
             [[noreturn]] static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
                 assert(false && "Coroutine must be defined inline (GCC doesn't pass 'this' for out-of-line methods)");
                 std::abort();
@@ -485,9 +831,6 @@ namespace actor_zeta {
                 }
                 return res;
             }
-
-            std::pmr::memory_resource* resource_;
-            coroutine_state_type* state_;
         };
 
         template<typename PromiseDerived>
@@ -502,13 +845,8 @@ namespace actor_zeta {
                 this->state_->set_value(value);
             }
 
-            void return_value(unique_future<T>&& ready_future) noexcept {
-                T val = std::move(ready_future).get();
-                this->state_->set_value(std::move(val));
-            }
-
             void return_value(std::error_code ec) noexcept {
-                this->state_->error(ec);
+                this->state_->set_error(ec);
             }
         };
 
@@ -517,7 +855,7 @@ namespace actor_zeta {
             using promise_type_base<PromiseDerived>::promise_type_base;
 
             void return_void() noexcept {
-                this->state_->set_ready();
+                this->state_->set_value();
             }
         };
 
@@ -525,9 +863,6 @@ namespace actor_zeta {
         using promise_type_selected = std::conditional_t<is_void_type, promise_type_void<PromiseDerived>, promise_type_non_void<PromiseDerived>>;
 
     public:
-        // Forward declaration for CRTP
-        struct promise_type;
-
         // promise_type uses CRTP to pass itself to the base
         struct promise_type : promise_type_selected<promise_type> {
             using promise_type_selected<promise_type>::promise_type_selected;
@@ -559,8 +894,7 @@ namespace actor_zeta {
 
             template<typename... Args>
             actor_promise(Actor& actor, Args&&...) noexcept
-                : base_type(actor.resource()) {
-            }
+                : base_type(actor.resource()) {}
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
@@ -583,54 +917,57 @@ namespace actor_zeta {
         };
 
     private:
-        intrusive_ptr<state_type> state_;
-        std::pmr::memory_resource* resource_;
-        bool needs_scheduling_;
+        state_type* state_;
+        detail::coroutine_handle<promise_type> handle_;
     };
 
+    // Implementation of promise<T>::get_future()
     template<typename T>
     unique_future<T> promise<T>::get_future() noexcept {
         assert(state_ && "get_future() on moved-from promise");
-        return unique_future<T>(*this);
+        return unique_future<T>(state_);
     }
 
+    // Free function co_await operator
     template<typename T>
     auto operator co_await(unique_future<T>&& f) noexcept {
-        return typename unique_future<T>::awaiter_type{f, nullptr};
+        return typename unique_future<T>::awaiter{f.internal_state()};
     }
 
+    // Factory functions
     template<typename T>
     [[nodiscard]] unique_future<T> make_error(std::pmr::memory_resource* res, std::error_code ec) {
         promise<T> p(res);
-        p.error(ec);
-        return p.get_future();
+        auto f = p.get_future();  // Get future BEFORE set_error
+        p.set_error(ec);
+        return f;
     }
 
-    /// Create a ready future with the given value.
     template<typename T>
     [[nodiscard]] unique_future<T> make_ready_future(std::pmr::memory_resource* res, T&& value) {
         assert(res && "make_ready_future: resource must not be null");
         promise<T> p(res);
+        auto f = p.get_future();  // Get future BEFORE set_value
         p.set_value(std::forward<T>(value));
-        return p.get_future();
+        return f;
     }
 
-    /// Create a ready void future.
     [[nodiscard]] inline unique_future<void> make_ready_future(std::pmr::memory_resource* res) {
         assert(res && "make_ready_future: resource must not be null");
         promise<void> p(res);
+        auto f = p.get_future();  // Get future BEFORE set_value
         p.set_value();
-        return p.get_future();
+        return f;
     }
 
-    /// Create a ready future with default-constructed value.
     template<typename T>
         requires(!std::is_void_v<T> && std::is_default_constructible_v<T>)
     [[nodiscard]] unique_future<T> make_ready_future(std::pmr::memory_resource* res) {
         assert(res && "make_ready_future: resource must not be null");
         promise<T> p(res);
+        auto f = p.get_future();  // Get future BEFORE set_value
         p.set_value(T{});
-        return p.get_future();
+        return f;
     }
 
 } // namespace actor_zeta

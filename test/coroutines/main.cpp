@@ -64,19 +64,19 @@ public:
         &coroutine_test_actor::coro_storage
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_int>:
-                dispatch(this, &coroutine_test_actor::coro_int, msg);
+                co_await dispatch(this, &coroutine_test_actor::coro_int, msg);
                 break;
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_string>:
-                dispatch(this, &coroutine_test_actor::coro_string, msg);
+                co_await dispatch(this, &coroutine_test_actor::coro_string, msg);
                 break;
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_void>:
-                dispatch(this, &coroutine_test_actor::coro_void, msg);
+                co_await dispatch(this, &coroutine_test_actor::coro_void, msg);
                 break;
             case actor_zeta::msg_id<coroutine_test_actor, &coroutine_test_actor::coro_storage>:
-                dispatch(this, &coroutine_test_actor::coro_storage, msg);
+                co_await dispatch(this, &coroutine_test_actor::coro_storage, msg);
                 break;
         }
     }
@@ -88,9 +88,8 @@ TEST_CASE("simple coroutines with co_return") {
 
     SECTION("co_return int") {
         // FIXED: Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &coroutine_test_actor::coro_int
         );
 
@@ -105,9 +104,8 @@ TEST_CASE("simple coroutines with co_return") {
 
     SECTION("co_return string") {
         // FIXED: Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &coroutine_test_actor::coro_string
         );
 
@@ -122,9 +120,8 @@ TEST_CASE("simple coroutines with co_return") {
 
     SECTION("co_return void") {
         // FIXED: Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &coroutine_test_actor::coro_void
         );
 
@@ -183,9 +180,8 @@ TEST_CASE("coroutine handle can be stored in future_state") {
         auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
 
         // FIXED: Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &coroutine_test_actor::coro_storage
         );
 
@@ -263,9 +259,8 @@ TEST_CASE("Coroutine futures") {
 
     SECTION("co_return creates valid future") {
         // Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &coroutine_test_actor::coro_int
         );
         actor->resume(100);
@@ -279,9 +274,8 @@ TEST_CASE("Coroutine futures") {
 
     SECTION("move constructor preserves future state") {
         // Use send() instead of direct call
-        auto future1 = actor_zeta::send(
+        auto [needs_sched, future1] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &coroutine_test_actor::coro_string
         );
         actor->resume(100);
@@ -334,13 +328,13 @@ public:
         &arithmetic_test_actor::coro_concat
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<arithmetic_test_actor, &arithmetic_test_actor::coro_add>:
-                actor_zeta::dispatch(this, &arithmetic_test_actor::coro_add, msg);
+                co_await actor_zeta::dispatch(this, &arithmetic_test_actor::coro_add, msg);
                 break;
             case actor_zeta::msg_id<arithmetic_test_actor, &arithmetic_test_actor::coro_concat>:
-                actor_zeta::dispatch(this, &arithmetic_test_actor::coro_concat, msg);
+                co_await actor_zeta::dispatch(this, &arithmetic_test_actor::coro_concat, msg);
                 break;
         }
     }
@@ -352,9 +346,8 @@ TEST_CASE("coroutine methods with unique_future return type") {
 
     SECTION("coro_add returns ready future") {
         // Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &arithmetic_test_actor::coro_add, 10, 20
         );
         actor->resume(100);
@@ -368,9 +361,8 @@ TEST_CASE("coroutine methods with unique_future return type") {
 
     SECTION("coro_concat returns ready future") {
         // Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &arithmetic_test_actor::coro_concat,
             std::string("hello"), std::string(" world")
         );
@@ -385,9 +377,8 @@ TEST_CASE("coroutine methods with unique_future return type") {
 
     SECTION("ready future - no waiting, instant get()") {
         // Use send() instead of direct call
-        auto future = actor_zeta::send(
+        auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
-            actor_zeta::address_t::empty_address(),
             &arithmetic_test_actor::coro_add, 5, 7
         );
         actor->resume(100);
@@ -433,13 +424,13 @@ public:
         &future_test_actor::async_multiply
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<future_test_actor, &future_test_actor::sync_add>:
-                dispatch(this, &future_test_actor::sync_add, msg);
+                co_await dispatch(this, &future_test_actor::sync_add, msg);
                 break;
             case actor_zeta::msg_id<future_test_actor, &future_test_actor::async_multiply>:
-                dispatch(this, &future_test_actor::async_multiply, msg);
+                co_await dispatch(this, &future_test_actor::async_multiply, msg);
                 break;
         }
     }
@@ -453,7 +444,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         REQUIRE(actor != nullptr);
 
         // Send message and get result
-        auto result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 10, 20);
+        auto [needs_sched, result] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 10, 20);
 
         REQUIRE(result.valid());
 
@@ -470,7 +461,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         REQUIRE(actor != nullptr);
 
         // Send message and get result
-        auto result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 5, 7);
+        auto [needs_sched, result] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 5, 7);
 
         REQUIRE(result.valid());
 
@@ -485,9 +476,9 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
     SECTION("multiple calls to sync method") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
 
-        auto r1 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 1, 2);
-        auto r2 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 3, 4);
-        auto r3 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 5, 6);
+        auto [ns1, r1] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 1, 2);
+        auto [ns2, r2] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 3, 4);
+        auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 5, 6);
 
         // Process all messages
         actor->resume(100);
@@ -500,9 +491,9 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
     SECTION("multiple calls to async method") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
 
-        auto r1 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 2, 3);
-        auto r2 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 4, 5);
-        auto r3 = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 6, 7);
+        auto [ns1, r1] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 2, 3);
+        auto [ns2, r2] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 4, 5);
+        auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 6, 7);
 
         // Process all messages
         actor->resume(100);
@@ -515,8 +506,8 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
     SECTION("mixed sync and async calls") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
 
-        auto sync_result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::sync_add, 10, 5);
-        auto async_result = actor_zeta::send(actor.get(), actor->address(), &future_test_actor::async_multiply, 3, 4);
+        auto [ns1, sync_result] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 10, 5);
+        auto [ns2, async_result] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 3, 4);
 
         // Process all messages
         actor->resume(100);
@@ -564,10 +555,9 @@ TEST_CASE("coroutine cleanup does not crash") {
         // Memory leak detection requires ASAN or Valgrind
         {
             // FIXED: Use send() instead of direct call (Actor Model)
-            auto future = actor_zeta::send(
-                actor.get(),
-                actor_zeta::address_t::empty_address(),
-                &coroutine_test_actor::coro_int
+            auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &coroutine_test_actor::coro_int
             );
             actor->resume(100);
             REQUIRE(future.valid());
@@ -584,10 +574,9 @@ TEST_CASE("coroutine cleanup does not crash") {
         // Stress test - create/destroy many coroutines
         for (int i = 0; i < 100; ++i) {
             // FIXED: Use send() instead of direct call (Actor Model)
-            auto future = actor_zeta::send(
-                actor.get(),
-                actor_zeta::address_t::empty_address(),
-                &coroutine_test_actor::coro_int
+            auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &coroutine_test_actor::coro_int
             );
             actor->resume(100);
             int result = std::move(future).get();
@@ -600,10 +589,9 @@ TEST_CASE("coroutine cleanup does not crash") {
     SECTION("coroutine with string") {
         {
             // FIXED: Use send() instead of direct call (Actor Model)
-            auto future = actor_zeta::send(
-                actor.get(),
-                actor_zeta::address_t::empty_address(),
-                &coroutine_test_actor::coro_string
+            auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &coroutine_test_actor::coro_string
             );
             actor->resume(100);
             REQUIRE(future.valid());
@@ -616,10 +604,9 @@ TEST_CASE("coroutine cleanup does not crash") {
     SECTION("void coroutine") {
         {
             // FIXED: Use send() instead of direct call (Actor Model)
-            auto future = actor_zeta::send(
-                actor.get(),
-                actor_zeta::address_t::empty_address(),
-                &coroutine_test_actor::coro_void
+            auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &coroutine_test_actor::coro_void
             );
             actor->resume(100);
             REQUIRE(future.valid());

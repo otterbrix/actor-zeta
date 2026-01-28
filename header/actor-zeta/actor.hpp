@@ -3,6 +3,7 @@
 #include <actor-zeta/actor/basic_actor.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta/actor/implements.hpp>
+#include <actor-zeta/detail/behavior_t.hpp>
 #include <actor-zeta/detail/coroutine_traits.hpp>
 
 namespace actor_zeta {
@@ -18,6 +19,9 @@ namespace actor_zeta {
     using actor_zeta::promise;
     using actor_zeta::make_ready_future;
     using actor_zeta::make_error;
+
+    // behavior() coroutine type
+    using actor_zeta::behavior_t;
 
     // Contract-based actor interfaces
     using actor_zeta::implements;

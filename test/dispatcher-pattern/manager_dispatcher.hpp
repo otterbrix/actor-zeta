@@ -113,9 +113,7 @@ public:
         g_log.log("[%::size] Sending request to memory_storage...", name_);
 
         // Single co_await - wait for storage response
-        auto result = co_await send(
-            memory_storage_,
-            address(),
+        auto [_, result] = co_await send(memory_storage_,
             &memory_storage_t::size,
             session,
             collection_full_name_t{database_name, collection});
@@ -150,9 +148,7 @@ public:
 
         g_log.log("[%::execute_plan] Sending request to memory_storage...", name_);
 
-        auto cursor = co_await send(
-            memory_storage_,
-            address(),
+        auto [_1, cursor] = co_await send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             std::move(plan));
@@ -200,9 +196,7 @@ public:
         g_log.log("[%::execute_transaction] Step 1: Execute plan for %", name_, collection1);
 
         // STEP 1: First query
-        auto cursor1 = co_await send(
-            memory_storage_,
-            address(),
+        auto [_1, cursor1] = co_await send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection1)));
@@ -226,9 +220,7 @@ public:
         std::size_t cursor1_row_count = cursor1->row_count();
 
         // STEP 2: Second query (depends on step 1 success)
-        auto cursor2 = co_await send(
-            memory_storage_,
-            address(),
+        auto [_2, cursor2] = co_await send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection2)));
@@ -286,12 +278,11 @@ public:
         futures.reserve(collections.size());  // CRITICAL: reserve to avoid reallocation!
 
         for (const auto& coll : collections) {
-            auto f = send(
-                memory_storage_,
-                address(),
+            auto [ns, f] = send(memory_storage_,
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", coll));
+            (void)ns;
             futures.push_back(std::move(f));
         }
 
@@ -339,9 +330,7 @@ public:
             g_log.log("[%::get_aggregate_detail] Large dataset, getting extra info...", name_);
 
             // Additional co_await inside nested coroutine
-            auto extra_size = co_await send(
-                memory_storage_,
-                address(),
+            auto [_, extra_size] = co_await send(memory_storage_,
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", "users"));
@@ -416,9 +405,7 @@ public:
         };
 
         // co_await - wait for storage response
-        auto size = co_await send(
-            memory_storage_,
-            address(),
+        auto [_, size] = co_await send(memory_storage_,
             &memory_storage_t::size,
             session,
             collection_full_name_t("test_db", collection));
@@ -460,9 +447,7 @@ public:
             g_log.log("[%::coroutine_lambda] Starting async operation...", name_);
 
             // co_await INSIDE lambda - this makes lambda a coroutine
-            auto size = co_await send(
-                memory_storage_,
-                address(),
+            auto [_ns, size] = co_await send(memory_storage_,
                 &memory_storage_t::size,
                 session_copy,
                 collection_full_name_t("test_db", collection_copy));
@@ -495,7 +480,7 @@ public:
             std::string collection) {
         auto build_cursor = [this, s = std::move(session), coll = std::move(collection)]
                 (std::pmr::memory_resource*) -> unique_future<cursor_t_ptr> {
-            auto size = co_await send(memory_storage_, address(), &memory_storage_t::size,
+            auto [_ns, size] = co_await send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
             auto cursor = std::make_unique<cursor_t>();
             for (std::size_t i = 0; i < std::min(size, std::size_t(10)); ++i)
@@ -524,7 +509,7 @@ public:
                 err->error_message = "Validation failed";
                 co_return std::move(err);
             }
-            auto cursor = co_await send(memory_storage_, address(),
+            auto [_ns, cursor] = co_await send(memory_storage_,
                 &memory_storage_t::execute_plan, s, std::move(p));
             co_return std::move(cursor);
         };
@@ -535,8 +520,9 @@ public:
     unique_future<aggregate_result_t> get_database_statistics(session_id_t session) {
         auto fetch_size = [this, s = session](std::pmr::memory_resource*, std::string coll)
                 -> unique_future<std::size_t> {
-            co_return co_await send(memory_storage_, address(), &memory_storage_t::size,
+            auto [_ns, result] = co_await send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            co_return result;
         };
         // Parallel fetch all collection sizes
         std::vector<unique_future<std::size_t>> futures;
@@ -604,7 +590,7 @@ public:
                 (std::pmr::memory_resource*, bool simulate_error) -> unique_future<size_result_t> {
             if (simulate_error)
                 co_return size_result_t::error("connection_timeout");
-            auto size = co_await send(memory_storage_, address(), &memory_storage_t::size,
+            auto [_ns, size] = co_await send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
             co_return size_result_t(size);
         };
@@ -631,9 +617,7 @@ public:
             co_return;
         }
 
-        auto storage_gen = send(
-            memory_storage_,
-            address(),
+        auto [_, storage_gen] = send(memory_storage_,
             &memory_storage_t::stream_rows,
             session,
             collection_full_name_t("test_db", collection));
@@ -687,134 +671,69 @@ public:
     // behavior() - message dispatch with pending coroutine management
     // =========================================================================
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
         switch (msg->command()) {
             case msg_id<manager_dispatcher_t, &manager_dispatcher_t::poll>:
-                poll();
+                co_await poll();
                 break;
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::size>: {
-                auto future = dispatch(this, &manager_dispatcher_t::size, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] size() suspended, storing pending", name_);
-                    pending_size_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::size>:
+                co_await dispatch(this, &manager_dispatcher_t::size, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_plan>: {
-                auto future = dispatch(this, &manager_dispatcher_t::execute_plan, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] execute_plan() suspended, storing pending", name_);
-                    pending_execute_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_plan>:
+                co_await dispatch(this, &manager_dispatcher_t::execute_plan, msg);
                 break;
-            }
             case msg_id<manager_dispatcher_t, &manager_dispatcher_t::close_cursor>:
-                dispatch(this, &manager_dispatcher_t::close_cursor, msg);
+                co_await dispatch(this, &manager_dispatcher_t::close_cursor, msg);
                 break;
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_transaction>: {
-                auto future = dispatch(this, &manager_dispatcher_t::execute_transaction, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] execute_transaction() suspended, storing pending", name_);
-                    pending_transaction_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_transaction>:
+                co_await dispatch(this, &manager_dispatcher_t::execute_transaction, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::aggregate_sizes>: {
-                auto future = dispatch(this, &manager_dispatcher_t::aggregate_sizes, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] aggregate_sizes() suspended, storing pending", name_);
-                    pending_aggregate_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::aggregate_sizes>:
+                co_await dispatch(this, &manager_dispatcher_t::aggregate_sizes, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::get_aggregate_detail>: {
-                auto future = dispatch(this, &manager_dispatcher_t::get_aggregate_detail, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] get_aggregate_detail() suspended, storing pending", name_);
-                    pending_detail_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::get_aggregate_detail>:
+                co_await dispatch(this, &manager_dispatcher_t::get_aggregate_detail, msg);
                 break;
-            }
-            // PATTERN 5: Lambda methods
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::transform_with_lambda>: {
-                auto future = dispatch(this, &manager_dispatcher_t::transform_with_lambda, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] transform_with_lambda() suspended, storing pending", name_);
-                    pending_transform_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::transform_with_lambda>:
+                co_await dispatch(this, &manager_dispatcher_t::transform_with_lambda, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::compute_with_lambda_and_state>: {
-                auto future = dispatch(this, &manager_dispatcher_t::compute_with_lambda_and_state, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] compute_with_lambda_and_state() suspended, storing pending", name_);
-                    pending_detail_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::compute_with_lambda_and_state>:
+                co_await dispatch(this, &manager_dispatcher_t::compute_with_lambda_and_state, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::async_transform_with_lambda>: {
-                auto future = dispatch(this, &manager_dispatcher_t::async_transform_with_lambda, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] async_transform_with_lambda() suspended, storing pending", name_);
-                    pending_detail_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::async_transform_with_lambda>:
+                co_await dispatch(this, &manager_dispatcher_t::async_transform_with_lambda, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_with_coroutine_lambda>: {
-                auto future = dispatch(this, &manager_dispatcher_t::execute_with_coroutine_lambda, msg);
-                if (!future.available()) {
-                    g_log.log("[%::behavior] execute_with_coroutine_lambda() suspended, storing pending", name_);
-                    pending_transform_.push_back(std::move(future));
-                }
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_with_coroutine_lambda>:
+                co_await dispatch(this, &manager_dispatcher_t::execute_with_coroutine_lambda, msg);
                 break;
-            }
-            // Extended database operations
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::create_cursor_from_query>: {
-                auto future = dispatch(this, &manager_dispatcher_t::create_cursor_from_query, msg);
-                if (!future.available()) pending_execute_.push_back(std::move(future));
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::create_cursor_from_query>:
+                co_await dispatch(this, &manager_dispatcher_t::create_cursor_from_query, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::validate_and_execute>: {
-                auto future = dispatch(this, &manager_dispatcher_t::validate_and_execute, msg);
-                if (!future.available()) pending_execute_.push_back(std::move(future));
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::validate_and_execute>:
+                co_await dispatch(this, &manager_dispatcher_t::validate_and_execute, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::get_database_statistics>: {
-                auto future = dispatch(this, &manager_dispatcher_t::get_database_statistics, msg);
-                if (!future.available()) pending_aggregate_.push_back(std::move(future));
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::get_database_statistics>:
+                co_await dispatch(this, &manager_dispatcher_t::get_database_statistics, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::process_batch_buffer>: {
-                auto future = dispatch(this, &manager_dispatcher_t::process_batch_buffer, msg);
-                if (!future.available()) pending_transaction_.push_back(std::move(future));
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::process_batch_buffer>:
+                co_await dispatch(this, &manager_dispatcher_t::process_batch_buffer, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::get_cached_value>: {
-                // get_cached_value uses promise direct manipulation - always ready immediately
-                dispatch(this, &manager_dispatcher_t::get_cached_value, msg);
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::get_cached_value>:
+                co_await dispatch(this, &manager_dispatcher_t::get_cached_value, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_with_retry>: {
-                auto future = dispatch(this, &manager_dispatcher_t::execute_with_retry, msg);
-                if (!future.available()) pending_size_.push_back(std::move(future));
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_with_retry>:
+                co_await dispatch(this, &manager_dispatcher_t::execute_with_retry, msg);
                 break;
-            }
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::create_row_stream>: {
-                auto gen = dispatch(this, &manager_dispatcher_t::create_row_stream, msg);
-                g_log.log("[%::behavior] create_row_stream() started, storing pending generator", name_);
-                pending_generators_.push_back(std::move(gen));
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::create_row_stream>:
+                co_await dispatch(this, &manager_dispatcher_t::create_row_stream, msg);
                 break;
-            }
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
         }
-
-        // Process pending coroutines after each message
-        poll_pending();
     }
 
     // =========================================================================

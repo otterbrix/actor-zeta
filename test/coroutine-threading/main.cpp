@@ -81,14 +81,14 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::compute>;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
         last_behavior_thread_ = tid;
 
         switch (msg->command()) {
             case msg_id<worker_actor, &worker_actor::compute>:
-                dispatch(this, &worker_actor::compute, msg);
+                co_await dispatch(this, &worker_actor::compute, msg);
                 break;
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
@@ -146,7 +146,7 @@ public:
 
         // Send request to worker via address_t
         g_log.log("[%::process] Sending to worker...", name_);
-        auto future = send(worker_address_, address(), &worker_actor::compute, x);
+        auto [needs_sched, future] = send(worker_address_, &worker_actor::compute, x);
         g_log.log("[%::process] future.available()=%", name_, future.available());
 
         // co_await - suspend if not ready, continue when ready
@@ -183,26 +183,17 @@ public:
         &client_actor::get_result
     >;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
         last_behavior_thread_ = tid;
 
         switch (msg->command()) {
-            case msg_id<client_actor, &client_actor::process>: {
-                // dispatch() sets up chaining automatically:
-                // method_future -> msg->result_slot() (caller's future)
-                auto future = dispatch(this, &client_actor::process, msg);
-                if (!future.available()) {
-                    // Coroutine suspended - store for polling
-                    // No promises needed - chaining is already set up!
-                    g_log.log("[%::behavior] process() suspended, storing pending", name_);
-                    pending_.push_back(std::move(future));
-                }
+            case msg_id<client_actor, &client_actor::process>:
+                co_await dispatch(this, &client_actor::process, msg);
                 break;
-            }
             case msg_id<client_actor, &client_actor::get_result>:
-                dispatch(this, &client_actor::get_result, msg);
+                co_await dispatch(this, &client_actor::get_result, msg);
                 break;
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
@@ -238,7 +229,7 @@ TEST_CASE("single-thread: worker only") {
     auto main_thread = thread_id_str();
     g_log.log("[TEST] Main thread: %", main_thread);
 
-    auto future = send(worker.get(), address_t::empty_address(), &worker_actor::compute, 21);
+    auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
     worker->resume(1);
 
     REQUIRE(future.available());
@@ -260,25 +251,23 @@ TEST_CASE("single-thread: client-worker") {
     auto main_thread = thread_id_str();
     g_log.log("[TEST] Main thread: %", main_thread);
 
-    auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+    auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
 
-    // Test controls resume externally (USER CODE):
-    // 1. Resume client - process() sends message to worker, suspend on co_await
-    //    behavior() stores pending coroutine
+    // With new behavior_t API:
+    // 1. Resume client - behavior() coroutine starts, dispatch() is called,
+    //    process() sends message to worker, suspends on co_await
     client->resume(1);
-    g_log.log("[TEST] After client resume, has_pending=%", client->has_pending());
-    REQUIRE(client->has_pending());  // Coroutine should be pending
+    g_log.log("[TEST] After client resume");
+    REQUIRE(!future.available());  // Still waiting for worker
 
     // 2. Resume worker - processes compute(), inner_future becomes ready
     worker->resume(1);
     g_log.log("[TEST] After worker resume");
 
-    // 3. Poll pending - checks awaiting ready, resumes coroutine, copies result
-    client->poll_pending();
-    g_log.log("[TEST] After poll_pending, has_pending=%, future.available()=%",
-              client->has_pending(), future.available());
+    // 3. Resume client again - the awaiting coroutine resumes and completes
+    client->resume(10);
+    g_log.log("[TEST] After second client resume, future.available()=%", future.available());
 
-    REQUIRE(!client->has_pending());  // Coroutine should complete
     REQUIRE(future.available());
     int result = std::move(future).get();
 
@@ -318,20 +307,21 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
         client_thread_id = thread_id_str();
         g_log.log("[CLIENT_THREAD] Started, thread=%", client_thread_id);
 
-        auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+        auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
-        // 1. Resume client - suspend on co_await
+        // With new behavior_t API:
+        // 1. Resume client - behavior coroutine starts, suspends on co_await
         client->resume(1);
-        g_log.log("[CLIENT_THREAD] After client resume, has_pending=%", client->has_pending());
+        g_log.log("[CLIENT_THREAD] After client resume");
 
-        // 2. Resume worker - processes compute
+        // 2. Resume worker - processes compute, future becomes ready
         worker->resume(1);
         g_log.log("[CLIENT_THREAD] After worker resume");
 
-        // 3. Poll pending - resume coroutine
-        client->poll_pending();
-        g_log.log("[CLIENT_THREAD] After poll_pending, future.available()=%", future.available());
+        // 3. Resume client again - the awaiting coroutine resumes and completes
+        client->resume(10);
+        g_log.log("[CLIENT_THREAD] After second client resume, future.available()=%", future.available());
 
         future_available = future.available();
         if (future_available) {
@@ -386,10 +376,10 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         thread1_id = thread_id_str();
         g_log.log("[THREAD1] Started, thread=%", thread1_id);
 
-        auto future = send(client1.get(), address_t::empty_address(), &client_actor::process, 10);
+        auto [needs_sched, future] = send(client1.get(), &client_actor::process, 10);
         client1->resume(1);
         worker1->resume(1);
-        client1->poll_pending();
+        client1->resume(10);  // Resume to complete awaiting coroutine
 
         future1_available = future.available();
         if (future1_available) {
@@ -402,10 +392,10 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         thread2_id = thread_id_str();
         g_log.log("[THREAD2] Started, thread=%", thread2_id);
 
-        auto future = send(client2.get(), address_t::empty_address(), &client_actor::process, 20);
+        auto [needs_sched, future] = send(client2.get(), &client_actor::process, 20);
         client2->resume(1);
         worker2->resume(1);
-        client2->poll_pending();
+        client2->resume(10);  // Resume to complete awaiting coroutine
 
         future2_available = future.available();
         if (future2_available) {
@@ -484,13 +474,13 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
         client_thread_id = thread_id_str();
         g_log.log("[CLIENT_THREAD] Started, thread=%", client_thread_id);
 
-        auto future = send(client.get(), address_t::empty_address(), &client_actor::process, 21);
+        auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
         // Client resumes worker in CLIENT thread
         client->resume(1);
         worker->resume(1);
-        client->poll_pending();
+        client->resume(10);  // Resume to complete awaiting coroutine
 
         future_available = future.available();
         if (future_available) {
@@ -544,10 +534,10 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
             auto local_worker = spawn<worker_actor>(resource, "Worker" + std::to_string(i));
             auto local_client = spawn<client_actor>(resource, local_worker->address(), "Client" + std::to_string(i));
 
-            auto future = send(local_client.get(), address_t::empty_address(), &client_actor::process, (i + 1) * 10);
+            auto [needs_sched, future] = send(local_client.get(), &client_actor::process, (i + 1) * 10);
             local_client->resume(1);
             local_worker->resume(1);
-            local_client->poll_pending();
+            local_client->resume(10);  // Resume to complete awaiting coroutine
 
             if (future.available()) {
                 int result = std::move(future).get();

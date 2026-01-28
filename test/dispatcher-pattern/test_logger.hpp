@@ -26,8 +26,13 @@ inline std::string thread_id_str() {
 /// @brief Thread-safe logger with printf-style formatting using % placeholders
 class thread_logger {
 public:
+    /// @brief Enable or disable logging (disabled by default for performance)
+    void set_enabled(bool enabled) { enabled_ = enabled; }
+    bool enabled() const { return enabled_; }
+
     /// @brief Log a simple message
     void log(const std::string& msg) {
+        if (!enabled_) return;
         std::lock_guard<std::mutex> lock(mutex_);
         std::cerr << msg << std::endl;
     }
@@ -36,12 +41,14 @@ public:
     /// @example g_log.log("[%::method] thread=% value=%", name_, tid, val);
     template<typename... Args>
     void log(const char* fmt, Args&&... args) {
+        if (!enabled_) return;
         std::ostringstream oss;
         format_impl(oss, fmt, std::forward<Args>(args)...);
         log(oss.str());
     }
 
 private:
+    bool enabled_ = false;  // Disabled by default for ctest performance
     void format_impl(std::ostringstream& oss, const char* fmt) {
         oss << fmt;
     }

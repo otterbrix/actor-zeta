@@ -20,28 +20,50 @@ public:
     unique_future<void> process() {
         co_return;  // co_return for void
     }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &Worker::compute, &Worker::process>;
+
+    explicit Worker(std::pmr::memory_resource* res)
+        : basic_actor<Worker>(res) {}
+
+    behavior_t behavior(mailbox::message* msg) {
+        auto cmd = msg->command();
+        if (cmd == msg_id<Worker, &Worker::compute>) {
+            co_await dispatch(this, &Worker::compute, msg);
+        } else if (cmd == msg_id<Worker, &Worker::process>) {
+            co_await dispatch(this, &Worker::process, msg);
+        }
+    }
 };
 ```
 
 ### Caller
 
 ```cpp
+// send() returns std::pair<bool, unique_future<T>>
+// - first: needs_scheduling (true if actor needs to be scheduled)
+// - second: the future
+
 // Method 1: co_await in coroutine (recommended)
 unique_future<int> caller() {
-    auto future = send(worker, address(), &Worker::compute, 42);
+    auto [needs_sched, future] = send(worker.get(), &Worker::compute, 42);
+    if (needs_sched) scheduler->enqueue(worker.get());
     int result = co_await std::move(future);
     co_return result;
 }
 
 // Method 2: Polling
-auto future = send(worker, address(), &Worker::compute, 42);
+auto [needs_sched, future] = send(worker.get(), &Worker::compute, 42);
+if (needs_sched) scheduler->enqueue(worker.get());
 while (!future.available()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::yield();
 }
 int result = std::move(future).get();
 
 // Method 3: Fire-and-forget
-send(logger, address(), &Logger::log, "message");  // Ignore future
+auto [_, fut] = send(logger.get(), &Logger::log, "message");
+fut.detach();  // Ignore result
 ```
 
 ## API Reference
@@ -63,10 +85,13 @@ std::vector<unique_future<int>> futures;
 futures.reserve(workers.size());  // Required!
 
 for (auto& worker : workers) {
-    futures.push_back(send(worker.get(), address(), &Worker::compute, data));
+    auto [needs_sched, future] = send(worker.get(), &Worker::compute, data);
+    if (needs_sched) scheduler->enqueue(worker.get());
+    futures.push_back(std::move(future));
 }
 
 for (auto& future : futures) {
+    while (!future.available()) std::this_thread::yield();
     int result = std::move(future).get();
 }
 ```
@@ -74,15 +99,16 @@ for (auto& future : futures) {
 ### Timeout
 
 ```cpp
-auto future = send(worker, address(), &Worker::slow_task, data);
-auto start = std::chrono::steady_clock::now();
+auto [needs_sched, future] = send(worker.get(), &Worker::slow_task, data);
+if (needs_sched) scheduler->enqueue(worker.get());
 
+auto start = std::chrono::steady_clock::now();
 while (!future.available()) {
     if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
         future.cancel();
         break;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::yield();
 }
 ```
 
@@ -90,7 +116,8 @@ while (!future.available()) {
 
 ```cpp
 unique_future<int> chain(int x) {
-    auto f = send(other, address(), &Other::process, x);
+    auto [needs_sched, f] = send(other.get(), &Other::process, x);
+    if (needs_sched) scheduler->enqueue(other.get());
     int r = co_await std::move(f);
     co_return r + 10;
 }

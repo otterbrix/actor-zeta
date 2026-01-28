@@ -39,10 +39,10 @@ public:
         co_return value * 2;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<aba_test_actor, &aba_test_actor::process>) {
-            dispatch(this, &aba_test_actor::process, msg);
+            co_await dispatch(this, &aba_test_actor::process, msg);
         }
     }
 
@@ -90,11 +90,11 @@ TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
         threads.emplace_back([&, thread_id = t]() {
             for (int i = 0; i < MESSAGES_PER_THREAD; ++i) {
                 // Create and send message
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &aba_test_actor::process, thread_id * 1000 + i);
 
                 // Schedule if needed
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
 
@@ -171,9 +171,9 @@ TEST_CASE("ABA Test 2: Rapid actor creation/destruction stress test") {
         futures.reserve(MESSAGES_PER_ITERATION);
 
         for (int i = 0; i < MESSAGES_PER_ITERATION; ++i) {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &aba_test_actor::process, i);
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
             futures.push_back(std::move(future));
@@ -222,11 +222,11 @@ TEST_CASE("ABA Test 3: Concurrent enqueue from multiple threads") {
     for (int t = 0; t < NUM_ENQUEUE_THREADS; ++t) {
         threads.emplace_back([&, thread_id = t]() {
             for (int i = 0; i < ENQUEUES_PER_THREAD; ++i) {
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &aba_test_actor::process, thread_id * 1000 + i);
 
                 // All threads call enqueue_impl() → CAS race on state_
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
 
@@ -275,9 +275,9 @@ TEST_CASE("ABA Test 4: Interleaved enqueue/resume stress test") {
     for (int t = 0; t < NUM_THREADS; ++t) {
         threads.emplace_back([&, thread_id = t]() {
             for (int i = 0; i < OPERATIONS_PER_THREAD; ++i) {
-                auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+                auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                               &aba_test_actor::process, thread_id * 1000 + i);
-                if (future.needs_scheduling()) {
+                if (needs_sched) {
                     scheduler->enqueue(actor.get());
                 }
                 completed.fetch_add(1, std::memory_order_relaxed);

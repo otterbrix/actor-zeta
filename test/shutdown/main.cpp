@@ -19,9 +19,9 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
-            dispatch(this, &worker_actor::ping, msg);
+            co_await dispatch(this, &worker_actor::ping, msg);
         }
     }
 
@@ -48,7 +48,8 @@ public:
         workers_.emplace_back(std::move(worker));
     }
 
-    void behavior(actor_zeta::mailbox::message* /*msg*/) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* /*msg*/) {
+        co_return;
     }
 
 private:
@@ -63,9 +64,10 @@ TEST_CASE("shutdown - basic test") {
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
-    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
+    std::vector<actor_zeta::unique_future<void>> futures;
     for (int i = 0; i < 3; ++i) {
-        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
+        auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+        futures.push_back(std::move(future));
     }
 
     scheduler->start();
@@ -85,10 +87,11 @@ TEST_CASE("shutdown - multiple actors") {
         actors.push_back(actor_zeta::spawn<worker_actor>(resource));
     }
 
-    std::vector<decltype(actor_zeta::send(actors[0].get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
+    std::vector<actor_zeta::unique_future<void>> futures;
     for (auto& actor : actors) {
         for (int i = 0; i < 2; ++i) {
-            futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
+            auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+            futures.push_back(std::move(future));
         }
     }
 
@@ -106,9 +109,10 @@ TEST_CASE("shutdown - immediate stop") {
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
-    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
+    std::vector<actor_zeta::unique_future<void>> futures;
     for (int i = 0; i < 10; ++i) {
-        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
+        auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+        futures.push_back(std::move(future));
     }
 
     scheduler->start();
@@ -132,7 +136,7 @@ TEST_CASE("shutdown - concurrent enqueue during destruction") {
 
     std::thread t1([&, actor_ptr] {
         while (!stop.load(std::memory_order_relaxed)) {
-            auto future = actor_zeta::send(actor_ptr, actor_zeta::address_t::empty_address(), &worker_actor::ping);
+            auto [needs_sched, future] = actor_zeta::send(actor_ptr, &worker_actor::ping);
             ++enqueue_count;
             std::this_thread::sleep_for(std::chrono::microseconds(1));
         }
@@ -159,9 +163,10 @@ TEST_CASE("shutdown - concurrent resume during destruction") {
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
-    std::vector<decltype(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping))> futures;
+    std::vector<actor_zeta::unique_future<void>> futures;
     for (int i = 0; i < 100; ++i) {
-        futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &worker_actor::ping));
+        auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+        futures.push_back(std::move(future));
     }
 
     scheduler->start();
@@ -185,7 +190,7 @@ TEST_CASE("shutdown - three-way race: enqueue + resume + destroy") {
 
     std::thread t1([&, actor_ptr] {
         while (!stop.load(std::memory_order_relaxed)) {
-            auto future = actor_zeta::send(actor_ptr, actor_zeta::address_t::empty_address(), &worker_actor::ping);
+            auto [needs_sched, future] = actor_zeta::send(actor_ptr, &worker_actor::ping);
             ++enqueue_count;
             std::this_thread::sleep_for(std::chrono::microseconds(10));
         }

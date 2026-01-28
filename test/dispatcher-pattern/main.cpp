@@ -43,9 +43,8 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
     session_id_t session("session-001");
 
     // Send request
-    auto future = send(
+    auto [needs_sched, future] = send(
         client.get(),
-        address_t::empty_address(),
         &client_t::request_collection_size,
         session,
         std::string("test_db"),
@@ -64,11 +63,11 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
     storage->resume(1);
 
     // 4. Send poll to dispatcher to trigger behavior() and poll_pending()
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // 5. Send poll to client to trigger behavior() and poll_pending()
-    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), &client_t::poll);
     client->resume(1);
 
     // Check result
@@ -93,9 +92,8 @@ TEST_CASE("dispatcher-pattern: error handling") {
     session_id_t session("session-002");
 
     // Send request with empty database name (should trigger error)
-    auto future = send(
+    auto [needs_sched, future] = send(
         client.get(),
-        address_t::empty_address(),
         &client_t::request_collection_size,
         session,
         std::string(""),  // Empty - triggers error
@@ -108,7 +106,7 @@ TEST_CASE("dispatcher-pattern: error handling") {
     dispatcher->resume(1);
 
     // Send poll to client to trigger poll_pending()
-    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), &client_t::poll);
     client->resume(1);
 
     // Check result
@@ -131,9 +129,8 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     auto client = spawn<client_t>(resource, dispatcher->address(), "Client");
 
     // Request 1: users
-    auto future1 = send(
+    auto [needs_sched1, future1] = send(
         client.get(),
-        address_t::empty_address(),
         &client_t::request_collection_size,
         session_id_t("session-003"),
         std::string("test_db"),
@@ -142,9 +139,9 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future1.available());
@@ -152,9 +149,8 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     REQUIRE(result1.size == 100);
 
     // Request 2: orders
-    auto future2 = send(
+    auto [needs_sched2, future2] = send(
         client.get(),
-        address_t::empty_address(),
         &client_t::request_collection_size,
         session_id_t("session-004"),
         std::string("test_db"),
@@ -163,9 +159,9 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future2.available());
@@ -173,9 +169,8 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     REQUIRE(result2.size == 250);
 
     // Request 3: products
-    auto future3 = send(
+    auto [needs_sched3, future3] = send(
         client.get(),
-        address_t::empty_address(),
         &client_t::request_collection_size,
         session_id_t("session-005"),
         std::string("test_db"),
@@ -184,9 +179,9 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future3.available());
@@ -208,9 +203,8 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
     session_id_t session("session-006");
 
     // Request non-existent collection
-    auto future = send(
+    auto [needs_sched, future] = send(
         client.get(),
-        address_t::empty_address(),
         &client_t::request_collection_size,
         session,
         std::string("test_db"),
@@ -219,9 +213,9 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
     client->resume(1);
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+    (void)send(client.get(), &client_t::poll);
     client->resume(1);
 
     REQUIRE(future.available());
@@ -254,10 +248,9 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
 
         session_id_t session("session-007");
 
-        auto future = send(
-            client.get(),
-            address_t::empty_address(),
-            &client_t::request_collection_size,
+        auto [needs_sched_wt, future] = send(
+        client.get(),
+        &client_t::request_collection_size,
             session,
             std::string("test_db"),
             std::string("orders"));
@@ -266,9 +259,9 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
         client->resume(1);
         dispatcher->resume(1);
         storage->resume(1);
-        (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+        (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
         dispatcher->resume(1);
-        (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+        (void)send(client.get(), &client_t::poll);
         client->resume(1);
 
         future_available = future.available();
@@ -310,16 +303,15 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
                         collection_full_name_t("test_db", "users"),
                         "id > 0");
 
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::execute_plan,
         session,
         std::move(plan));
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -331,7 +323,7 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
     REQUIRE(cursor->is_open);
 
     // Cleanup
-    (void)send(dispatcher.get(), address_t::empty_address(),
+    (void)send(dispatcher.get(),
          &manager_dispatcher_t::close_cursor, session);
     dispatcher->resume(1);
 
@@ -352,9 +344,8 @@ TEST_CASE("dispatcher-pattern: execute_plan with invalid plan") {
                         collection_full_name_t("", "users"),  // Empty database
                         "");
 
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::execute_plan,
         session,
         std::move(plan));
@@ -384,16 +375,15 @@ TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
                         collection_full_name_t("test_db", "nonexistent"),
                         "");
 
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::execute_plan,
         session,
         std::move(plan));
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -419,9 +409,8 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
 
     session_id_t session("session-tx-001");
 
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::execute_transaction,
         session,
         std::string("users"),
@@ -432,14 +421,14 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
     storage->resume(1);
 
     // Poll to resume after first co_await
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Step 2
     storage->resume(1);
 
     // Poll to complete
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -462,9 +451,8 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
 
     session_id_t session("session-tx-002");
 
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::execute_transaction,
         session,
         std::string("nonexistent"),  // Does not exist
@@ -472,7 +460,7 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -499,9 +487,8 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
 
     session_id_t session("session-agg-001");
 
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::aggregate_sizes,
         session,
         std::vector<std::string>{"users", "orders", "products"});
@@ -514,22 +501,22 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
     storage->resume(1);
 
     // Poll - first co_await ready
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Poll - second co_await
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Poll - third co_await
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     // Nested coroutine get_aggregate_detail
     // total = 400 > 200, so extra co_await
     storage->resume(1);
 
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -555,9 +542,8 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
     session_id_t session("session-agg-002");
 
     // Only products (50) - small dataset, total < 200
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::aggregate_sizes,
         session,
         std::vector<std::string>{"products"});
@@ -565,7 +551,7 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
     dispatcher->resume(1);
     storage->resume(1);
 
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -589,9 +575,8 @@ TEST_CASE("dispatcher-pattern: aggregate - empty collection list") {
 
     session_id_t session("session-agg-003");
 
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::aggregate_sizes,
         session,
         std::vector<std::string>{});  // Empty!
@@ -649,10 +634,9 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
 
             session_id_t session("session-thread-" + std::to_string(i));
 
-            auto future = send(
-                client.get(),
-                address_t::empty_address(),
-                &client_t::request_collection_size,
+            auto [needs_sched_th, future] = send(
+        client.get(),
+        &client_t::request_collection_size,
                 session,
                 std::string("test_db"),
                 collection);
@@ -660,9 +644,9 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
             client->resume(1);
             dispatcher->resume(1);
             storage->resume(1);
-            (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+            (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
             dispatcher->resume(1);
-            (void)send(client.get(), address_t::empty_address(), &client_t::poll);
+            (void)send(client.get(), &client_t::poll);
             client->resume(1);
 
             results[i].available = future.available();
@@ -711,9 +695,8 @@ TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
 
     // Test transform_with_lambda(int value, int factor)
     // result = value * factor + 100
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::transform_with_lambda,
         5, 10);  // value=5, factor=10
 
@@ -736,9 +719,8 @@ TEST_CASE("lambda-inside: lambda capturing this and state (compute_with_lambda_a
 
     // Test compute_with_lambda_and_state(const std::string& prefix)
     // result = prefix + "_from_" + name_
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::compute_with_lambda_and_state,
         std::string("query"));
 
@@ -763,9 +745,8 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
 
     // Test async_transform_with_lambda - calls storage, then uses lambda to format
     // result = "Collection " + coll + " in " + name_ + " has " + size + " items"
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::async_transform_with_lambda,
         session,
         std::string("users"));
@@ -775,7 +756,7 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
     storage->resume(1);
 
     // Poll to resume dispatcher after storage returns
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -796,16 +777,15 @@ TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
     session_id_t session("orders-session");
 
     // Test with 'orders' collection which has 250 items
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::async_transform_with_lambda,
         session,
         std::string("orders"));
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -828,9 +808,8 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
     // Test execute_with_coroutine_lambda
     // Lambda INSIDE has co_await -> sends to storage -> gets size -> multiplies
     // users collection has 100 items, multiplier = 3 -> result = 300
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::execute_with_coroutine_lambda,
         session,
         std::string("users"),
@@ -841,7 +820,7 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
     storage->resume(1);
 
     // Poll to resume lambda-coroutine, then outer coroutine
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -862,9 +841,8 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
     session_id_t session("orders-lambda-session");
 
     // orders collection has 250 items, multiplier = 2 -> result = 500
-    auto future = send(
+    auto [needs_sched, future] = send(
         dispatcher.get(),
-        address_t::empty_address(),
         &manager_dispatcher_t::execute_with_coroutine_lambda,
         session,
         std::string("orders"),
@@ -872,7 +850,7 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -894,12 +872,12 @@ TEST_CASE("database: create_cursor_from_query - lambda-coroutine returns unique_
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
     session_id_t session("cursor-session");
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::create_cursor_from_query, session, std::string("users"));
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -920,12 +898,12 @@ TEST_CASE("database: validate_and_execute - chained lambda-coroutines") {
     session_id_t session("validate-session");
     logical_plan_t plan("select", collection_full_name_t("test_db", "users"), "id > 0");
 
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::validate_and_execute, session, std::move(plan));
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -947,7 +925,7 @@ TEST_CASE("database: validate_and_execute - validation failure") {
     session_id_t session("validate-fail-session");
     logical_plan_t plan("select", collection_full_name_t("", ""), "");  // Invalid plan
 
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::validate_and_execute, session, std::move(plan));
 
     dispatcher->resume(1);
@@ -969,7 +947,7 @@ TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
     session_id_t session("stats-session");
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::get_database_statistics, session);
 
     dispatcher->resume(1);
@@ -978,11 +956,11 @@ TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
     storage->resume(1);
     storage->resume(1);
     // Poll after each storage completes to resume lambda-coroutines
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -1008,7 +986,7 @@ TEST_CASE("database: process_batch_buffer - move-only argument") {
     batch->push_back("item2");
     batch->push_back("item3");
 
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::process_batch_buffer, session, std::move(batch));
 
     dispatcher->resume(1);
@@ -1032,7 +1010,7 @@ TEST_CASE("database: process_batch_buffer - empty batch") {
     session_id_t session("empty-batch-session");
     auto batch = std::make_unique<std::vector<std::string>>();  // Empty
 
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::process_batch_buffer, session, std::move(batch));
 
     dispatcher->resume(1);
@@ -1055,19 +1033,19 @@ TEST_CASE("database: get_cached_value - promise direct manipulation") {
     session_id_t session("cache-session");
 
     // Test cached values for different collections
-    auto future1 = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched1, future1] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("users"));
     dispatcher->resume(1);
     REQUIRE(future1.available());
     REQUIRE(std::move(future1).get() == 100);
 
-    auto future2 = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched2, future2] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("orders"));
     dispatcher->resume(1);
     REQUIRE(future2.available());
     REQUIRE(std::move(future2).get() == 250);
 
-    auto future3 = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched3, future3] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("products"));
     dispatcher->resume(1);
     REQUIRE(future3.available());
@@ -1085,12 +1063,12 @@ TEST_CASE("database: execute_with_retry - success without retry") {
 
     session_id_t session("retry-session");
     // max_retries=0 -> no simulated error, direct success
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("users"), 0);
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -1110,12 +1088,12 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
 
     session_id_t session("retry-session");
     // max_retries=1 -> first attempt fails, retry succeeds
-    auto future = send(dispatcher.get(), address_t::empty_address(),
+    auto [needs_sched2, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("orders"), 1);
 
     dispatcher->resume(1);
     storage->resume(1);
-    (void)send(dispatcher.get(), address_t::empty_address(), &manager_dispatcher_t::poll);
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
     dispatcher->resume(1);
 
     REQUIRE(future.available());
@@ -1140,7 +1118,7 @@ TEST_CASE("generator: storage stream_rows via send") {
     collection_full_name_t coll("test_db", "users");
 
     // Get generator via send()
-    auto gen = send(storage.get(), address_t::empty_address(),
+    auto [_, gen] = send(storage.get(),
         &memory_storage_t::stream_rows, session, coll);
 
     REQUIRE(gen.valid());
@@ -1165,7 +1143,7 @@ TEST_CASE("generator: storage stream_rows error via send") {
     session_id_t session("error-stream");
     collection_full_name_t coll("unknown_db", "unknown_coll");
 
-    auto gen = send(storage.get(), address_t::empty_address(),
+    auto [_, gen] = send(storage.get(),
         &memory_storage_t::stream_rows, session, coll);
 
     REQUIRE(gen.valid());
@@ -1196,7 +1174,7 @@ TEST_CASE("generator: manager create_row_stream via send") {
     session_id_t session("send-stream");
 
     // Send request to manager to create stream
-    auto gen = send(dispatcher.get(), address_t::empty_address(),
+    auto [_2, gen] = send(dispatcher.get(),
         &manager_dispatcher_t::create_row_stream, session, std::string("users"));
 
     REQUIRE(gen.valid());

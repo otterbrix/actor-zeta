@@ -1,9 +1,9 @@
 #pragma once
 
 // clang-format off
-#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/mailbox/message.hpp>
 #include <actor-zeta/detail/future.hpp>
+#include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/generator.hpp>
 // clang-format on
 
@@ -88,21 +88,30 @@ namespace actor_zeta::detail {
     template<typename... Args>
     inline constexpr bool all_args_storable_v = all_args_storable<Args...>;
 
-    // Creates message + promise, returns pair<message_ptr, unique_future<R>>
+    // Creates message + shared_state, returns pair<message_ptr, unique_future<R>>
     template<typename R = void, typename Name>
         requires valid_message_name<Name>
     std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>
     make_message(
         std::pmr::memory_resource* resource,
-        actor::address_t sender,
         Name&& name) {
         static_assert(!std::is_reference_v<R>, "Result type R must not be a reference");
         assert(resource);
-        actor_zeta::promise<R> p(resource);
-        auto msg = mailbox::pmr_make_message(resource, resource, std::move(sender),
-                                             to_message_id(std::forward<Name>(name)),
-                                             p.internal_state_base());
-        return {std::move(msg), p.get_future()};
+
+        // Create shared_state for the result
+        auto* state = allocate_shared_state<R>(resource);
+
+        // Create message
+        auto msg = mailbox::pmr_make_message(resource, resource,
+                                             to_message_id(std::forward<Name>(name)));
+
+        // Initialize the future slot in the message
+        msg->template init_future_slot<R>(state);
+
+        // Create future from the shared_state
+        auto future = unique_future<R>(state);
+
+        return {std::move(msg), std::move(future)};
     }
 
     template<typename R = void, typename Name, typename... Args>
@@ -110,17 +119,26 @@ namespace actor_zeta::detail {
     std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>
     make_message(
         std::pmr::memory_resource* resource,
-        actor::address_t sender,
         Name&& name,
         Args&&... args) {
         static_assert(!std::is_reference_v<R>, "Result type R must not be a reference");
         assert(resource);
-        actor_zeta::promise<R> p(resource);
-        auto msg = mailbox::pmr_make_message(resource, resource, std::move(sender),
+
+        // Create shared_state for the result
+        auto* state = allocate_shared_state<R>(resource);
+
+        // Create message with body
+        auto msg = mailbox::pmr_make_message(resource, resource,
                                              to_message_id(std::forward<Name>(name)),
-                                             rtt(resource, std::forward<Args>(args)...),
-                                             p.internal_state_base());
-        return {std::move(msg), p.get_future()};
+                                             rtt(resource, std::forward<Args>(args)...));
+
+        // Initialize the future slot in the message
+        msg->template init_future_slot<R>(state);
+
+        // Create future from the shared_state
+        auto future = unique_future<R>(state);
+
+        return {std::move(msg), std::move(future)};
     }
 
     template<typename T>
@@ -135,14 +153,20 @@ namespace actor_zeta::detail {
     std::pair<mailbox::message_ptr, actor_zeta::generator<T>>
     make_generator_message(
         std::pmr::memory_resource* resource,
-        actor::address_t sender,
         Name&& name) {
         assert(resource);
+
+        // Create generator state
         auto* state = allocate_generator_state<T>(resource);
-        state->add_ref();
-        auto msg = mailbox::pmr_make_message(resource, resource, std::move(sender),
-                                             to_message_id(std::forward<Name>(name)),
-                                             intrusive_ptr<future_state_base>(state));
+
+        // Create message
+        auto msg = mailbox::pmr_make_message(resource, resource,
+                                             to_message_id(std::forward<Name>(name)));
+
+        // Initialize the generator slot in the message
+        msg->template init_generator_slot<T>(state);
+
+        // Create generator from the state
         return {std::move(msg), generator<T>(state)};
     }
 
@@ -151,16 +175,22 @@ namespace actor_zeta::detail {
     std::pair<mailbox::message_ptr, actor_zeta::generator<T>>
     make_generator_message(
         std::pmr::memory_resource* resource,
-        actor::address_t sender,
         Name&& name,
         Args&&... args) {
         assert(resource);
+
+        // Create generator state
         auto* state = allocate_generator_state<T>(resource);
-        state->add_ref();
-        auto msg = mailbox::pmr_make_message(resource, resource, std::move(sender),
+
+        // Create message with body
+        auto msg = mailbox::pmr_make_message(resource, resource,
                                              to_message_id(std::forward<Name>(name)),
-                                             rtt(resource, std::forward<Args>(args)...),
-                                             intrusive_ptr<future_state_base>(state));
+                                             rtt(resource, std::forward<Args>(args)...));
+
+        // Initialize the generator slot in the message
+        msg->template init_generator_slot<T>(state);
+
+        // Create generator from the state
         return {std::move(msg), generator<T>(state)};
     }
 

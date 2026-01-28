@@ -10,6 +10,7 @@
 #include <system_error>
 
 #include <actor-zeta/detail/future_state.hpp>
+#include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
 namespace actor_zeta {
@@ -274,11 +275,21 @@ struct next_awaiter {
     generator_state<T>* state_;
 
     bool await_ready() noexcept {
-        return state_->is_ready() || state_->is_terminal();
+        // Only skip await_suspend for terminal states (exhausted/cancelled)
+        // For suspended state (has value), we still need to go through await_suspend
+        // to properly handle advancing to the next value
+        return state_->is_terminal();
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> consumer) noexcept {
         state_->set_consumer_handle(consumer);
+
+        // If we have a value from previous yield (state is suspended),
+        // mark it as consumed and advance to next value
+        if (state_->is_ready()) {
+            state_->reset_to_created();
+            // Fall through to resume producer for next value
+        }
 
         if (state_->is_created()) {
             auto producer = state_->take_producer_handle();
@@ -363,9 +374,14 @@ struct generator_future_awaiter {
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
         gen_state_->set_producer_handle(caller);
 
-        auto* future_state = future_.internal_state();
-        if (future_state) {
-            future_state->set_coroutine(caller);
+        // Use CAS to set continuation in the new shared_state
+        auto* state = future_.internal_state();
+        if (state) {
+            std::coroutine_handle<> expected = nullptr;
+            state->continuation_.compare_exchange_strong(
+                expected, caller,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire);
         }
 
         // Check if became ready during setup (race condition)

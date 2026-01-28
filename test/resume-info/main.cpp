@@ -16,9 +16,9 @@ public:
         co_return;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<test_actor, &test_actor::test>) {
-            dispatch(this, &test_actor::test, msg);
+            co_await dispatch(this, &test_actor::test, msg);
         }
     }
 
@@ -63,7 +63,7 @@ TEST_CASE("resume_info - actor returns correct message count") {
     }
 
     SECTION("Single message") {
-        auto fut = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
+        auto [needs_sched, fut] = actor_zeta::send(actor.get(), &test_actor::test);
 
         auto info = actor->resume(100);
         // Future is ready after resume() - no need to call get()
@@ -74,7 +74,8 @@ TEST_CASE("resume_info - actor returns correct message count") {
     SECTION("Multiple messages") {
         std::vector<test_actor::template unique_future<void>> futures;
         for (int i = 0; i < 5; ++i) {
-            futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test));
+            auto [needs_sched, future] = actor_zeta::send(actor.get(), &test_actor::test);
+            futures.push_back(std::move(future));
         }
 
         auto info = actor->resume(100);
@@ -86,7 +87,8 @@ TEST_CASE("resume_info - actor returns correct message count") {
     SECTION("Throughput limit respected") {
         std::vector<test_actor::template unique_future<void>> futures;
         for (int i = 0; i < 10; ++i) {
-            futures.push_back(actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test));
+            auto [needs_sched, future] = actor_zeta::send(actor.get(), &test_actor::test);
+            futures.push_back(std::move(future));
         }
 
         auto info = actor->resume(3);
@@ -107,7 +109,7 @@ TEST_CASE("resume_info - backward compatibility with switch") {
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
-    auto fut = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(), &test_actor::test);
+    auto [needs_sched, fut] = actor_zeta::send(actor.get(), &test_actor::test);
 
     auto info = actor->resume(100);
     // Future is ready after resume() - no need to call get()

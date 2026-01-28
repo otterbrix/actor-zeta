@@ -65,19 +65,19 @@ public:
         &collection_part_t::find
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::insert>:
-                actor_zeta::dispatch(this, &collection_part_t::insert, msg);
+                co_await actor_zeta::dispatch(this, &collection_part_t::insert, msg);
                 break;
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::update>:
-                actor_zeta::dispatch(this, &collection_part_t::update, msg);
+                co_await actor_zeta::dispatch(this, &collection_part_t::update, msg);
                 break;
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::remove>:
-                actor_zeta::dispatch(this, &collection_part_t::remove, msg);
+                co_await actor_zeta::dispatch(this, &collection_part_t::remove, msg);
                 break;
             case actor_zeta::msg_id<collection_part_t, &collection_part_t::find>:
-                actor_zeta::dispatch(this, &collection_part_t::find, msg);
+                co_await actor_zeta::dispatch(this, &collection_part_t::find, msg);
                 break;
         }
     }
@@ -119,10 +119,10 @@ public:
     >;
 
     // Balancer behavior: forwards messages to child actors
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
-            return;
+            co_return;
         }
 
         auto index = cursor_ % actors_.size();
@@ -130,7 +130,6 @@ public:
         ++count_balancer;
 
         auto& child = actors_[index];
-        auto sender = msg->sender();
         auto cmd = msg->command();
         auto& args = msg->body();
 
@@ -142,7 +141,7 @@ public:
         // Forward based on command
         switch (cmd) {
             case actor_zeta::msg_id<collection_t, &collection_t::insert>: {
-                auto future = actor_zeta::send(child.get(), sender,
+                auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::insert,
                     actor_zeta::detail::get<0, insert_args>(args),
                     actor_zeta::detail::get<1, insert_args>(args));
@@ -153,7 +152,7 @@ public:
                 break;
             }
             case actor_zeta::msg_id<collection_t, &collection_t::remove>: {
-                auto future = actor_zeta::send(child.get(), sender,
+                auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::remove,
                     actor_zeta::detail::get<0, remove_args>(args));
                 while (!future.available()) {
@@ -163,7 +162,7 @@ public:
                 break;
             }
             case actor_zeta::msg_id<collection_t, &collection_t::update>: {
-                auto future = actor_zeta::send(child.get(), sender,
+                auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::update,
                     actor_zeta::detail::get<0, update_args>(args),
                     actor_zeta::detail::get<1, update_args>(args));
@@ -174,7 +173,7 @@ public:
                 break;
             }
             case actor_zeta::msg_id<collection_t, &collection_t::find>: {
-                auto future = actor_zeta::send(child.get(), sender,
+                auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::find,
                     actor_zeta::detail::get<0, find_args>(args));
                 while (!future.available()) {
@@ -211,16 +210,16 @@ int main() {
     collection->create();
 
     std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key1"), std::string("value1")).get();
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key2"), std::string("value2")).get();
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::insert, std::string("key3"), std::string("value3")).get();
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key1"), std::string("value1")); std::move(f).get(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key2"), std::string("value2")); std::move(f).get(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key3"), std::string("value3")); std::move(f).get(); }
 
     std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key1"), std::string("updated1")).get();
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::update, std::string("key2"), std::string("updated2")).get();
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key1"), std::string("updated1")); std::move(f).get(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key2"), std::string("updated2")); std::move(f).get(); }
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
-    actor_zeta::send(collection.get(), actor_zeta::address_t::empty_address(), &collection_t::remove, std::string("key3")).get();
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::remove, std::string("key3")); std::move(f).get(); }
 
     scheduler->start();
 

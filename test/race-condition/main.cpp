@@ -26,10 +26,10 @@ public:
         co_return result;
     }
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == actor_zeta::msg_id<stress_actor, &stress_actor::compute>) {
-            dispatch(this, &stress_actor::compute, msg);
+            co_await dispatch(this, &stress_actor::compute, msg);
         }
     }
 
@@ -72,12 +72,12 @@ TEST_CASE("Race condition stress test - future destruction timing") {
             int value = dist(rng);
 
             // Send message and get future
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &stress_actor::compute, value);
 
             // Schedule actor if it was unblocked by this enqueue
             // scheduler->enqueue() is thread-safe
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
                 // Small delay to reduce concurrent resume() probability with ASan
                 std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -176,11 +176,13 @@ TEST_CASE("Race condition stress test - concurrent future destruction") {
 
     for (int i = 0; i < MAX_ITERATIONS; ++i) {
         // Create future
-        auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+        auto [needs_sched, fut] = actor_zeta::send(actor.get(),
                                       &stress_actor::compute, i);
+        // Move out of structured binding for lambda capture (clang-14 compatibility)
+        auto future = std::move(fut);
 
         // Schedule actor if it was unblocked by this enqueue
-        if (future.needs_scheduling()) {
+        if (needs_sched) {
             scheduler->enqueue(actor.get());
         }
 
@@ -229,10 +231,10 @@ TEST_CASE("Memory leak detection - orphaned messages") {
     // Create many futures and destroy them immediately (before processing)
     for (int i = 0; i < NUM_ORPHANED; ++i) {
         {
-            auto future = actor_zeta::send(actor.get(), actor_zeta::address_t::empty_address(),
+            auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                           &stress_actor::compute, i);
 
-            if (future.needs_scheduling()) {
+            if (needs_sched) {
                 scheduler->enqueue(actor.get());
             }
             // ~future() immediately - message becomes orphaned

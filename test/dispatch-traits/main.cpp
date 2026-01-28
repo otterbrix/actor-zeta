@@ -38,16 +38,16 @@ public:
         &test_actor::method3
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<test_actor, &test_actor::method1>:
-                dispatch(this, &test_actor::method1, msg);
+                co_await dispatch(this, &test_actor::method1, msg);
                 break;
             case actor_zeta::msg_id<test_actor, &test_actor::method2>:
-                dispatch(this, &test_actor::method2, msg);
+                co_await dispatch(this, &test_actor::method2, msg);
                 break;
             case actor_zeta::msg_id<test_actor, &test_actor::method3>:
-                dispatch(this, &test_actor::method3, msg);
+                co_await dispatch(this, &test_actor::method3, msg);
                 break;
         }
     }
@@ -146,9 +146,9 @@ public:
         &sync_actor::compute
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<sync_actor, &sync_actor::compute>) {
-            actor_zeta::dispatch(this, &sync_actor::compute, msg);
+            co_await actor_zeta::dispatch(this, &sync_actor::compute, msg);
         }
     }
 
@@ -166,10 +166,9 @@ TEST_CASE("sync actor - actor_mixin processes immediately") {
     REQUIRE(actor != nullptr);
 
     // Send message - actor_mixin::enqueue_impl calls behavior() immediately
-    auto future = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &sync_actor::compute,
+    auto [needs_sched, future] = actor_zeta::send(
+            actor.get(),
+            &sync_actor::compute,
         21);
 
     // With actor_mixin, result should be available immediately (no resume needed)
@@ -198,9 +197,9 @@ public:
         &optional_test_actor::process
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<optional_test_actor, &optional_test_actor::process>) {
-            actor_zeta::dispatch(this, &optional_test_actor::process, msg);
+            co_await actor_zeta::dispatch(this, &optional_test_actor::process, msg);
         }
     }
 
@@ -210,23 +209,28 @@ private:
     int call_count_;
 };
 
-TEST_CASE("optional send - returns ready future with default value") {
+TEST_CASE("send via address_t - actor method dispatched correctly") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_test_actor>(resource);
 
     REQUIRE(actor != nullptr);
 
-    // Optional send - no target, just sender and method
-    // Uses sender.resource() to create ready future
-    auto future = actor_zeta::send(
-        actor->address(),  // sender with valid resource
+    // Send to actor via address_t (dispatches to actor's queue)
+    auto [needs_sched, future] = actor_zeta::send(
+        actor->address(),
         &optional_test_actor::process,
         5);
 
-    // Result is immediately available with default value
+    // Future is not ready until actor processes the message
+    REQUIRE(future.valid());
+
+    // Process message by running actor's behavior
+    actor->resume(1);
+
+    // Now future should be available
     REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 0);  // Default int is 0
-    REQUIRE(actor->call_count() == 0);  // Method was not called
+    REQUIRE(std::move(future).get() == 15);  // 5 + 10
+    REQUIRE(actor->call_count() == 1);  // Method was called
 }
 
 TEST_CASE("optional send - address_t stores resource from actor") {
@@ -467,16 +471,16 @@ public:
         &sync_multi_actor::reset
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<sync_multi_actor, &sync_multi_actor::add>:
-                actor_zeta::dispatch(this, &sync_multi_actor::add, msg);
+                co_await actor_zeta::dispatch(this, &sync_multi_actor::add, msg);
                 break;
             case actor_zeta::msg_id<sync_multi_actor, &sync_multi_actor::multiply>:
-                actor_zeta::dispatch(this, &sync_multi_actor::multiply, msg);
+                co_await actor_zeta::dispatch(this, &sync_multi_actor::multiply, msg);
                 break;
             case actor_zeta::msg_id<sync_multi_actor, &sync_multi_actor::reset>:
-                actor_zeta::dispatch(this, &sync_multi_actor::reset, msg);
+                co_await actor_zeta::dispatch(this, &sync_multi_actor::reset, msg);
                 break;
         }
     }
@@ -497,10 +501,9 @@ TEST_CASE("sync actor - multiple methods") {
     REQUIRE(actor != nullptr);
 
     // Test add method
-    auto future1 = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &sync_multi_actor::add,
+    auto [needs_sched1, future1] = actor_zeta::send(
+            actor.get(),
+            &sync_multi_actor::add,
         10, 20);
 
     REQUIRE(future1.available());
@@ -508,10 +511,9 @@ TEST_CASE("sync actor - multiple methods") {
     REQUIRE(actor->add_count() == 1);
 
     // Test multiply method
-    auto future2 = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &sync_multi_actor::multiply,
+    auto [needs_sched2, future2] = actor_zeta::send(
+            actor.get(),
+            &sync_multi_actor::multiply,
         6, 7);
 
     REQUIRE(future2.available());
@@ -519,10 +521,9 @@ TEST_CASE("sync actor - multiple methods") {
     REQUIRE(actor->multiply_count() == 1);
 
     // Test void method
-    auto future3 = actor_zeta::send(
-        actor.get(),
-        actor_zeta::address_t::empty_address(),
-        &sync_multi_actor::reset);
+    auto [needs_sched3, future3] = actor_zeta::send(
+            actor.get(),
+            &sync_multi_actor::reset);
 
     REQUIRE(future3.available());
     std::move(future3).get();  // Should not crash
@@ -571,13 +572,13 @@ public:
         &optional_void_actor::get_name
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<optional_void_actor, &optional_void_actor::do_work>:
-                actor_zeta::dispatch(this, &optional_void_actor::do_work, msg);
+                co_await actor_zeta::dispatch(this, &optional_void_actor::do_work, msg);
                 break;
             case actor_zeta::msg_id<optional_void_actor, &optional_void_actor::get_name>:
-                actor_zeta::dispatch(this, &optional_void_actor::get_name, msg);
+                co_await actor_zeta::dispatch(this, &optional_void_actor::get_name, msg);
                 break;
         }
     }
@@ -588,35 +589,45 @@ private:
     bool called_;
 };
 
-TEST_CASE("optional send - void return type") {
+TEST_CASE("send via address_t - void return type") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_void_actor>(resource);
 
     REQUIRE(actor != nullptr);
 
-    // Optional send for void method - should return ready void future
-    auto future = actor_zeta::send(
+    // Send to actor via address_t for void method
+    auto [needs_sched, future] = actor_zeta::send(
         actor->address(),
         &optional_void_actor::do_work);
 
+    REQUIRE(future.valid());
+
+    // Process message
+    actor->resume(1);
+
     REQUIRE(future.available());
     std::move(future).get();  // Should not crash
-    REQUIRE(actor->called() == false);  // Method was not called
+    REQUIRE(actor->called() == true);  // Method was called
 }
 
-TEST_CASE("optional send - string return type") {
+TEST_CASE("send via address_t - string return type") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_void_actor>(resource);
 
     REQUIRE(actor != nullptr);
 
-    // Optional send for string method - returns empty string
-    auto future = actor_zeta::send(
+    // Send to actor via address_t for string method
+    auto [needs_sched, future] = actor_zeta::send(
         actor->address(),
         &optional_void_actor::get_name);
 
+    REQUIRE(future.valid());
+
+    // Process message
+    actor->resume(1);
+
     REQUIRE(future.available());
-    REQUIRE(std::move(future).get().empty());  // Default string is empty
+    REQUIRE(std::move(future).get() == "test_name");  // Value from coroutine
 }
 
 TEST_CASE("dispatch_traits - empty traits") {

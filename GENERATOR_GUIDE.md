@@ -23,16 +23,19 @@ public:
 
     using dispatch_traits = actor_zeta::dispatch_traits<&MyActor::stream_numbers>;
 
-    void behavior(mailbox::message* msg) {
+    explicit MyActor(std::pmr::memory_resource* res)
+        : basic_actor<MyActor>(res) {}
+
+    behavior_t behavior(mailbox::message* msg) {
         if (msg->command() == msg_id<MyActor, &MyActor::stream_numbers>) {
-            dispatch(this, &MyActor::stream_numbers, msg);
+            co_await dispatch(this, &MyActor::stream_numbers, msg);
         }
     }
 };
 
-// Usage
-auto gen = send(actor.get(), sender, &MyActor::stream_numbers, 10);
-actor->resume(1);  // Start generator
+// Usage - send() returns pair<bool, generator>
+auto [needs_sched, gen] = send(actor.get(), &MyActor::stream_numbers, 10);
+if (needs_sched) scheduler->enqueue(actor.get());  // Start generator
 ```
 
 ## Generator States
@@ -58,7 +61,8 @@ gen.is_safe_to_destroy() // Terminal state
 ```cpp
 // In coroutine context
 unique_future<void> consume() {
-    auto gen = other_actor->stream_data();
+    auto [needs_sched, gen] = send(other_actor.get(), &OtherActor::stream_data);
+    if (needs_sched) scheduler->enqueue(other_actor.get());
     while (co_await gen) {
         auto& value = gen.current();
         process(value);
@@ -78,7 +82,7 @@ gen.detach();
 
 // Auto-cleanup on destruction
 {
-    auto gen = send(actor.get(), sender, &Actor::stream, 100);
+    auto [_, gen] = send(actor.get(), &Actor::stream, 100);
 }  // Automatically cancelled
 ```
 

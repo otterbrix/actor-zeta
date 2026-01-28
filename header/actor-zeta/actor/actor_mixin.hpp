@@ -99,10 +99,10 @@ namespace actor_zeta::actor {
         /// Enqueue for sync processing (calls behavior() immediately)
         /// This method is hidden by cooperative_actor::enqueue_impl for async actors
         [[nodiscard]]
-            std::pair<detail::enqueue_result, bool> enqueue_impl(mailbox::message_ptr msg) {
+        std::pair<bool, detail::enqueue_result> enqueue_impl(mailbox::message_ptr msg) {
             auto* derived = static_cast<Derived*>(this);
             derived->behavior(msg.get());
-            return {detail::enqueue_result::success, false};
+            return {false, detail::enqueue_result::success};
         }
 
     protected:

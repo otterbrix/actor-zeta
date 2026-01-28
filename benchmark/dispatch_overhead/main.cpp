@@ -39,18 +39,18 @@ public:
         : basic_actor<old_style_actor>(resource)
         , counter_(0) {}
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<old_style_actor, &old_style_actor::method1>) {
-            dispatch(this, &old_style_actor::method1, msg);
+            co_await dispatch(this, &old_style_actor::method1, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method2>) {
-            dispatch(this, &old_style_actor::method2, msg);
+            co_await dispatch(this, &old_style_actor::method2, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method3>) {
-            dispatch(this, &old_style_actor::method3, msg);
+            co_await dispatch(this, &old_style_actor::method3, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method4>) {
-            dispatch(this, &old_style_actor::method4, msg);
+            co_await dispatch(this, &old_style_actor::method4, msg);
         } else if (cmd == msg_id<old_style_actor, &old_style_actor::method5>) {
-            dispatch(this, &old_style_actor::method5, msg);
+            co_await dispatch(this, &old_style_actor::method5, msg);
         }
     }
 
@@ -69,31 +69,31 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
     for (auto _ : state) {
         switch (method_id) {
             case 0: {
-                auto f = send(actor.get(), actor->address(), &old_style_actor::method1, 1);
+                auto [needs_sched, f] = send(actor.get(), &old_style_actor::method1, 1);
                 while (!f.available()) { actor->resume(1); }
                 std::move(f).get();
                 break;
             }
             case 1: {
-                auto f = send(actor.get(), actor->address(), &old_style_actor::method2, 2);
+                auto [needs_sched, f] = send(actor.get(), &old_style_actor::method2, 2);
                 while (!f.available()) { actor->resume(1); }
                 std::move(f).get();
                 break;
             }
             case 2: {
-                auto f = send(actor.get(), actor->address(), &old_style_actor::method3, 3);
+                auto [needs_sched, f] = send(actor.get(), &old_style_actor::method3, 3);
                 while (!f.available()) { actor->resume(1); }
                 std::move(f).get();
                 break;
             }
             case 3: {
-                auto f = send(actor.get(), actor->address(), &old_style_actor::method4, 4);
+                auto [needs_sched, f] = send(actor.get(), &old_style_actor::method4, 4);
                 while (!f.available()) { actor->resume(1); }
                 std::move(f).get();
                 break;
             }
             case 4: {
-                auto f = send(actor.get(), actor->address(), &old_style_actor::method5, 5);
+                auto [needs_sched, f] = send(actor.get(), &old_style_actor::method5, 5);
                 while (!f.available()) { actor->resume(1); }
                 std::move(f).get();
                 break;
@@ -135,16 +135,16 @@ public:
     explicit coroutine_actor(std::pmr::memory_resource* resource)
         : basic_actor<coroutine_actor>(resource) {}
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<coroutine_actor, &coroutine_actor::compute>) {
-            dispatch(this, &coroutine_actor::compute, msg);
+            co_await dispatch(this, &coroutine_actor::compute, msg);
         } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::noop>) {
-            dispatch(this, &coroutine_actor::noop, msg);
+            co_await dispatch(this, &coroutine_actor::noop, msg);
         } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::sum>) {
-            dispatch(this, &coroutine_actor::sum, msg);
+            co_await dispatch(this, &coroutine_actor::sum, msg);
         } else if (cmd == msg_id<coroutine_actor, &coroutine_actor::sum3>) {
-            dispatch(this, &coroutine_actor::sum3, msg);
+            co_await dispatch(this, &coroutine_actor::sum3, msg);
         }
     }
 };
@@ -168,7 +168,7 @@ static void BM_Dispatch_0Args(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
 
     // Create message once, reuse
-    auto [msg, future_unused] = detail::make_message(resource, actor->address(),
+    auto [msg, future_unused] = detail::make_message(resource,
         msg_id<coroutine_actor, &coroutine_actor::noop>);
 
     for (auto _ : state) {
@@ -185,7 +185,7 @@ static void BM_FullCycle_1Arg(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
-        auto f = send(actor.get(), actor->address(), &coroutine_actor::compute, 42);
+        auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
         while (!f.available()) { actor->resume(1); }
         int result = std::move(f).get();
         benchmark::DoNotOptimize(result);
@@ -200,7 +200,7 @@ static void BM_FullCycle_2Args(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
-        auto f = send(actor.get(), actor->address(), &coroutine_actor::sum, 10, 20);
+        auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum, 10, 20);
         while (!f.available()) { actor->resume(1); }
         int result = std::move(f).get();
         benchmark::DoNotOptimize(result);
@@ -215,7 +215,7 @@ static void BM_FullCycle_3Args(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
-        auto f = send(actor.get(), actor->address(), &coroutine_actor::sum3, 10, 20, 30);
+        auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum3, 10, 20, 30);
         while (!f.available()) { actor->resume(1); }
         int result = std::move(f).get();
         benchmark::DoNotOptimize(result);
@@ -230,7 +230,7 @@ static void BM_FullCycle_Coroutine(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
 
     for (auto _ : state) {
-        auto f = send(actor.get(), actor->address(), &coroutine_actor::compute, 42);
+        auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
         while (!f.available()) { actor->resume(1); }
         int result = std::move(f).get();
         benchmark::DoNotOptimize(result);

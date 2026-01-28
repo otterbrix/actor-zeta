@@ -63,16 +63,16 @@ public:
         &StreamingActor::stream_unique_ptrs
     >;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<StreamingActor, &StreamingActor::stream_numbers>) {
-            dispatch(this, &StreamingActor::stream_numbers, msg);
+            co_await dispatch(this, &StreamingActor::stream_numbers, msg);
         } else if (cmd == msg_id<StreamingActor, &StreamingActor::stream_strings>) {
-            dispatch(this, &StreamingActor::stream_strings, msg);
+            co_await dispatch(this, &StreamingActor::stream_strings, msg);
         } else if (cmd == msg_id<StreamingActor, &StreamingActor::empty_stream>) {
-            dispatch(this, &StreamingActor::empty_stream, msg);
+            co_await dispatch(this, &StreamingActor::empty_stream, msg);
         } else if (cmd == msg_id<StreamingActor, &StreamingActor::stream_unique_ptrs>) {
-            dispatch(this, &StreamingActor::stream_unique_ptrs, msg);
+            co_await dispatch(this, &StreamingActor::stream_unique_ptrs, msg);
         }
     }
 };
@@ -220,7 +220,7 @@ TEST_CASE("generator via send() API", "[generator][send]") {
     auto actor = spawn<StreamingActor>(resource);
 
     SECTION("send() returns generator<T> for generator methods") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &StreamingActor::stream_numbers, 5);
 
         REQUIRE(gen.valid());
@@ -231,14 +231,14 @@ TEST_CASE("generator via send() API", "[generator][send]") {
     }
 
     SECTION("send() with empty generator") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &StreamingActor::empty_stream);
         REQUIRE(gen.valid());
         actor->resume(1);
     }
 
     SECTION("send() with string generator") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &StreamingActor::stream_strings, 3);
         REQUIRE(gen.valid());
         actor->resume(1);
@@ -250,7 +250,7 @@ TEST_CASE("generator message dispatch", "[generator][dispatch]") {
     auto actor = spawn<StreamingActor>(resource);
 
     SECTION("dispatch links generator states") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &StreamingActor::stream_numbers, 3);
         REQUIRE(gen.valid());
         actor->resume(1);
@@ -258,11 +258,11 @@ TEST_CASE("generator message dispatch", "[generator][dispatch]") {
     }
 
     SECTION("multiple generator messages queued") {
-        auto gen1 = send(actor.get(), actor::address_t::empty_address(),
+        auto [_1, gen1] = send(actor.get(),
                          &StreamingActor::stream_numbers, 2);
-        auto gen2 = send(actor.get(), actor::address_t::empty_address(),
+        auto [_2, gen2] = send(actor.get(),
                          &StreamingActor::stream_numbers, 3);
-        auto gen3 = send(actor.get(), actor::address_t::empty_address(),
+        auto [_3, gen3] = send(actor.get(),
                          &StreamingActor::stream_strings, 1);
 
         REQUIRE(gen1.valid());
@@ -279,7 +279,7 @@ TEST_CASE("generator cancel via send()", "[generator][send][cancel]") {
     auto actor = spawn<StreamingActor>(resource);
 
     SECTION("cancel before processing") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &StreamingActor::stream_numbers, 5);
         REQUIRE(gen.valid());
 
@@ -292,7 +292,7 @@ TEST_CASE("generator cancel via send()", "[generator][send][cancel]") {
     }
 
     SECTION("detach before processing") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &StreamingActor::stream_numbers, 5);
         REQUIRE(gen.valid());
 
@@ -308,7 +308,7 @@ TEST_CASE("generator mailbox check", "[generator][send][mailbox]") {
     auto actor = spawn<StreamingActor>(resource);
 
     SECTION("send() enqueues message to mailbox") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &StreamingActor::stream_numbers, 3);
         REQUIRE(gen.valid());
 
@@ -338,8 +338,9 @@ TEST_CASE("generator MT - concurrent send", "[generator][mt]") {
         for (int t = 0; t < num_threads; ++t) {
             threads.emplace_back([&]() {
                 for (int i = 0; i < msgs_per_thread; ++i) {
-                    auto gen = send(actor.get(), actor::address_t::empty_address(),
+                    auto [ns, gen] = send(actor.get(),
                                     &StreamingActor::stream_numbers, 2);
+                    (void)ns;
                     // Avoid REQUIRE inside threads - Catch2 is not thread-safe
                     if (gen.valid()) {
                         valid_count.fetch_add(1, std::memory_order_relaxed);
@@ -366,8 +367,8 @@ TEST_CASE("generator MT - concurrent cancel", "[generator][mt]") {
     auto actor = spawn<StreamingActor>(resource);
 
     SECTION("cancel from different thread than send") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
-                        &StreamingActor::stream_numbers, 100);
+        auto send_result = send(actor.get(),&StreamingActor::stream_numbers, 100);
+        auto& gen = send_result.second;
         REQUIRE(gen.valid());
 
         std::atomic<bool> cancelled{false};
@@ -395,9 +396,9 @@ TEST_CASE("generator MT - stress test", "[generator][mt][stress]") {
         for (int i = 0; i < iterations; ++i) {
             auto actor = spawn<StreamingActor>(resource);
 
-            auto gen1 = send(actor.get(), actor::address_t::empty_address(),
+            auto [_1, gen1] = send(actor.get(),
                              &StreamingActor::stream_numbers, 5);
-            auto gen2 = send(actor.get(), actor::address_t::empty_address(),
+            auto [_2, gen2] = send(actor.get(),
                              &StreamingActor::stream_strings, 3);
 
             REQUIRE(gen1.valid());
@@ -419,8 +420,9 @@ TEST_CASE("generator MT - producer/consumer threads", "[generator][mt]") {
 
         std::thread producer([&]() {
             for (int i = 0; i < 20; ++i) {
-                auto gen = send(actor.get(), actor::address_t::empty_address(),
+                auto [ns, gen] = send(actor.get(),
                                 &StreamingActor::stream_numbers, 3);
+                (void)ns;
                 // Avoid REQUIRE inside threads - Catch2 is not thread-safe
                 if (gen.valid()) {
                     valid_generators.fetch_add(1, std::memory_order_relaxed);
@@ -544,12 +546,12 @@ public:
         &AsyncGenActor::stream_numbers
     >;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<AsyncGenActor, &AsyncGenActor::create_stream_async>) {
-            dispatch(this, &AsyncGenActor::create_stream_async, msg);
+            co_await dispatch(this, &AsyncGenActor::create_stream_async, msg);
         } else if (cmd == msg_id<AsyncGenActor, &AsyncGenActor::stream_numbers>) {
-            dispatch(this, &AsyncGenActor::stream_numbers, msg);
+            co_await dispatch(this, &AsyncGenActor::stream_numbers, msg);
         }
     }
 
@@ -566,7 +568,7 @@ TEST_CASE("unique_future<generator<T>> from actor", "[generator][future]") {
     auto actor = spawn<AsyncGenActor>(resource);
 
     SECTION("send() returns unique_future<generator<T>>") {
-        auto future = send(actor.get(), actor::address_t::empty_address(),
+        auto [needs_sched, future] = send(actor.get(),
                            &AsyncGenActor::create_stream_async, 5);
 
         // Verify type is correct
@@ -585,7 +587,7 @@ TEST_CASE("unique_future<generator<T>> from actor", "[generator][future]") {
     }
 
     SECTION("sync generator still works") {
-        auto gen = send(actor.get(), actor::address_t::empty_address(),
+        auto [_, gen] = send(actor.get(),
                         &AsyncGenActor::stream_numbers, 3);
 
         static_assert(type_traits::is_generator_v<decltype(gen)>);
@@ -661,18 +663,18 @@ public:
         &AwaitInsideGenActor::stream_source
     >;
 
-    void behavior(mailbox::message* msg) {
+    behavior_t behavior(mailbox::message* msg) {
         auto cmd = msg->command();
         if (cmd == msg_id<AwaitInsideGenActor, &AwaitInsideGenActor::get_value>) {
-            dispatch(this, &AwaitInsideGenActor::get_value, msg);
+            co_await dispatch(this, &AwaitInsideGenActor::get_value, msg);
         } else if (cmd == msg_id<AwaitInsideGenActor, &AwaitInsideGenActor::gen_await_ready>) {
-            dispatch(this, &AwaitInsideGenActor::gen_await_ready, msg);
+            co_await dispatch(this, &AwaitInsideGenActor::gen_await_ready, msg);
         } else if (cmd == msg_id<AwaitInsideGenActor, &AwaitInsideGenActor::gen_multi_await>) {
-            dispatch(this, &AwaitInsideGenActor::gen_multi_await, msg);
+            co_await dispatch(this, &AwaitInsideGenActor::gen_multi_await, msg);
         } else if (cmd == msg_id<AwaitInsideGenActor, &AwaitInsideGenActor::gen_forward>) {
-            dispatch(this, &AwaitInsideGenActor::gen_forward, msg);
+            co_await dispatch(this, &AwaitInsideGenActor::gen_forward, msg);
         } else if (cmd == msg_id<AwaitInsideGenActor, &AwaitInsideGenActor::stream_source>) {
-            dispatch(this, &AwaitInsideGenActor::stream_source, msg);
+            co_await dispatch(this, &AwaitInsideGenActor::stream_source, msg);
         }
     }
 };
@@ -705,7 +707,7 @@ TEST_CASE("unique_future<generator<T>> full chain", "[generator][future]") {
 
     SECTION("get generator from future and use it") {
         // Step 1: Send message, get future
-        auto future = send(actor.get(), actor::address_t::empty_address(),
+        auto [needs_sched, future] = send(actor.get(),
                            &AsyncGenActor::create_stream_async, 3);
         REQUIRE(!future.available());
 
@@ -725,9 +727,9 @@ TEST_CASE("unique_future<generator<T>> full chain", "[generator][future]") {
     }
 
     SECTION("multiple async generators") {
-        auto future1 = send(actor.get(), actor::address_t::empty_address(),
+        auto [ns1, future1] = send(actor.get(),
                             &AsyncGenActor::create_stream_async, 2);
-        auto future2 = send(actor.get(), actor::address_t::empty_address(),
+        auto [ns2, future2] = send(actor.get(),
                             &AsyncGenActor::create_stream_async, 3);
 
         REQUIRE(!future1.available());
@@ -748,9 +750,9 @@ TEST_CASE("unique_future<generator<T>> full chain", "[generator][future]") {
     }
 
     SECTION("mixed sync and async generators") {
-        auto future = send(actor.get(), actor::address_t::empty_address(),
+        auto [needs_sched, future] = send(actor.get(),
                            &AsyncGenActor::create_stream_async, 5);
-        auto gen_sync = send(actor.get(), actor::address_t::empty_address(),
+        auto [_2, gen_sync] = send(actor.get(),
                              &AsyncGenActor::stream_numbers, 3);
 
         REQUIRE(!future.available());

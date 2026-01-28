@@ -58,16 +58,16 @@ public:
         &impl_a::method3
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<impl_a, &impl_a::method1>:
-                actor_zeta::dispatch(this, &impl_a::method1, msg);
+                co_await actor_zeta::dispatch(this, &impl_a::method1, msg);
                 break;
             case actor_zeta::msg_id<impl_a, &impl_a::method2>:
-                actor_zeta::dispatch(this, &impl_a::method2, msg);
+                co_await actor_zeta::dispatch(this, &impl_a::method2, msg);
                 break;
             case actor_zeta::msg_id<impl_a, &impl_a::method3>:
-                actor_zeta::dispatch(this, &impl_a::method3, msg);
+                co_await actor_zeta::dispatch(this, &impl_a::method3, msg);
                 break;
         }
     }
@@ -117,16 +117,16 @@ public:
         &impl_b::method3
     >;
 
-    void behavior(actor_zeta::mailbox::message* msg) {
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         switch (msg->command()) {
             case actor_zeta::msg_id<impl_b, &impl_b::method1>:
-                actor_zeta::dispatch(this, &impl_b::method1, msg);
+                co_await actor_zeta::dispatch(this, &impl_b::method1, msg);
                 break;
             case actor_zeta::msg_id<impl_b, &impl_b::method2>:
-                actor_zeta::dispatch(this, &impl_b::method2, msg);
+                co_await actor_zeta::dispatch(this, &impl_b::method2, msg);
                 break;
             case actor_zeta::msg_id<impl_b, &impl_b::method3>:
-                actor_zeta::dispatch(this, &impl_b::method3, msg);
+                co_await actor_zeta::dispatch(this, &impl_b::method3, msg);
                 break;
         }
     }
@@ -188,10 +188,9 @@ TEST_CASE("implements - send and dispatch work correctly") {
     auto actor_b = actor_zeta::spawn<impl_b>(resource);
 
     // Send to impl_a
-    auto future_a = actor_zeta::send(
-        actor_a.get(),
-        actor_zeta::address_t::empty_address(),
-        &impl_a::method1,
+    auto [needs_sched_a, future_a] = actor_zeta::send(
+            actor_a.get(),
+            &impl_a::method1,
         42
     );
 
@@ -200,10 +199,9 @@ TEST_CASE("implements - send and dispatch work correctly") {
     REQUIRE(actor_a->last_value() == 42);
 
     // Send to impl_b
-    auto future_b = actor_zeta::send(
-        actor_b.get(),
-        actor_zeta::address_t::empty_address(),
-        &impl_b::method1,
+    auto [needs_sched_b, future_b] = actor_zeta::send(
+            actor_b.get(),
+            &impl_b::method1,
         100
     );
 

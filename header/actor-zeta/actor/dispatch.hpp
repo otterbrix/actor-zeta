@@ -1,40 +1,11 @@
 #pragma once
 
 #include <actor-zeta/detail/callable_trait.hpp>
-#include <actor-zeta/mailbox/message_result.hpp>
+#include <actor-zeta/detail/future.hpp>
+#include <actor-zeta/detail/shared_state.hpp>
+#include <actor-zeta/mailbox/message.hpp>
 
 namespace actor_zeta {
-
-    namespace detail {
-
-        // Chain method future result to message's result promise
-        template<typename T>
-        inline void setup_result_chaining_inline(
-            unique_future<T>& method_future,
-            mailbox::message* msg) noexcept {
-            auto result_promise = msg->get_result_promise<T>();
-            method_future.forward_to(result_promise);
-        }
-
-        // Link method's generator to message's external generator state
-        template<typename T>
-        inline void setup_generator_linking_inline(
-            generator<T>& method_generator,
-            mailbox::message* msg) noexcept {
-            auto* external_state = msg->template get_generator_state<T>();
-            if (external_state && method_generator.internal_state()) {
-                method_generator.link_to(external_state);
-
-                // Start the coroutine
-                auto* internal_state = method_generator.internal_state();
-                auto producer = internal_state->take_producer_handle();
-                if (producer && !producer.done()) {
-                    producer.resume();
-                }
-            }
-        }
-
-    } // namespace detail
 
     namespace dispatch_validation {
 
@@ -83,9 +54,47 @@ namespace actor_zeta {
 
     } // namespace dispatch_validation
 
-    // Dispatch message to actor method, returns unique_future<T> or generator<T>
+    namespace detail {
+
+        // Link method's generator to message's external generator state
+        template<typename T>
+        inline void setup_generator_linking_inline(
+            generator<T>& method_generator,
+            mailbox::message* msg) noexcept {
+            auto* external_state = msg->template get_generator_state<T>();
+            if (external_state && method_generator.internal_state()) {
+                method_generator.link_to(external_state);
+
+                // Start the coroutine
+                auto* internal_state = method_generator.internal_state();
+                auto producer = internal_state->take_producer_handle();
+                if (producer && !producer.done()) {
+                    producer.resume();
+                }
+            }
+        }
+
+    } // namespace detail
+
+    // Helper: Invoke method with arguments from message
+    // Note: This is NOT a coroutine, just extracts args and calls method
+    template<class Actor, typename Method, typename ArgsTypeList, std::size_t ArgsSize>
+    auto invoke_actor_method(Actor* self, Method method, mailbox::message* msg) {
+        if constexpr (ArgsSize == 0) {
+            return (self->*method)();
+        } else {
+            return [&]<std::size_t... I>(std::index_sequence<I...>) {
+                auto& args = msg->body();
+                return (self->*method)((detail::get<I, ArgsTypeList>(args))...);
+            }(std::make_index_sequence<ArgsSize>{});
+        }
+    }
+
+    // Dispatch message to actor method (Seastar-style coroutine)
+    // Returns unique_future<void> - caller can co_await, detach, or store
+    // Method result is forwarded via message's promise
     template<class Actor, typename Method>
-    auto dispatch(Actor* self, Method method, mailbox::message* msg) {
+    unique_future<void> dispatch(Actor* self, Method method, mailbox::message* msg) {
         using call_trait = type_traits::get_callable_trait_t<Method>;
         using result_type = typename call_trait::result_type;
         using args_type_list = typename call_trait::args_types;
@@ -101,35 +110,45 @@ namespace actor_zeta {
             "dispatch(): non-const lvalue reference parameters (T&) are not allowed. "
             "Use value (T), const reference (const T&), or rvalue reference (T&&)");
 
-        if constexpr (args_size > 0) {
-            assert(msg->body().size() == args_size &&
-                   "dispatch(): message argument count mismatch");
-        }
-
-        auto invoke_method = [&]<std::size_t... I>(std::index_sequence<I...>) {
-            if constexpr (args_size == 0) {
-                return (self->*method)();
-            } else {
-                auto& args = msg->body();
-                return (self->*method)((detail::get<I, args_type_list>(args))...);
-            }
-        };
-
-
         static_assert(
             type_traits::is_unique_future_v<result_type> || type_traits::is_generator_v<result_type>,
             "dispatch(): Actor methods must return unique_future<T> or generator<T>. "
             "Raw void or value returns are not allowed. "
             "All actor methods must be coroutines.");
 
+        if constexpr (args_size > 0) {
+            assert(msg->body().size() == args_size &&
+                   "dispatch(): message argument count mismatch");
+        }
+
         if constexpr (type_traits::is_generator_v<result_type>) {
-            auto gen = invoke_method(std::make_index_sequence<args_size>{});
-            detail::setup_generator_linking_inline(gen, msg);
-            return gen;
+            // Generator path - link to external state (streaming, not one-shot)
+            auto method_gen = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
+            detail::setup_generator_linking_inline(method_gen, msg);
+            co_return;
+
         } else {
-            auto future = invoke_method(std::make_index_sequence<args_size>{});
-            detail::setup_result_chaining_inline(future, msg);
-            return future;
+            // unique_future path - co_await method and set_value on caller's promise
+            using value_type = typename type_traits::is_unique_future<result_type>::value_type;
+
+            // Get promise view of caller's shared_state
+            auto result_promise = msg->template get_result_promise<value_type>();
+
+            // Transfer ownership - message won't call cleanup anymore
+            msg->transfer_ownership();
+
+            // Invoke the method - this creates method's own shared_state
+            auto method_future = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
+
+            // co_await method and forward result (non-blocking!)
+            if constexpr (std::is_void_v<value_type>) {
+                co_await std::move(method_future);
+                result_promise.set_value();
+            } else {
+                auto value = co_await std::move(method_future);
+                result_promise.set_value(std::move(value));
+            }
+            co_return;
         }
     }
 

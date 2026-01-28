@@ -4,9 +4,19 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Changed
+- **`send()` API**: Removed sender address parameter. Now: `send(actor, &Method, args...)` returns `std::pair<bool, unique_future<T>>`
+- **`make_message()` API**: Removed sender address parameter
+- **`enqueue_impl()` return type**: Changed to `std::pair<bool, enqueue_result>` (bool first)
+- **`behavior()` signature**: Returns `behavior_t` (coroutine), use `co_await dispatch(...)` inside
+
 ### Added
 - Compile-time check for `T&&` to move-only types in coroutines (GCC 11.4 bug workaround)
 - Documentation: `docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md`
+- Cross-thread stress tests for `unique_future` (`test/race-condition/`)
+
+### Fixed
+- Clang-14 compatibility: Structured bindings cannot be captured in lambdas
 
 ## [2025-01] - Major Refactoring
 
@@ -51,31 +61,59 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 
 ## Migration Guides
 
-### Message Creation API (2025-01)
+### behavior() Signature Change (Unreleased)
 
-**For library users:** No changes - `send()` API unchanged.
+```cpp
+// Before (returns void)
+void behavior(mailbox::message* msg) {
+    if (msg->command() == msg_id<Actor, &Actor::method>) {
+        dispatch(this, &Actor::method, msg);
+    }
+}
 
-**For custom actors/balancers:**
+// After (returns behavior_t, coroutine with co_await)
+behavior_t behavior(mailbox::message* msg) {
+    if (msg->command() == msg_id<Actor, &Actor::method>) {
+        co_await dispatch(this, &Actor::method, msg);
+    }
+}
+```
+
+### enqueue_impl() Return Type (Unreleased)
 
 ```cpp
 // Before
-template<typename R>
-unique_future<R> enqueue_impl(mailbox::message_ptr msg);
+enqueue_result enqueue_impl(mailbox::message_ptr msg);
 
-// After
-template<typename R, typename... Args>
-unique_future<R> enqueue_impl(address_t sender, message_id cmd, Args&&... args);
+// After (pair with bool first)
+std::pair<bool, enqueue_result> enqueue_impl(mailbox::message_ptr msg);
 ```
 
-### Manual Scheduling (2025-01)
+### send() API Change (2025-01)
 
 ```cpp
-// Before (auto-scheduling)
-send(worker, sender, &Worker::process, data);
-
-// After (manual scheduling)
+// Before (with sender address)
 auto future = send(worker, sender, &Worker::process, data);
 scheduler->schedule(worker.get());
+
+// After (no sender address, returns pair)
+auto [needs_sched, future] = send(worker.get(), &Worker::process, data);
+if (needs_sched) scheduler->enqueue(worker.get());
+```
+
+### Structured Bindings in Lambdas (Clang-14)
+
+```cpp
+// Clang-14 doesn't support capturing structured bindings in lambdas
+
+// WRONG (compile error on clang-14):
+auto [needs_sched, future] = send(actor.get(), &Actor::compute, 42);
+std::thread t([&future]() { ... });  // Error!
+
+// CORRECT:
+auto send_result = send(actor.get(), &Actor::compute, 42);
+auto& future = send_result.second;
+std::thread t([&future]() { ... });  // OK
 ```
 
 ### PMR Migration (2025-12)
