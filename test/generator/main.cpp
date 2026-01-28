@@ -367,8 +367,8 @@ TEST_CASE("generator MT - concurrent cancel", "[generator][mt]") {
     auto actor = spawn<StreamingActor>(resource);
 
     SECTION("cancel from different thread than send") {
-        auto [_, gen] = send(actor.get(),
-                        &StreamingActor::stream_numbers, 100);
+        auto send_result = send(actor.get(),&StreamingActor::stream_numbers, 100);
+        auto& gen = send_result.second;
         REQUIRE(gen.valid());
 
         std::atomic<bool> cancelled{false};
