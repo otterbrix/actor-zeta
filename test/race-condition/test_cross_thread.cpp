@@ -109,8 +109,8 @@ TEST_CASE("cross-thread: concurrent start polling") {
         auto* resource = std::pmr::get_default_resource();
         auto actor = actor_zeta::spawn<cross_thread_worker>(resource);
 
-        auto [needs_sched, future] = actor_zeta::send(actor.get(),
-                                       &cross_thread_worker::compute, i);
+        auto send_result = actor_zeta::send(actor.get(),&cross_thread_worker::compute, i);
+        auto& future = send_result.second;
 
         std::atomic<bool> start{false};
         std::atomic<int> result{-1};
@@ -464,8 +464,8 @@ TEST_CASE("cross-thread: memory ordering") {
         auto* resource = std::pmr::get_default_resource();
         auto actor = actor_zeta::spawn<cross_thread_worker>(resource);
 
-        auto [needs_sched, future] = actor_zeta::send(actor.get(),
-                                       &cross_thread_worker::compute, iter);
+        auto send_result = actor_zeta::send(actor.get(),&cross_thread_worker::compute, iter);
+        auto& future = send_result.second;
 
         std::atomic<int> read_value{-1};
         std::atomic<bool> producer_done{false};
