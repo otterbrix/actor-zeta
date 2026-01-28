@@ -132,8 +132,9 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
     std::atomic<int> invalid_transitions{0};  // Only count INVALID transitions (true→false)
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        auto [needs_sched, future] = actor_zeta::send(actor.get(),
-                                      &state_test_actor::compute, i);
+        auto send_result = actor_zeta::send(actor.get(), &state_test_actor::compute, i);
+        auto needs_sched = send_result.first;
+        auto& future = send_result.second;
 
         // Thread that continuously polls is_ready()
         std::atomic<bool> stop_polling{false};
@@ -213,8 +214,9 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
     constexpr int NUM_OBSERVERS = 4;
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        auto [needs_sched, future] = actor_zeta::send(actor.get(),
-                                      &state_test_actor::fast_task, i);
+        auto send_result = actor_zeta::send(actor.get(), &state_test_actor::fast_task, i);
+        auto needs_sched = send_result.first;
+        auto& future = send_result.second;
 
         if (needs_sched) {
             scheduler->enqueue(actor.get());
@@ -304,8 +306,9 @@ TEST_CASE("State Test 1.4: State transition ordering") {
         // Use unique value to detect stale reads
         int expected_value = i + 1;  // fast_task returns value + 1
 
-        auto [needs_sched, future] = actor_zeta::send(actor.get(),
-                                      &state_test_actor::fast_task, i);
+        auto send_result = actor_zeta::send(actor.get(), &state_test_actor::fast_task, i);
+        auto needs_sched = send_result.first;
+        auto& future = send_result.second;
 
         if (needs_sched) {
             scheduler->enqueue(actor.get());
@@ -371,8 +374,9 @@ TEST_CASE("State Test 1.5: Happens-before across state transitions") {
     std::atomic<int> visibility_failures{0};
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        auto [needs_sched, future] = actor_zeta::send(actor.get(),
-                                      &state_test_actor::compute, i);
+        auto send_result = actor_zeta::send(actor.get(), &state_test_actor::compute, i);
+        auto needs_sched = send_result.first;
+        auto& future = send_result.second;
 
         if (needs_sched) {
             scheduler->enqueue(actor.get());

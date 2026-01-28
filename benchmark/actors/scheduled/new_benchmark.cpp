@@ -88,7 +88,7 @@ public:
     void DoPingPong() {
         ping_pong_counter = 0;
         ping_pong_done.store(false, std::memory_order_release);
-        auto [needs_sched, future] = actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping);
+        auto [needs_sched, future] = actor_zeta::send(actor0_.get(), &Actor::ping);
         actor_zeta::detail::ignore_unused(future);
         scheduler_->enqueue(actor0_.get());
         std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -128,7 +128,7 @@ public:
     void DoPingPong() {
         ping_pong_counter = 0;
         ping_pong_done.store(false, std::memory_order_release);
-        auto [needs_sched, future] = actor_zeta::send(actor0_.get(), actor0_->address(), &Actor::ping, int64_t{});
+        auto [needs_sched, future] = actor_zeta::send(actor0_.get(), &Actor::ping, int64_t{});
         actor_zeta::detail::ignore_unused(future);
         scheduler_->enqueue(actor0_.get());
         std::this_thread::sleep_for(std::chrono::microseconds(100));

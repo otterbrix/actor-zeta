@@ -26,7 +26,6 @@ namespace benchmark_messages {
             while (state.KeepRunning()) {
                 auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::actor::address_t::empty_address(),
                     name_);
                 auto tmp = sizeof(*message);
                 if (static_cast<int64_t>(tmp) > static_cast<int64_t>(benchmark_messages::message_sz))
@@ -40,7 +39,6 @@ namespace benchmark_messages {
             while (state.KeepRunning()) {
                 auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::actor::address_t::empty_address(),
                     name_);
                 auto tmp = sizeof(*message);
                 if (static_cast<int64_t>(tmp) > static_cast<int64_t>(benchmark_messages::message_sz))
@@ -65,7 +63,6 @@ namespace benchmark_messages {
                 auto* resource =std::pmr::get_default_resource();
                 auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::actor::address_t::empty_address(),
                     name_,
                     std::forward<Args>(args)...);
                 auto tmp = sizeof(*message);
@@ -87,7 +84,6 @@ namespace benchmark_messages {
                 auto* resource =std::pmr::get_default_resource();
                 auto [message, future] = actor_zeta::detail::make_message(
                     resource,
-                    actor_zeta::actor::address_t::empty_address(),
                     name_,
                     std::forward<Args>(args)...);
                 auto tmp = sizeof(*message);

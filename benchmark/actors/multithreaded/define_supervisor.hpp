@@ -79,9 +79,9 @@ public:
         &simple_supervisor::send
     >;
 
-    std::pair<actor_zeta::detail::enqueue_result, bool> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+    std::pair<bool, actor_zeta::detail::enqueue_result> enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
         behavior(msg.get());
-        return {actor_zeta::detail::enqueue_result::success, false};
+        return {false, actor_zeta::detail::enqueue_result::success};
     }
 
 protected:
