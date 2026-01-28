@@ -171,10 +171,10 @@ namespace actor_zeta::detail {
             std::uint8_t expected = state_flags::promise_finalizing | state_flags::promise_released;
             // Also allow value_set or error_set flags
             std::uint8_t current = flags_.load(std::memory_order_acquire);
-            expected = (current & ~state_flags::future_released);  // Current minus future_released
+            expected = static_cast<std::uint8_t>(current & ~state_flags::future_released);  // Current minus future_released
 
             // Try to clear finalizing flag
-            std::uint8_t desired = expected & ~state_flags::promise_finalizing;
+            std::uint8_t desired = static_cast<std::uint8_t>(expected & ~state_flags::promise_finalizing);
 
             if (flags_.compare_exchange_strong(expected, desired,
                                                std::memory_order_acq_rel,
@@ -319,8 +319,8 @@ namespace actor_zeta::detail {
         /// @return false if future_released was set (producer should deallocate)
         [[nodiscard]] bool try_complete_finalize() noexcept {
             std::uint8_t current = flags_.load(std::memory_order_acquire);
-            std::uint8_t expected = (current & ~state_flags::future_released);
-            std::uint8_t desired = expected & ~state_flags::promise_finalizing;
+            std::uint8_t expected = static_cast<std::uint8_t>(current & ~state_flags::future_released);
+            std::uint8_t desired = static_cast<std::uint8_t>(expected & ~state_flags::promise_finalizing);
 
             if (flags_.compare_exchange_strong(expected, desired,
                                                std::memory_order_acq_rel,

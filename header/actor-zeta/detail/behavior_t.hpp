@@ -141,7 +141,7 @@ namespace actor_zeta {
             // Constructor extracting resource from first argument (this* of Actor)
             template<typename First, typename... Args>
             promise_type(First&& first, Args&&...) noexcept
-                : resource_(extract_resource_or_null(std::forward<First>(first))) {}
+                : resource_(extract_resource_or_null(std::forward<std::remove_reference_t<First>>(first))) {}
 
             template<typename... Args>
             static void* operator new(std::size_t size, const Args&... args) {
