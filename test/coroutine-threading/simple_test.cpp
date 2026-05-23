@@ -90,7 +90,7 @@ public:
     /// With auto-resume in set_value(), coroutines resume automatically
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 it = pending_.erase(it);
             } else {
                 ++it;
@@ -121,16 +121,6 @@ public:
         client_ = c;
     }
 
-    /// @brief Runs actors until future becomes ready
-    template<typename T>
-    void run_until_ready(unique_future<T>& future, int max_iterations = 1000) {
-        int iterations = 0;
-        while (!future.available() && iterations < max_iterations) {
-            run_once();
-            ++iterations;
-        }
-    }
-
     /// @brief Runs one resume cycle for all actors
     void run_once() {
         if (client_) client_->resume(1);
@@ -154,11 +144,11 @@ TEST_CASE("worker only") {
 
     auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
 
-    // Supervisor runs actors
-    supervisor.run_until_ready(future);
+    // Producer is pumped on this thread via the supervisor: drive the future to
+    // completion by pumping the supervisor until it is ready, then take the value.
+    int result = run_until_complete(future, [&] { supervisor.run_once(); });
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 42);
+    REQUIRE(result == 42);
 }
 
 
@@ -174,16 +164,14 @@ TEST_CASE("client-worker coroutine with supervisor") {
     // Send message to client
     auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
 
-    // Supervisor controls resume of all actors
-    supervisor.run_until_ready(future);
+    // Producer is pumped on this thread via the supervisor.
+    int result = run_until_complete(future, [&] { supervisor.run_once(); });
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 52);  // 21 * 2 + 10 = 52
+    REQUIRE(result == 52);  // 21 * 2 + 10 = 52
 
     // Verify via get_result()
     auto [needs_sched2, result_future] = send(client.get(), &client_actor::get_result);
-    supervisor.run_until_ready(result_future);
+    int verified = run_until_complete(result_future, [&] { supervisor.run_once(); });
 
-    REQUIRE(result_future.available());
-    REQUIRE(std::move(result_future).get() == 52);
+    REQUIRE(verified == 52);
 }

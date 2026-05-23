@@ -88,8 +88,8 @@ TEST_CASE("Issue #3: error state handling is consistent for int type", "[error][
     auto* resource = std::pmr::get_default_resource();
 
     promise<int> p(resource);
-    auto f = p.get_future();  // Get future BEFORE set_error
-    p.set_error(std::make_error_code(std::errc::invalid_argument));
+    auto f = p.get_future();  // Get future BEFORE error
+    p.error(std::make_error_code(std::errc::invalid_argument));
 
     // Future should report failed state
     REQUIRE(f.failed());
@@ -100,8 +100,8 @@ TEST_CASE("Issue #3: error state handling is consistent for void type", "[error]
     auto* resource = std::pmr::get_default_resource();
 
     promise<void> p(resource);
-    auto f = p.get_future();  // Get future BEFORE set_error
-    p.set_error(std::make_error_code(std::errc::invalid_argument));
+    auto f = p.get_future();  // Get future BEFORE error
+    p.error(std::make_error_code(std::errc::invalid_argument));
 
     // Future should report failed state
     REQUIRE(f.failed());
@@ -113,10 +113,10 @@ TEST_CASE("Issue #3: cancelled state handling is consistent for int type", "[can
 
     promise<int> p(resource);
     unique_future<int> f = p.get_future();
-    f.cancel();
+    // Cancellation is now produced via the promise's error channel.
+    p.error(std::make_error_code(std::errc::operation_canceled));
 
-    // Future should report cancelled state
-    REQUIRE(f.is_cancelled());
+    // Future should report cancelled state (observed via failed()/error())
     REQUIRE(f.failed());
     REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
 }
@@ -126,10 +126,10 @@ TEST_CASE("Issue #3: cancelled state handling is consistent for void type", "[ca
 
     promise<void> p(resource);
     unique_future<void> f = p.get_future();
-    f.cancel();
+    // Cancellation is now produced via the promise's error channel.
+    p.error(std::make_error_code(std::errc::operation_canceled));
 
-    // Future should report cancelled state
-    REQUIRE(f.is_cancelled());
+    // Future should report cancelled state (observed via failed()/error())
     REQUIRE(f.failed());
     REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
 }
@@ -197,7 +197,7 @@ TEST_CASE("Issue #5: operator= does not overwrite error state", "[operator=][err
     // Create first future with error
     promise<int> p1(resource);
     unique_future<int> f1 = p1.get_future();
-    p1.set_error(std::make_error_code(std::errc::invalid_argument));
+    p1.error(std::make_error_code(std::errc::invalid_argument));
 
     // Create second future
     promise<int> p2(resource);
@@ -208,8 +208,8 @@ TEST_CASE("Issue #5: operator= does not overwrite error state", "[operator=][err
     f1 = std::move(f2);
 
     // f1 now holds f2's state (which has value 42)
-    REQUIRE(f1.available());
-    REQUIRE(std::move(f1).get() == 42);
+    REQUIRE(f1.is_ready());
+    REQUIRE(std::move(f1).take_ready() == 42);
 }
 
 TEST_CASE("Issue #5: operator= releases old state properly", "[operator=][memory]") {
@@ -353,12 +353,12 @@ TEST_CASE("Integration: basic promise-future flow", "[integration]") {
     auto f = p.get_future();
 
     REQUIRE(f.valid());
-    REQUIRE_FALSE(f.available());
+    REQUIRE_FALSE(f.is_ready());
 
     p.set_value(42);
 
-    REQUIRE(f.available());
-    REQUIRE(std::move(f).get() == 42);
+    REQUIRE(f.is_ready());
+    REQUIRE(std::move(f).take_ready() == 42);
 }
 
 TEST_CASE("Integration: promise destruction without set_value", "[integration][error]") {
@@ -372,7 +372,7 @@ TEST_CASE("Integration: promise destruction without set_value", "[integration][e
     }());
 
     // Future should be in failed state with broken_pipe
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
 }
@@ -396,6 +396,6 @@ TEST_CASE("Integration: move semantics", "[integration][move]") {
     REQUIRE(f2.internal_state() == original_state);
 
     p2.set_value(123);
-    REQUIRE(f2.available());
-    REQUIRE(std::move(f2).get() == 123);
+    REQUIRE(f2.is_ready());
+    REQUIRE(std::move(f2).take_ready() == 123);
 }

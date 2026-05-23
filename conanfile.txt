@@ -1,6 +1,7 @@
 [requires]
   catch2/2.13.10
   benchmark/1.6.2
+  asio/1.30.2
 
 [generators]
 CMakeDeps

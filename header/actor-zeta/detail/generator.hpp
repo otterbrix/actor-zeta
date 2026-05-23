@@ -368,7 +368,7 @@ struct generator_future_awaiter {
         , gen_state_(state) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return future_.available();
+        return future_.is_ready();
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
@@ -385,7 +385,7 @@ struct generator_future_awaiter {
         }
 
         // Check if became ready during setup (race condition)
-        if (future_.available()) {
+        if (future_.is_ready()) {
             return caller;
         }
 
@@ -393,10 +393,18 @@ struct generator_future_awaiter {
     }
 
     auto await_resume() {
+        // Direct non-blocking take from the (already-ready) shared_state.
+        auto* s = future_.internal_state();
+        assert(s && s->has_result() && !s->has_error()
+               && "generator co_await future: future not ready or completed with error");
         if constexpr (std::is_void_v<FutT>) {
+            s->take_value();
+            future_.detach();
             return;
         } else {
-            return std::move(future_).get();
+            auto v = s->take_value();
+            future_.detach();
+            return v;
         }
     }
 };

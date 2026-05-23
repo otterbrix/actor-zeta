@@ -754,7 +754,7 @@ public:
     void poll_pending() {
         // Clean up completed size futures
         for (auto it = pending_size_.begin(); it != pending_size_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] size coroutine completed", name_);
                 it = pending_size_.erase(it);
             } else {
@@ -763,7 +763,7 @@ public:
         }
         // Clean up completed execute futures
         for (auto it = pending_execute_.begin(); it != pending_execute_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] execute coroutine completed", name_);
                 it = pending_execute_.erase(it);
             } else {
@@ -772,7 +772,7 @@ public:
         }
         // Clean up completed transaction futures
         for (auto it = pending_transaction_.begin(); it != pending_transaction_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] transaction coroutine completed", name_);
                 it = pending_transaction_.erase(it);
             } else {
@@ -781,7 +781,7 @@ public:
         }
         // Clean up completed aggregate futures
         for (auto it = pending_aggregate_.begin(); it != pending_aggregate_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] aggregate coroutine completed", name_);
                 it = pending_aggregate_.erase(it);
             } else {
@@ -790,7 +790,7 @@ public:
         }
         // Clean up completed detail futures
         for (auto it = pending_detail_.begin(); it != pending_detail_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] detail coroutine completed", name_);
                 it = pending_detail_.erase(it);
             } else {
@@ -799,7 +799,7 @@ public:
         }
         // Clean up completed transform futures
         for (auto it = pending_transform_.begin(); it != pending_transform_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] transform coroutine completed", name_);
                 it = pending_transform_.erase(it);
             } else {

@@ -105,7 +105,7 @@ TEST_CASE("needs_scheduling race: message loss detection") {
 
         // Wait for message to be processed
         auto start = std::chrono::steady_clock::now();
-        while (!future.available()) {
+        while (!future.is_ready()) {
             auto elapsed = std::chrono::steady_clock::now() - start;
             if (elapsed > WAIT_TIMEOUT) {
                 // Message was not processed in time!
@@ -116,7 +116,7 @@ TEST_CASE("needs_scheduling race: message loss detection") {
                 scheduler->enqueue(actor.get());
 
                 // Wait again
-                while (!future.available()) {
+                while (!future.is_ready()) {
                     std::this_thread::yield();
                     if (std::chrono::steady_clock::now() - start > std::chrono::seconds(1)) {
                         break; // Give up
@@ -127,7 +127,7 @@ TEST_CASE("needs_scheduling race: message loss detection") {
             std::this_thread::yield();
         }
 
-        if (future.available()) {
+        if (future.is_ready()) {
             successful_deliveries.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -190,7 +190,7 @@ TEST_CASE("needs_scheduling race: high contention stress") {
 
                 // Check if message was processed in time
                 auto start = std::chrono::steady_clock::now();
-                while (!future.available()) {
+                while (!future.is_ready()) {
                     auto elapsed = std::chrono::steady_clock::now() - start;
                     if (elapsed > WAIT_TIMEOUT) {
                         timeouts_detected.fetch_add(1, std::memory_order_relaxed);
@@ -268,7 +268,7 @@ TEST_CASE("needs_scheduling race: targeted timing") {
 
         // Wait for both messages
         auto start = std::chrono::steady_clock::now();
-        while (!first.available() || !second.available()) {
+        while (!first.is_ready() || !second.is_ready()) {
             auto elapsed = std::chrono::steady_clock::now() - start;
             if (elapsed > std::chrono::milliseconds(100)) {
                 // Timeout - message might be stuck!

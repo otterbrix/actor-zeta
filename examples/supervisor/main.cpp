@@ -147,67 +147,55 @@ int main() {
     std::cerr << "=== Supervisor Example: Manual Scheduling ===" << std::endl;
     std::cerr << std::endl;
 
+    // Top-level result collection without task<>/sync_wait. The supervisor (an
+    // actor_mixin) processes each request synchronously, so every returned future is
+    // ready as soon as send() returns. We use a non-blocking consumer poll for each:
+    // while(!f.is_ready()) yield; then take_ready(). The real scheduler keeps running
+    // while we drive, and is stopped before the actor is destroyed.
+    auto await_request = [](auto future_pair) {
+        auto& future = future_pair.second;
+        while (!future.is_ready()) {
+            std::this_thread::yield();
+        }
+        std::move(future).take_ready();
+    };
+
     std::cerr << "--- Creating Workers ---" << std::endl;
-    {
-        std::vector<actor_zeta::unique_future<void>> create_futures;
-        create_futures.reserve(3);
-        for (int i = 1; i <= 3; ++i) {
-            auto [needs_sched, future] = actor_zeta::send(
+    for (int i = 1; i <= 3; ++i) {
+        await_request(actor_zeta::send(
             supervisor.get(),
             &supervisor_actor::create_worker,
-                std::string("Worker-") + std::to_string(i));
-            create_futures.push_back(std::move(future));
-        }
-        // Wait for all workers to be created before assigning tasks
-        for (auto& f : create_futures) {
-            std::move(f).get();
-        }
+            std::string("Worker-") + std::to_string(i)));
     }
     std::cerr << std::endl;
 
     std::cerr << "--- Assigning Tasks ---" << std::endl;
-    {
-        std::vector<std::string> tasks = {
-            "Parse config file",
-            "Process HTTP request",
-            "Update database",
-            "Send notification",
-            "Generate report",
-            "Clean temp files"
-        };
-
-        std::vector<actor_zeta::unique_future<void>> task_futures;
-        task_futures.reserve(tasks.size());
-        for (const auto& task : tasks) {
-            auto [needs_sched, future] = actor_zeta::send(
+    std::vector<std::string> tasks = {
+        "Parse config file",
+        "Process HTTP request",
+        "Update database",
+        "Send notification",
+        "Generate report",
+        "Clean temp files"
+    };
+    for (const auto& task : tasks) {
+        await_request(actor_zeta::send(
             supervisor.get(),
             &supervisor_actor::assign_task,
-                task);
-            task_futures.push_back(std::move(future));
-        }
-        // Wait for all tasks to be assigned
-        for (auto& f : task_futures) {
-            std::move(f).get();
-        }
+            task));
     }
     std::cerr << std::endl;
 
     std::cerr << "--- Checking Status ---" << std::endl;
-    {
-        auto [needs_sched, status_future] = actor_zeta::send(
-            supervisor.get(),
-            &supervisor_actor::check_status);
-        std::move(status_future).get();
-    }
+    await_request(actor_zeta::send(
+        supervisor.get(),
+        &supervisor_actor::check_status));
 
     std::cerr << std::endl;
     std::cerr << "--- Stopping ---" << std::endl;
-    {
-        auto [needs_sched, stop_future] = actor_zeta::send(
-            supervisor.get(),
-            &supervisor_actor::stop_workers);
-        std::move(stop_future).get();
-    }
+    await_request(actor_zeta::send(
+        supervisor.get(),
+        &supervisor_actor::stop_workers));
 
     scheduler->stop();
 

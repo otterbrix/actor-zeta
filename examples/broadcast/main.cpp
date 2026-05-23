@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <actor-zeta.hpp>
@@ -115,19 +116,22 @@ int main() {
 
     int const actors = 5;
 
-    std::vector<supervisor_lite::unique_future<void>> create_futures;
-    create_futures.reserve(actors);
+    // The supervisor (an actor_mixin) processes create requests synchronously, so each
+    // create future is ready as soon as send() returns. The worker download results are
+    // produced on the supervisor's internal worker threads (sharing_scheduler e_), so we
+    // collect them with a non-blocking consumer poll: while(!f.is_ready()) yield; then
+    // take_ready(). The supervisor owns and stops e_ in its destructor, so the actors (and
+    // their scheduler) outlive this collection.
     for (auto i = actors; i > 0; --i) {
         auto [needs_sched, future] = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
-        create_futures.push_back(std::move(future));
+        (void) needs_sched; // synchronous actor_mixin: future is ready immediately
+        while (!future.is_ready()) {
+            std::this_thread::yield();
+        }
+        std::move(future).take_ready();
     }
 
-    for (auto& future : create_futures) {
-        std::move(future).get();
-    }
-
-    std::vector<worker_t::unique_future<std::size_t>> futures;
-    futures.reserve(supervisor->worker_count());
+    std::size_t total_size = 0;
     for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
         auto* worker = supervisor->get_worker(i);
         if (worker) {
@@ -142,14 +146,12 @@ int main() {
             if (needs_sched) {
                 supervisor->schedule_worker(i);
             }
-            futures.push_back(std::move(future));
+            // Worker runs on the supervisor's internal scheduler (cross-thread): poll.
+            while (!future.is_ready()) {
+                std::this_thread::yield();
+            }
+            total_size += std::move(future).take_ready();
         }
-    }
-
-    std::size_t total_size = 0;
-    for (std::size_t i = 0; i < futures.size(); ++i) {
-        std::size_t result = std::move(futures[i]).get();
-        total_size += result;
     }
 
     std::cerr << "Total size from all workers: " << total_size << std::endl;

@@ -6,7 +6,6 @@
 #include <cstring>
 #include <memory_resource>
 #include <system_error>
-#include <thread>
 #include <type_traits>
 
 #include <actor-zeta/detail/coroutine.hpp>
@@ -61,8 +60,6 @@ namespace actor_zeta { namespace detail {
 
         bool error(std::error_code ec) noexcept;
         [[nodiscard]] std::error_code error() const noexcept;
-
-        void wait_until_ready() const noexcept;
 
         [[nodiscard]] bool is_cancelled() const noexcept;
         bool cancelled() noexcept;
@@ -284,20 +281,17 @@ namespace actor_zeta { namespace detail {
             }
 
             if constexpr (has_result) {
-                auto s = state_.load(std::memory_order_acquire);
-                if (s == future_state_enum::setting || s == future_state_enum::consuming) {
-                    int spin_count = 0;
-                    constexpr int fast_spin_limit = 10;
-                    while ((s == future_state_enum::setting || s == future_state_enum::consuming) && spin_count < fast_spin_limit) {
-                        ++spin_count;
-                        s = state_.load(std::memory_order_acquire);
-                    }
-
-                    while (s == future_state_enum::setting || s == future_state_enum::consuming) {
-                        std::this_thread::yield();
-                        s = state_.load(std::memory_order_acquire);
-                    }
-                }
+                // The intrusive refcount cannot reach 0 (which triggers this destructor)
+                // while a set_value()/take_value() is in flight, because each side holds a
+                // ref across its operation. Reaching here in 'setting'/'consuming' means a
+                // ref was dropped without proper ordering — a refcount/ordering bug.
+                // Previously this spun on std::this_thread::yield(); that masked the bug.
+                // Now we assert (release build: no-op). If this fires, fix the fence/refcount,
+                // never reinstate the spin. (TSan over the race suite is the proof gate.)
+                [[maybe_unused]] auto s = state_.load(std::memory_order_acquire);
+                assert(s != future_state_enum::setting &&
+                       s != future_state_enum::consuming &&
+                       "~future_state during in-flight op — refcount/ordering bug");
             }
         }
 
@@ -349,9 +343,6 @@ namespace actor_zeta { namespace detail {
 
             state_.store(future_state_enum::ready, std::memory_order_release);
 
-#if HAVE_ATOMIC_WAIT
-            state_.notify_one();
-#endif
             try_resume_continuation();
         }
 
@@ -410,9 +401,6 @@ namespace actor_zeta { namespace detail {
             }
             state_.store(future_state_enum::ready, std::memory_order_release);
 
-#if HAVE_ATOMIC_WAIT
-            state_.notify_one();
-#endif
             try_resume_continuation();
         }
 

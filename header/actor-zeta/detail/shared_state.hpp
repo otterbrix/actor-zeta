@@ -126,10 +126,6 @@ namespace actor_zeta::detail {
         [[nodiscard]] bool release_promise() noexcept {
             auto old = flags_.fetch_or(state_flags::promise_released,std::memory_order_acq_rel);
 
-#if HAVE_ATOMIC_WAIT
-            flags_.notify_all();  // Wake up backport wait() if any
-#endif
-
             if (old & state_flags::future_released) {
                 deallocate();  // Last one out
                 return true;   // Cancelled - don't resume continuation
@@ -278,9 +274,6 @@ namespace actor_zeta::detail {
         [[nodiscard]] bool release_promise() noexcept {
             auto old = flags_.fetch_or(state_flags::promise_released,
                                        std::memory_order_acq_rel);
-#if HAVE_ATOMIC_WAIT
-            flags_.notify_all();
-#endif
             if (old & state_flags::future_released) {
                 deallocate();
                 return true;   // Cancelled - don't resume continuation

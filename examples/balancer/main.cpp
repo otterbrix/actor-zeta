@@ -145,9 +145,7 @@ public:
                     &collection_part_t::insert,
                     actor_zeta::detail::get<0, insert_args>(args),
                     actor_zeta::detail::get<1, insert_args>(args));
-                while (!future.available()) {
-                    child->resume(1);
-                }
+                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -155,9 +153,7 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::remove,
                     actor_zeta::detail::get<0, remove_args>(args));
-                while (!future.available()) {
-                    child->resume(1);
-                }
+                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -166,9 +162,7 @@ public:
                     &collection_part_t::update,
                     actor_zeta::detail::get<0, update_args>(args),
                     actor_zeta::detail::get<1, update_args>(args));
-                while (!future.available()) {
-                    child->resume(1);
-                }
+                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -176,10 +170,7 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::find,
                     actor_zeta::detail::get<0, find_args>(args));
-                while (!future.available()) {
-                    child->resume(1);
-                }
-                auto result = std::move(future).get();
+                auto result = actor_zeta::run_until_complete(future, [&] { child->resume(1); });
                 msg->get_result_promise<std::string>().set_value(std::move(result));
                 break;
             }
@@ -210,16 +201,16 @@ int main() {
     collection->create();
 
     std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key1"), std::string("value1")); std::move(f).get(); }
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key2"), std::string("value2")); std::move(f).get(); }
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key3"), std::string("value3")); std::move(f).get(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key1"), std::string("value1")); std::move(f).take_ready(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key2"), std::string("value2")); std::move(f).take_ready(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key3"), std::string("value3")); std::move(f).take_ready(); }
 
     std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key1"), std::string("updated1")); std::move(f).get(); }
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key2"), std::string("updated2")); std::move(f).get(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key1"), std::string("updated1")); std::move(f).take_ready(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key2"), std::string("updated2")); std::move(f).take_ready(); }
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::remove, std::string("key3")); std::move(f).get(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::remove, std::string("key3")); std::move(f).take_ready(); }
 
     scheduler->start();
 

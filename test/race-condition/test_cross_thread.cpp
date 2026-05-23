@@ -80,17 +80,17 @@ TEST_CASE("cross-thread: basic polling pattern") {
         auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                        &cross_thread_worker::compute, i);
 
-        // Producer thread
+        // Producer thread (PR #182 resume-crosses-threads path is preserved)
         std::thread producer([&actor]() {
             actor->resume(1);
         });
 
-        // Consumer polls in main thread
-        while (!future.available()) {
+        // Consumer poll on this thread: the producer thread drives the actor, so
+        // there is nothing to pump locally — just poll readiness and take.
+        while (!future.is_ready()) {
             std::this_thread::yield();
         }
-
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         REQUIRE(result == i * 2);
 
         producer.join();
@@ -123,15 +123,18 @@ TEST_CASE("cross-thread: concurrent start polling") {
             actor->resume(1);
         });
 
-        // Consumer thread
+        // Consumer thread (kept on its own thread to preserve the simultaneous-
+        // start race with the producer). Nothing to pump locally — the producer
+        // thread drives the actor — so the consumer just polls readiness and takes.
         std::thread consumer([&]() {
             while (!start.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }
-            while (!future.available()) {
+            while (!future.is_ready()) {
                 std::this_thread::yield();
             }
-            result.store(std::move(future).get(), std::memory_order_release);
+            int r = std::move(future).take_ready();
+            result.store(r, std::memory_order_release);
         });
 
         // Start both threads simultaneously
@@ -164,12 +167,12 @@ TEST_CASE("cross-thread: polling with scheduler") {
             scheduler->enqueue(actor.get());
         }
 
-        // Consumer polls in main thread
-        while (!future.available()) {
+        // Producer is the scheduler's worker threads; poll readiness on this
+        // thread (nothing to pump locally — the scheduler drives the actor).
+        while (!future.is_ready()) {
             std::this_thread::yield();
         }
-
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         REQUIRE(result == i * 2);
     }
 
@@ -201,10 +204,12 @@ TEST_CASE("cross-thread: slow computation stress") {
         }
 
         consumers.emplace_back([fut = std::move(future), i, &completed, &correct_results]() mutable {
-            while (!fut.available()) {
+            // Consumer kept on its own thread; the scheduler worker threads
+            // produce, so this thread just polls readiness and takes.
+            while (!fut.is_ready()) {
                 std::this_thread::yield();
             }
-            int result = std::move(fut).get();
+            int result = std::move(fut).take_ready();
             // Don't use REQUIRE in threads - Catch2 is not thread-safe
             if (result == i * 2) {
                 correct_results.fetch_add(1, std::memory_order_relaxed);
@@ -255,18 +260,19 @@ TEST_CASE("cross-thread: batch processing") {
             futures.push_back(std::move(future));
         }
 
-        // Wait for all futures in batch
-        int completed = 0;
-        while (completed < BATCH_SIZE) {
-            for (size_t i = 0; i < static_cast<size_t>(BATCH_SIZE); ++i) {
-                if (futures[i].valid() && futures[i].available()) {
-                    int result = std::move(futures[i]).get();
-                    int expected = (batch * BATCH_SIZE + static_cast<int>(i)) * 2;
-                    REQUIRE(result == expected);
-                    ++completed;
-                }
+        // Wait for all futures in batch. The scheduler's worker threads are the
+        // producers; the consumer just polls each future then takes its value.
+        std::vector<int> results;
+        results.reserve(BATCH_SIZE);
+        for (auto& f : futures) {
+            while (!f.is_ready()) {
+                std::this_thread::yield();
             }
-            std::this_thread::yield();
+            results.push_back(std::move(f).take_ready());
+        }
+        for (size_t i = 0; i < static_cast<size_t>(BATCH_SIZE); ++i) {
+            int expected = (batch * BATCH_SIZE + static_cast<int>(i)) * 2;
+            REQUIRE(results[i] == expected);
         }
     }
 
@@ -305,11 +311,12 @@ TEST_CASE("cross-thread: multiple actors") {
                     scheduler->enqueue(actors[a].get());
                 }
 
-                while (!future.available()) {
+                // Consumer kept on its own thread; the scheduler worker threads
+                // produce, so this thread just polls readiness and takes.
+                while (!future.is_ready()) {
                     std::this_thread::yield();
                 }
-
-                int result = std::move(future).get();
+                int result = std::move(future).take_ready();
                 int expected = (static_cast<int>(a) * ITERATIONS_PER_ACTOR + i) * 2;
                 // Don't use REQUIRE in threads - Catch2 is not thread-safe
                 if (result == expected) {
@@ -386,10 +393,10 @@ TEST_CASE("cross-thread: immediate available") {
         // Process immediately in same thread
         actor->resume(1);
 
-        // Should be available immediately
-        REQUIRE(future.available());
+        // Should be ready immediately
+        REQUIRE(future.is_ready());
 
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         REQUIRE(result == i * 2);
     }
 
@@ -426,12 +433,12 @@ TEST_CASE("cross-thread: high contention") {
                     scheduler->enqueue(actor.get());
                 }
 
-                // Wait for result with yield instead of pure spin
-                while (!future.available()) {
+                // Consumer kept on its own thread (high-contention path); the
+                // scheduler worker threads produce, so just poll then take.
+                while (!future.is_ready()) {
                     std::this_thread::yield();
                 }
-
-                int result = std::move(future).get();
+                int result = std::move(future).take_ready();
                 int expected = (t * ITERATIONS_PER_THREAD + i) * 2;
                 // Don't use REQUIRE in threads - Catch2 is not thread-safe
                 if (result == expected) {
@@ -475,12 +482,14 @@ TEST_CASE("cross-thread: memory ordering") {
         });
 
         std::thread consumer([&]() {
-            while (!future.available()) {
+            // Consumer kept on its own thread (producer resumes the actor on a
+            // separate thread - PR #182 path). Poll readiness then take; the
+            // memory ordering guarantee is exercised on take_ready of the future.
+            while (!future.is_ready()) {
                 std::this_thread::yield();
             }
-            // Memory ordering guarantee: when available() returns true,
-            // the value should be visible
-            read_value.store(std::move(future).get(), std::memory_order_relaxed);
+            int v = std::move(future).take_ready();
+            read_value.store(v, std::memory_order_relaxed);
         });
 
         producer.join();

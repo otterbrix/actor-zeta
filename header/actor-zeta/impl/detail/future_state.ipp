@@ -70,9 +70,6 @@ namespace actor_zeta { namespace detail {
                                            std::memory_order_acq_rel,
                                            std::memory_order_acquire)) {
             error_code_ = ec;
-#if HAVE_ATOMIC_WAIT
-            state_.notify_one();
-#endif
             return true;
         }
         return false;
@@ -80,29 +77,6 @@ namespace actor_zeta { namespace detail {
 
     std::error_code future_state_base::error() const noexcept {
         return error_code_;
-    }
-
-    void future_state_base::wait_until_ready() const noexcept {
-#if HAVE_ATOMIC_WAIT
-        while (!is_available()) {
-            auto current = state_.load(std::memory_order_acquire);
-            if (current == future_state_enum::pending ||
-                current == future_state_enum::setting) {
-                state_.wait(current, std::memory_order_acquire);
-            }
-        }
-#else
-        int spin_count = 0;
-        constexpr int yield_limit = 100;
-        while (!is_available()) {
-            if (spin_count < yield_limit) {
-                std::this_thread::yield();
-                ++spin_count;
-            } else {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            }
-        }
-#endif
     }
 
     bool future_state_base::is_cancelled() const noexcept {
@@ -115,9 +89,6 @@ namespace actor_zeta { namespace detail {
                                            std::memory_order_acq_rel,
                                            std::memory_order_acquire)) {
             error_code_ = std::make_error_code(std::errc::operation_canceled);
-#if HAVE_ATOMIC_WAIT
-            state_.notify_one();
-#endif
             return true;
         }
         return false;
@@ -199,9 +170,6 @@ namespace actor_zeta { namespace detail {
 
     void future_state_base::store_state_raw(uint8_t s) noexcept {
         state_.store(static_cast<future_state_enum>(s), std::memory_order_release);
-#if HAVE_ATOMIC_WAIT
-        state_.notify_one();
-#endif
     }
 
     bool future_state_base::cas_state_raw(uint8_t& expected, uint8_t desired) noexcept {

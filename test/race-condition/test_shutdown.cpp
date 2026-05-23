@@ -8,19 +8,6 @@
 #include <thread>
 #include <vector>
 
-// Helper: Poll-wait for future to become available (non-blocking get() requires this)
-template<typename T>
-void wait_for_ready(actor_zeta::unique_future<T>& future, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
-    auto start = std::chrono::steady_clock::now();
-    while (!future.available()) {
-        auto elapsed = std::chrono::steady_clock::now() - start;
-        if (elapsed > timeout) {
-            FAIL("Timeout waiting for future to become ready");
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-    }
-}
-
 // Simple test actor for shutdown testing
 class shutdown_test_actor final : public actor_zeta::basic_actor<shutdown_test_actor> {
 public:
@@ -111,11 +98,11 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures (safe pattern
     // Now safe to check futures (actor still alive, scheduler stopped)
     int successful = 0;
     for (auto& future : futures) {
-        if (future.available()) {
+        if (future.is_ready()) {
             // Some messages may have been processed before scheduler stop
-            // Check for error state before calling get()
+            // Check for error state before taking the value
             if (!future.failed()) {
-                auto result = std::move(future).get();
+                auto result = std::move(future).take_ready();
                 actor_zeta::detail::ignore_unused(result);
                 ++successful;
             }
@@ -173,12 +160,20 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
             futures.push_back(std::move(future));
         }
 
-        // GRACEFUL SHUTDOWN: Wait for all futures before destroying actor
+        // GRACEFUL SHUTDOWN: Wait for all futures before destroying actor.
+        // The scheduler's worker threads are the producers; the consumer just
+        // polls each future then takes its value.
+        std::vector<int> results;
+        results.reserve(futures.size());
+        for (auto& f : futures) {
+            while (!f.is_ready()) {
+                std::this_thread::yield();
+            }
+            results.push_back(std::move(f).take_ready());
+        }
         int completed = 0;
-        for (size_t i = 0; i < futures.size(); ++i) {
-            wait_for_ready(futures[i]);  // Poll until ready (non-blocking get() requires this)
-            auto result = std::move(futures[i]).get();
-            REQUIRE(result == static_cast<int>(i) * 2);  // Verify correct result
+        for (size_t i = 0; i < results.size(); ++i) {
+            REQUIRE(results[i] == static_cast<int>(i) * 2);  // Verify correct result
             ++completed;
         }
 
@@ -314,9 +309,12 @@ TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
                 break;
         }
 
-        // Always wait for result before destroying actor
-        wait_for_ready(future);  // Poll until ready (non-blocking get() requires this)
-        int result = std::move(future).get();
+        // Always wait for result before destroying actor: the scheduler worker
+        // threads produce, so poll readiness on this thread then take.
+        while (!future.is_ready()) {
+            std::this_thread::yield();
+        }
+        int result = std::move(future).take_ready();
         REQUIRE(result == i * 2);
 
         // Actor destroyed here - safe because message was processed

@@ -194,7 +194,7 @@ TEST_CASE("available race: basic destroy on available") {
         std::thread destroyer([fut = std::move(future), &races_triggered]() mutable {
             // Tight loop polling - no yield to maximize race window hit
             int spins = 0;
-            while (!fut.available() && spins < 100000) {
+            while (!fut.is_ready() && spins < 100000) {
                 ++spins;
             }
 
@@ -257,8 +257,8 @@ TEST_CASE("available race: complex coroutine with multiple locals") {
             scheduler->enqueue(actor.get());
         }
 
-        // Wait for available then immediately destroy
-        while (!future.available()) {
+        // Wait for ready then immediately destroy
+        while (!future.is_ready()) {
             // Tight spin
         }
         // Destroy happens when future goes out of scope
@@ -309,7 +309,7 @@ TEST_CASE("available race: high concurrency stress") {
 
                 // Aggressive polling
                 int spins = 0;
-                while (!future.available() && spins < 50000) {
+                while (!future.is_ready() && spins < 50000) {
                     ++spins;
                 }
                 // Future destroyed here
@@ -372,8 +372,8 @@ TEST_CASE("available race: poll_pending pattern simulation") {
         // This is the EXACT problematic pattern!
         while (!pending.empty()) {
             for (auto it = pending.begin(); it != pending.end();) {
-                if (it->available()) {
-                    // BUG: available() is true but coroutine may not have
+                if (it->is_ready()) {
+                    // BUG: is_ready() is true but coroutine may not have
                     // reached final_suspend() yet!
                     // Erasing calls ~unique_future -> handle.destroy()
                     it = pending.erase(it);
@@ -426,7 +426,7 @@ TEST_CASE("available race: safe destroy with delay (workaround demo)") {
             scheduler->enqueue(actor.get());
         }
 
-        while (!future.available()) {
+        while (!future.is_ready()) {
             std::this_thread::yield();
         }
 

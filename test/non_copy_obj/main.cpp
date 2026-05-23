@@ -81,7 +81,8 @@ TEST_CASE("base move test") {
 
     auto [needs_sched, fut] = actor_zeta::send(supervisor.get(), &dummy_supervisor::check, std::move(ptr_data), data);
     REQUIRE(ptr_data == nullptr);
-    std::move(fut).get();
+    supervisor->scheduler_test()->run_once();
+    std::move(fut).take_ready();
 }
 
 TEST_CASE("construct in place") {
@@ -91,5 +92,6 @@ TEST_CASE("construct in place") {
     auto data = dummy_data();
 
     auto [needs_sched, fut] = actor_zeta::send(supervisor.get(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
-    std::move(fut).get();
+    supervisor->scheduler_test()->run_once();
+    std::move(fut).take_ready();
 }
