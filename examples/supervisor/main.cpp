@@ -160,8 +160,7 @@ int main() {
     // while we drive, and is stopped before the actor is destroyed.
     auto await_request = [](auto future_pair) {
         auto& future = future_pair.second;
-        // Drive via run_until_complete with a yield pump (the real scheduler produces
-        // cross-thread; nothing to pump locally). Result intentionally discarded here.
+        // Real scheduler produces cross-thread; drive with a yield pump and discard.
         (void) actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
     };
 

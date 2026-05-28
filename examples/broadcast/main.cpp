@@ -131,7 +131,6 @@ int main() {
     for (auto i = actors; i > 0; --i) {
         auto [needs_sched, future] = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
         (void) needs_sched; // synchronous actor_mixin: future is ready immediately
-        // Drive via run_until_complete (yield pump); loop body never runs when already ready.
         actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
     }
 
@@ -150,8 +149,7 @@ int main() {
             if (needs_sched) {
                 supervisor->schedule_worker(i);
             }
-            // Worker runs on the supervisor's internal scheduler (cross-thread): drive
-            // via run_until_complete with a yield pump (nothing to pump locally).
+            // Worker runs on the supervisor's internal scheduler (cross-thread).
             total_size += actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
         }
     }

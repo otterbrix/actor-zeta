@@ -50,10 +50,8 @@ struct final_awaiter;
 template<typename T>
 struct generator_promise_type;
 
-// Standalone state for generator coroutines. Manages its own refcount,
-// state byte, and coroutine handles — no inheritance. Held everywhere via
-// raw generator_state<T>* (see message.hpp result_slot, linked_state_, awaiter
-// state_); refcount is bumped/dropped manually via add_ref()/release().
+// State for generator coroutines. Held via raw generator_state<T>* throughout
+// (message result_slot, linked_state_, awaiter state_); refcount is manual.
 template<typename T>
 class generator_state final {
 public:
@@ -76,7 +74,6 @@ public:
     generator_state(const generator_state&) = delete;
     generator_state& operator=(const generator_state&) = delete;
 
-    // === refcount (intrusive, manual) ===
     void add_ref() noexcept {
         refcount_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -91,7 +88,6 @@ public:
         return resource_;
     }
 
-    // === raw state byte ops (used by predicate methods below) ===
     void store_state_raw(uint8_t s) noexcept {
         state_.store(s, std::memory_order_release);
     }
@@ -99,7 +95,6 @@ public:
         return state_.load(std::memory_order_acquire);
     }
 
-    // === coroutine-handle ops (producer = owning, consumer = continuation) ===
     void set_coroutine(std::coroutine_handle<> h) noexcept {
         resume_coro_handle_ = h;
     }
@@ -269,7 +264,6 @@ private:
         consumer_waiting = 2,
     };
 
-    // Inlined from former future_state_base (generator owns these directly now).
     std::pmr::memory_resource* resource_;
     std::atomic<uint8_t> state_;
     std::atomic<int> refcount_;
@@ -277,7 +271,6 @@ private:
     std::coroutine_handle<> resume_coro_handle_{};
     bool owns_coroutine_ = false;
 
-    // Generator-specific.
     std::atomic<void*> value_ptr_;
     generator_state<T>* linked_state_;
     std::atomic<uint8_t> sync_;

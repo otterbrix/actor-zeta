@@ -22,11 +22,8 @@
 // =============================================================================
 
 namespace {
-// File-local driver: pump scheduler-driven cross-thread future to ready by
-// re-enqueuing both actors each iteration (cross-actor messaging needs both
-// scheduled). Does NOT take_ready() — these tests destroy the future untaken
-// to exercise destroy-on-ready safety, so run_until_complete (which take_ready's)
-// would change the test semantics.
+// Drive a cross-actor future to ready without taking — these tests destroy the
+// future untaken to exercise destroy-on-ready safety.
 template<typename Fut, typename Sched, typename A1, typename A2>
 inline void drive_until_ready(Fut& fut, Sched& sched, A1* a1, A2* a2) {
     while (!fut.is_ready()) {

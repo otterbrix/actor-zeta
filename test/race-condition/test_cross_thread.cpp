@@ -10,19 +10,9 @@
 #include <vector>
 #include <memory>
 
-// =============================================================================
-// Cross-Thread Stress Tests for unique_future
-//
-// These tests verify that unique_future works correctly when:
-// - Future lives in Thread 1 (consumer)
-// - Actor (producer) runs in Thread 2
-// - Synchronization is done via atomic flags
-//
-// Three patterns tested:
-// 1. Polling pattern: consumer polls available() then calls get()
-// 2. co_await pattern: consumer coroutine awaits the future
-// 3. Mix pattern: check available() then decide whether to await
-// =============================================================================
+// Cross-thread stress tests: future lives on the consumer (main/test) thread;
+// the actor (producer) runs on another thread (a sharing_scheduler worker or
+// a manually-spawned std::thread).
 
 // Simple worker actor for testing
 class cross_thread_worker final : public actor_zeta::basic_actor<cross_thread_worker> {
