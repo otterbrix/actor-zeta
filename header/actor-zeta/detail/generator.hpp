@@ -14,7 +14,6 @@
 
 namespace actor_zeta {
 
-/// Error marker for generator streaming
 struct stream_error {
     std::error_code ec;
 
@@ -322,20 +321,18 @@ struct next_awaiter {
     generator_state<T>* state_;
 
     bool await_ready() noexcept {
-        // Only skip await_suspend for terminal states (exhausted/cancelled)
-        // For suspended state (has value), we still need to go through await_suspend
-        // to properly handle advancing to the next value
+        // Skip await_suspend only on terminal states; for suspended, await_suspend
+        // is what advances to the next value.
         return state_->is_terminal();
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> consumer) noexcept {
         state_->set_consumer_handle(consumer);
 
-        // If we have a value from previous yield (state is suspended),
-        // mark it as consumed and advance to next value
+        // If a value from the previous yield is still here, mark it consumed
+        // and fall through to resume the producer for the next one.
         if (state_->is_ready()) {
             state_->reset_to_created();
-            // Fall through to resume producer for next value
         }
 
         if (state_->is_created()) {
@@ -507,7 +504,6 @@ struct generator_promise_type {
         return yield_awaiter<T>{state_, nullptr};
     }
 
-    // Support co_await unique_future<U> inside generator
     template<typename U>
     auto await_transform(unique_future<U>&& future) noexcept {
         return generator_future_awaiter<T, U>{future, state_};
@@ -518,7 +514,6 @@ struct generator_promise_type {
         return generator_future_awaiter<T, U>{future, state_};
     }
 
-    // Support co_await generator<U> inside generator (for forwarding)
     template<typename U>
     auto await_transform(generator<U>& gen) noexcept {
         return next_awaiter<U>{gen.internal_state()};
