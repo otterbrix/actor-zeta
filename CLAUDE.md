@@ -109,10 +109,9 @@ void wait_for_work() {
             futures.push_back(std::move(future));  // Keep ALL futures
         }
 
-        // Wait for ALL futures
+        // Wait for ALL futures (scheduler workers produce; drive via run_until_complete).
         for (auto& f : futures) {
-            while (!f.available()) std::this_thread::yield();
-            auto result = std::move(f).get();
+            auto result = actor_zeta::run_until_complete(f, []{ std::this_thread::yield(); });
         }
     }  // Actor destroyed - SAFE (all work complete)
 
@@ -160,7 +159,7 @@ unique_future<int> future;
     auto [_, f] = send(actor.get(), &MyActor::slow_compute, 42);
     future = std::move(f);
 }  // CRASH: Actor freed while slow_compute running
-auto result = std::move(future).get();  // Use-after-free
+auto result = std::move(future).take_ready();  // Use-after-free
 ```
 
 | Scenario | Safe? |
@@ -226,16 +225,25 @@ public:
 // - first (needs_sched): true if actor needs to be scheduled
 // - second: the future to get the result
 
-// Request-response
+// Request-response (scheduler-driven cross-thread: drive with run_until_complete)
 auto [needs_sched, future] = send(target.get(), &Target::compute, arg);
 if (needs_sched) scheduler->enqueue(target.get());
-while (!future.available()) std::this_thread::yield();
-int result = std::move(future).get();
+int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
+
+// Same-thread (no scheduler): pump the actor manually
+auto [_, f] = send(actor.get(), &Actor::compute, 42);
+int result = actor_zeta::run_until_complete(f, [&]{ actor->resume(1); });
 
 // Fire-and-forget
 auto [_, fut] = send(target.get(), &Target::method, arg1, arg2);
 fut.detach();
 ```
+
+**Never call** `.get()` or `.available()` — they were removed. `unique_future<T>` has
+only `take_ready()` (non-blocking, asserts the future is ready) and `is_ready()` (poll).
+Bring the future to ready via `co_await` (inside a coroutine), `run_until_complete(f, pump)`,
+or — for cross-thread tests where the producer is test-controlled — a tiny
+`std::atomic<bool> done` + `notify_all`/`wait(false)` pair.
 
 ### Coroutine Parameters
 ```cpp
@@ -276,8 +284,7 @@ unique_future<int> compute(int x) { co_return x * x; }
 // Caller - send() returns pair<bool, future>
 auto [needs_sched, future] = send(actor.get(), &Actor::compute, 42);
 if (needs_sched) scheduler->enqueue(actor.get());
-while (!future.available()) std::this_thread::yield();
-int result = std::move(future).get();
+int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
 
 // Coroutine chaining
 unique_future<int> chain(int x) {
@@ -310,7 +317,36 @@ while (co_await gen) {
 
 **See [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md) for detailed patterns.**
 
-## Recent Changes (2025-01)
+## Recent Changes (2026)
+
+- **Blocking future API removed**: no more `.get()`/`.wait()`/`.available()`. Use
+  `co_await` (in coroutines), `run_until_complete(f, pump)` (top-level driver), or
+  poll `is_ready()` + `take_ready()` (cross-thread tests). Removed exponential-backoff
+  spinning that lived inside the old `get()`.
+- **Legacy `future_state<T>` family removed**: deleted `detail/future_state.hpp`,
+  `impl/detail/future_state.ipp`, `future_state_base`, `future_state_enum`,
+  `future_states::`, and the intrusive_ptr overloads for the base. `generator_state`
+  no longer inherits from `future_state_base` — it owns its own refcount/state-byte/
+  coroutine-handle fields directly. `result_storage<T>` moved to its own
+  `detail/result_storage.hpp` (used by `shared_state`).
+- **`actor_mixin` has no default `enqueue_impl`**: each Derived must define its own
+  (enforced by the `has_enqueue_impl` concept). `cooperative_actor` (and thus
+  `basic_actor`) is unaffected — it always provided its own. Sync actors on
+  `actor_mixin` must add:
+  ```cpp
+  [[nodiscard]] std::pair<bool, detail::enqueue_result>
+  enqueue_impl(mailbox::message_ptr msg) {
+      behavior(msg.get());
+      return {false, detail::enqueue_result::success};
+  }
+  ```
+- **`message::set_command(message_id)`** added: enables non-blocking
+  router/delegation patterns. See `examples/delegation/main.cpp`. The router restamps
+  the command on the same message and forwards it to the worker's `enqueue_impl`;
+  the caller's future is filled by the worker through the message's type-erased
+  `result_slot_` (so the router never co_awaits / never blocks).
+
+## Earlier Changes (2025-01)
 
 - **`send()` API simplified**: No sender address, returns `std::pair<bool, future>`
 - **`make_message()` simplified**: No sender address parameter
@@ -318,7 +354,6 @@ while (co_await gen) {
 - **`enqueue_impl()` return type**: Now `std::pair<bool, enqueue_result>`
 - Messages created in receiver's memory resource
 - Unified actor state management (single atomic)
-- Exponential backoff in `future.get()` (99% CPU reduction)
 - Compile-time check for `T&&` to move-only types in coroutines
 
 **See [`CHANGELOG.md`](CHANGELOG.md) for full history.**
