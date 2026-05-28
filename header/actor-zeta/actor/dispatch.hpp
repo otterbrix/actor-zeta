@@ -9,15 +9,12 @@ namespace actor_zeta {
 
     namespace dispatch_validation {
 
-        // T is non-const lvalue reference (T& but not const T&)
         template<typename T>
         concept non_const_lvalue_ref = std::is_lvalue_reference_v<T> && !std::is_const_v<std::remove_reference_t<T>>;
 
-        // Any type in parameter pack is non-const lvalue ref
         template<typename... Args>
         concept has_any_non_const_lvalue_ref = (non_const_lvalue_ref<Args> || ...);
 
-        // All types in parameter pack are valid for RTT storage
         template<typename... Args>
         concept all_valid_rtt_types = (detail::is_valid_rtt_type_v<type_traits::decay_t<Args>> && ...);
 
@@ -38,11 +35,9 @@ namespace actor_zeta {
             };
         }
 
-        // All argument types in type_list are valid for RTT storage
         template<typename ArgsList>
         concept valid_args_list = detail::args_list_traits<ArgsList>::all_valid;
 
-        // No non-const lvalue refs in type_list
         template<typename ArgsList>
         concept no_non_const_refs_in_list = detail::args_list_traits<ArgsList>::no_non_const_refs;
 
@@ -65,7 +60,6 @@ namespace actor_zeta {
             if (external_state && method_generator.internal_state()) {
                 method_generator.link_to(external_state);
 
-                // Start the coroutine
                 auto* internal_state = method_generator.internal_state();
                 auto producer = internal_state->take_producer_handle();
                 if (producer && !producer.done()) {
@@ -76,8 +70,7 @@ namespace actor_zeta {
 
     } // namespace detail
 
-    // Helper: Invoke method with arguments from message
-    // Note: This is NOT a coroutine, just extracts args and calls method
+    // Extract args from the message body and call the method (NOT a coroutine).
     template<class Actor, typename Method, typename ArgsTypeList, std::size_t ArgsSize>
     auto invoke_actor_method(Actor* self, Method method, mailbox::message* msg) {
         if constexpr (ArgsSize == 0) {
@@ -90,9 +83,8 @@ namespace actor_zeta {
         }
     }
 
-    // Dispatch message to actor method (Seastar-style coroutine)
-    // Returns unique_future<void> - caller can co_await, detach, or store
-    // Method result is forwarded via message's promise
+    // Dispatch a message to an actor method; method's result is forwarded to the
+    // caller's promise via the message's result_slot.
     template<class Actor, typename Method>
     unique_future<void> dispatch(Actor* self, Method method, mailbox::message* msg) {
         using call_trait = type_traits::get_callable_trait_t<Method>;
@@ -128,19 +120,13 @@ namespace actor_zeta {
             co_return;
 
         } else {
-            // unique_future path - co_await method and set_value on caller's promise
+            // unique_future path: co_await the method, set_value on the caller's promise.
             using value_type = typename type_traits::is_unique_future<result_type>::value_type;
 
-            // Get promise view of caller's shared_state
             auto result_promise = msg->template get_result_promise<value_type>();
-
-            // Transfer ownership - message won't call cleanup anymore
-            msg->transfer_ownership();
-
-            // Invoke the method - this creates method's own shared_state
+            msg->transfer_ownership();   // ~message won't run cleanup anymore
             auto method_future = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
 
-            // co_await method and forward result (non-blocking!)
             if constexpr (std::is_void_v<value_type>) {
                 co_await std::move(method_future);
                 result_promise.set_value();
