@@ -26,15 +26,9 @@ namespace actor_zeta {
         // Runtime type tuple
         class rtt;
 
-        // New shared_state (for unique_future)
+        // shared_state (for unique_future)
         template<typename T>
         struct shared_state;
-
-        // Legacy future_state_base (for generator)
-        class future_state_base;
-
-        template<typename T>
-        class future_state;
 
         // Generator state
         template<typename T>

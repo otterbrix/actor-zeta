@@ -342,6 +342,48 @@ TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
     }
 }
 
+// Ported from the (deleted) test/slot-refcount release-acquire test against the
+// legacy future_state<T>: verify that once is_ready() returns true on shared_state,
+// a relaxed-stored side effect from the producer is visible on the reader. This
+// exercises the acquire of is_ready() against the release of set_value/release_promise
+// (shared_state.hpp:64-67 release; :126 fetch_or acq_rel; :83 acquire load).
+TEST_CASE("Concurrent: is_ready acquire synchronizes side effect on shared_state",
+          "[concurrent][polling][memory-ordering]") {
+    constexpr int NUM_ITERATIONS = 1000;
+
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+        auto* resource = std::pmr::get_default_resource();
+        auto* state = allocate_shared_state<int>(resource);
+
+        std::atomic<int> side_effect{0};
+        std::atomic<int> read_side_effect{-1};
+
+        std::thread writer([state, &side_effect]() {
+            // Relaxed store BEFORE the releasing operations on the state.
+            side_effect.store(42, std::memory_order_relaxed);
+            state->set_value(100);              // release on flags_
+            (void) state->release_promise();    // acq_rel on flags_
+        });
+
+        std::thread reader([state, &side_effect, &read_side_effect]() {
+            // Acquire is exercised by is_ready() (loads flags_ acquire).
+            while (!state->is_ready()) {
+                std::this_thread::yield();
+            }
+            // If is_ready() returned true, the producer's relaxed store must be
+            // visible — that is the release/acquire chain under test.
+            read_side_effect.store(side_effect.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+        });
+
+        writer.join();
+        reader.join();
+
+        REQUIRE(read_side_effect.load(std::memory_order_relaxed) == 42);
+        state->release_future();
+    }
+}
+
 // =============================================================================
 // Promise/Future integration tests
 // =============================================================================

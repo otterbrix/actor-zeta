@@ -9,7 +9,6 @@
 
 #include <system_error>
 
-#include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
@@ -51,18 +50,68 @@ struct final_awaiter;
 template<typename T>
 struct generator_promise_type;
 
+// Standalone state for generator coroutines. Manages its own refcount,
+// state byte, and coroutine handles — no inheritance. Held everywhere via
+// raw generator_state<T>* (see message.hpp result_slot, linked_state_, awaiter
+// state_); refcount is bumped/dropped manually via add_ref()/release().
 template<typename T>
-class generator_state final : public future_state_base {
+class generator_state final {
 public:
     explicit generator_state(std::pmr::memory_resource* res) noexcept
-        : future_state_base(res)
+        : resource_(res)
+        , state_(generator_states::created)
+        , refcount_(1)
         , value_ptr_(nullptr)
         , linked_state_(nullptr)
         , sync_(static_cast<uint8_t>(sync_state::idle)) {
-        store_state_raw(generator_states::created);
+        assert(res != nullptr && "generator_state: resource must not be null");
     }
 
-    ~generator_state() noexcept override = default;
+    ~generator_state() noexcept {
+        if (owns_coroutine_ && owning_coro_handle_) {
+            owning_coro_handle_.destroy();
+        }
+    }
+
+    generator_state(const generator_state&) = delete;
+    generator_state& operator=(const generator_state&) = delete;
+
+    // === refcount (intrusive, manual) ===
+    void add_ref() noexcept {
+        refcount_.fetch_add(1, std::memory_order_relaxed);
+    }
+    void release() noexcept {
+        if (refcount_.fetch_sub(1, std::memory_order_release) == 1) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            destroy();
+        }
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept {
+        return resource_;
+    }
+
+    // === raw state byte ops (used by predicate methods below) ===
+    void store_state_raw(uint8_t s) noexcept {
+        state_.store(s, std::memory_order_release);
+    }
+    [[nodiscard]] uint8_t load_state_raw() const noexcept {
+        return state_.load(std::memory_order_acquire);
+    }
+
+    // === coroutine-handle ops (producer = owning, consumer = continuation) ===
+    void set_coroutine(std::coroutine_handle<> h) noexcept {
+        resume_coro_handle_ = h;
+    }
+    void set_coroutine_owning(std::coroutine_handle<> h) noexcept {
+        owning_coro_handle_ = h;
+        owns_coroutine_ = true;
+    }
+    [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
+        auto h = resume_coro_handle_;
+        resume_coro_handle_ = {};
+        return h;
+    }
 
     [[nodiscard]] bool is_ready() const noexcept {
         return load_state_raw() == generator_states::suspended;
@@ -206,24 +255,29 @@ public:
         return sync_.load(std::memory_order_acquire) == static_cast<uint8_t>(sync_state::consumer_waiting);
     }
 
-    bool set_forward_target_void(future_state_base*) noexcept override {
-        return false;
-    }
-
-protected:
-    void destroy() noexcept override {
-        unlink();
-        this->~generator_state();
-        resource_->deallocate(this, sizeof(generator_state<T>), alignof(generator_state<T>));
-    }
-
 private:
+    void destroy() noexcept {
+        unlink();
+        auto* res = resource_;
+        this->~generator_state();
+        res->deallocate(this, sizeof(generator_state<T>), alignof(generator_state<T>));
+    }
+
     enum class sync_state : uint8_t {
         idle = 0,
         producer_waiting = 1,
         consumer_waiting = 2,
     };
 
+    // Inlined from former future_state_base (generator owns these directly now).
+    std::pmr::memory_resource* resource_;
+    std::atomic<uint8_t> state_;
+    std::atomic<int> refcount_;
+    std::coroutine_handle<> owning_coro_handle_{};
+    std::coroutine_handle<> resume_coro_handle_{};
+    bool owns_coroutine_ = false;
+
+    // Generator-specific.
     std::atomic<void*> value_ptr_;
     generator_state<T>* linked_state_;
     std::atomic<uint8_t> sync_;

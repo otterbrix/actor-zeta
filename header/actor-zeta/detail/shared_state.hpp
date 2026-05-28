@@ -7,7 +7,7 @@
 #include <system_error>
 
 #include <actor-zeta/detail/coroutine.hpp>
-#include <actor-zeta/detail/future_state.hpp>  // for result_storage<T>
+#include <actor-zeta/detail/result_storage.hpp>
 #include <actor-zeta/detail/state_flags.hpp>
 
 namespace actor_zeta::detail {
@@ -148,16 +148,6 @@ namespace actor_zeta::detail {
             // in its double-check and handle deallocation.
         }
 
-        /// @brief Check if future was released (for cancellation detection)
-        [[nodiscard]] bool is_future_released() const noexcept {
-            return flags_.load(std::memory_order_acquire) & state_flags::future_released;
-        }
-
-        /// @brief Deallocate from finalizer (called after double-check in final_suspend)
-        void deallocate_from_finalizer() noexcept {
-            deallocate();
-        }
-
         /// @brief Try to complete the finalize phase by clearing the finalizing flag.
         /// Uses CAS to atomically check if future was released concurrently.
         /// @return true if finalizing was cleared (consumer will deallocate later)
@@ -294,16 +284,6 @@ namespace actor_zeta::detail {
             }
             // If producer is finalizing, it will see our future_released flag
             // in its double-check and handle deallocation.
-        }
-
-        /// @brief Check if future was released (for cancellation detection)
-        [[nodiscard]] bool is_future_released() const noexcept {
-            return flags_.load(std::memory_order_acquire) & state_flags::future_released;
-        }
-
-        /// @brief Deallocate from finalizer (called after double-check in final_suspend)
-        void deallocate_from_finalizer() noexcept {
-            deallocate();
         }
 
         /// @brief Try to complete the finalize phase by clearing the finalizing flag.
