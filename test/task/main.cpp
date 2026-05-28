@@ -53,11 +53,9 @@ TEST_CASE("cross-thread: scheduler worker produces, main thread polls take_ready
         sched->enqueue(actor.get());
     }
 
-    // Consumer poll on the main thread: the worker thread resolves the future.
-    while (!future.is_ready()) {
-        std::this_thread::yield();
-    }
-    int result = std::move(future).take_ready();
+    // Consumer drive on the main thread: the worker thread resolves the future cross-thread;
+    // run_until_complete pumps a plain yield until ready, then takes the value (no manual loop).
+    int result = run_until_complete(future, [] { std::this_thread::yield(); });
     REQUIRE(result == 42);
 
     // Respect shutdown order: stop the scheduler BEFORE the actor is destroyed.
