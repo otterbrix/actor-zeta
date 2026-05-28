@@ -44,7 +44,6 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
-        // Constructor - creates new shared_state (owning)
         explicit promise(std::pmr::memory_resource* res)
             : state_(detail::allocate_shared_state<T>(res)) {
             assert(res && "promise constructed with null resource");
@@ -54,11 +53,9 @@ namespace actor_zeta {
         explicit promise(state_type* state) noexcept
             : state_(state) {}
 
-        // Move constructor
         promise(promise&& other) noexcept
             : state_(std::exchange(other.state_, nullptr)) {}
 
-        // Move assignment
         promise& operator=(promise&& other) noexcept {
             if (this != &other) {
                 release_if_needed();
@@ -72,7 +69,6 @@ namespace actor_zeta {
             release_if_needed();
         }
 
-        // Get future for this promise
         [[nodiscard]] unique_future<T> get_future() noexcept;
 
         // Set value (non-void)
@@ -101,38 +97,30 @@ namespace actor_zeta {
             // NO cont.resume() - consumer resumes in its own thread
         }
 
-        // Set value (void)
+        // Set value (void) — same protocol as the non-void overload above.
         void set_value() noexcept
             requires(std::is_void_v<T>)
         {
             assert(state_ && "set_value() on moved-from promise");
             state_->set_value();
-            // Thread safety (Q6): Do NOT take/resume continuation here.
-            // Consumer will resume in its own actor's resume_impl().
-            // Set finalizing flag before release to prevent race with release_future
             state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
             bool cancelled = state_->release_promise();
             if (cancelled) {
                 state_ = nullptr;
                 return;
             }
-            // Try to complete finalize phase
             if (!state_->try_complete_finalize()) {
                 state_ = nullptr;
                 return;
             }
             state_ = nullptr;
-            // NO cont.resume() - consumer resumes in its own thread
         }
 
-        // Set error (also the cancellation channel:
-        // p.error(std::make_error_code(std::errc::operation_canceled)))
+        // Also the cancellation channel:
+        // p.error(std::make_error_code(std::errc::operation_canceled))
         void error(std::error_code ec) noexcept {
             assert(state_ && "error() on moved-from promise");
             state_->set_error(ec);
-            // Thread safety (Q6): Do NOT take/resume continuation here.
-            // Consumer will resume in its own actor's resume_impl().
-            // Set finalizing flag before release to prevent race with release_future
             state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
                                     std::memory_order_release);
             bool cancelled = state_->release_promise();
@@ -140,13 +128,11 @@ namespace actor_zeta {
                 state_ = nullptr;
                 return;
             }
-            // Try to complete finalize phase
             if (!state_->try_complete_finalize()) {
                 state_ = nullptr;
                 return;
             }
             state_ = nullptr;
-            // NO cont.resume() - consumer resumes in its own thread
         }
 
         [[nodiscard]] bool valid() const noexcept {
@@ -161,22 +147,17 @@ namespace actor_zeta {
         void release_if_needed() noexcept {
             if (state_) {
                 state_->set_error(std::make_error_code(std::errc::broken_pipe));
-                // Thread safety (Q6): Do NOT take/resume continuation here.
-                // Consumer will resume in its own actor's resume_impl().
-                // Set finalizing flag before release to prevent race with release_future
                 state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
                 bool cancelled = state_->release_promise();
                 if (cancelled) {
                     state_ = nullptr;
                     return;
                 }
-                // Try to complete finalize phase
                 if (!state_->try_complete_finalize()) {
                     state_ = nullptr;
                     return;
                 }
                 state_ = nullptr;
-                // NO cont.resume() - consumer resumes in its own thread
             }
         }
 
@@ -197,7 +178,6 @@ namespace actor_zeta {
         unique_future(const unique_future&) = delete;
         unique_future& operator=(const unique_future&) = delete;
 
-        // Default constructor
         unique_future() noexcept
             : state_(nullptr)
             , handle_{} {}
@@ -212,12 +192,10 @@ namespace actor_zeta {
             : state_(s)
             , handle_(h) {}
 
-        // Move constructor
         unique_future(unique_future&& other) noexcept
             : state_(std::exchange(other.state_, nullptr))
             , handle_(std::exchange(other.handle_, {})) {}
 
-        // Move assignment
         unique_future& operator=(unique_future&& other) noexcept {
             if (this != &other) {
                 release();
@@ -448,7 +426,6 @@ namespace actor_zeta {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
             }
 
-            // Default constructor
             promise_type_base() noexcept
                 : resource_(nullptr)
                 , state_(nullptr) {}
