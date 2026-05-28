@@ -65,7 +65,7 @@ static void BM_CoroCreation_Int(benchmark::State& state) {
     for (auto _ : state) {
         auto future = actor->compute(42);
         benchmark::DoNotOptimize(future);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -80,7 +80,7 @@ static void BM_CoroCreation_String(benchmark::State& state) {
     for (auto _ : state) {
         auto future = actor->format(42);
         benchmark::DoNotOptimize(future);
-        std::string result = std::move(future).get();
+        std::string result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -96,7 +96,7 @@ static void BM_CoroSequence(benchmark::State& state) {
     for (auto _ : state) {
         for (int i = 0; i < count; ++i) {
             auto future = actor->compute(i);
-            int result = std::move(future).get();
+            int result = std::move(future).take_ready();
             benchmark::DoNotOptimize(result);
         }
     }
@@ -142,7 +142,7 @@ static void BM_FutureState_Int(benchmark::State& state) {
         p.set_value(42);
         auto future = p.get_future();
         benchmark::DoNotOptimize(future);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -158,7 +158,7 @@ static void BM_FutureState_Void(benchmark::State& state) {
         p.set_value();
         auto future = p.get_future();
         benchmark::DoNotOptimize(future);
-        std::move(future).get();
+        std::move(future).take_ready();
     }
 
     state.SetItemsProcessed(state.iterations());
@@ -172,7 +172,7 @@ static void BM_SimpleCoroutine_Int(benchmark::State& state) {
     for (auto _ : state) {
         auto future = actor->compute(42);
         benchmark::DoNotOptimize(future);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -187,7 +187,7 @@ static void BM_SimpleCoroutine_Void(benchmark::State& state) {
     for (auto _ : state) {
         auto future = actor->noop();
         benchmark::DoNotOptimize(future);
-        std::move(future).get();
+        std::move(future).take_ready();
     }
 
     state.SetItemsProcessed(state.iterations());
@@ -201,13 +201,13 @@ static void BM_CoroOverhead_Estimate(benchmark::State& state) {
     // Warm up
     for (int i = 0; i < 100; ++i) {
         auto f1 = actor->compute(i);
-        actor_zeta::detail::ignore_unused(std::move(f1).get());
+        actor_zeta::detail::ignore_unused(std::move(f1).take_ready());
     }
 
     for (auto _ : state) {
         // Coroutine path
         auto future = actor->compute(42);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -233,7 +233,7 @@ static void BM_Coro_MonotonicBuffer(benchmark::State& state) {
 
         for (int i = 0; i < 1000; ++i) {
             auto future = actor->compute(42);
-            int result = std::move(future).get();
+            int result = std::move(future).take_ready();
             benchmark::DoNotOptimize(result);
         }
     }
@@ -249,7 +249,7 @@ static void BM_Coro_UnsyncPool(benchmark::State& state) {
 
     for (auto _ : state) {
         auto future = actor->compute(42);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -264,7 +264,7 @@ static void BM_Coro_SyncPool(benchmark::State& state) {
 
     for (auto _ : state) {
         auto future = actor->compute(42);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -279,7 +279,7 @@ static void BM_Coro_NewDelete(benchmark::State& state) {
 
     for (auto _ : state) {
         auto future = actor->compute(42);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 

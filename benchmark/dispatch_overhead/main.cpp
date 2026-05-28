@@ -70,32 +70,27 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
         switch (method_id) {
             case 0: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method1, 1);
-                while (!f.available()) { actor->resume(1); }
-                std::move(f).get();
+                run_until_complete(f, [&] { actor->resume(1); });
                 break;
             }
             case 1: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method2, 2);
-                while (!f.available()) { actor->resume(1); }
-                std::move(f).get();
+                run_until_complete(f, [&] { actor->resume(1); });
                 break;
             }
             case 2: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method3, 3);
-                while (!f.available()) { actor->resume(1); }
-                std::move(f).get();
+                run_until_complete(f, [&] { actor->resume(1); });
                 break;
             }
             case 3: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method4, 4);
-                while (!f.available()) { actor->resume(1); }
-                std::move(f).get();
+                run_until_complete(f, [&] { actor->resume(1); });
                 break;
             }
             case 4: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method5, 5);
-                while (!f.available()) { actor->resume(1); }
-                std::move(f).get();
+                run_until_complete(f, [&] { actor->resume(1); });
                 break;
             }
         }
@@ -155,7 +150,7 @@ static void BM_DirectCall_Coroutine(benchmark::State& state) {
 
     for (auto _ : state) {
         auto future = actor->compute(42);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -186,8 +181,7 @@ static void BM_FullCycle_1Arg(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
-        while (!f.available()) { actor->resume(1); }
-        int result = std::move(f).get();
+        int result = run_until_complete(f, [&] { actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 
@@ -201,8 +195,7 @@ static void BM_FullCycle_2Args(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum, 10, 20);
-        while (!f.available()) { actor->resume(1); }
-        int result = std::move(f).get();
+        int result = run_until_complete(f, [&] { actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 
@@ -216,8 +209,7 @@ static void BM_FullCycle_3Args(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum3, 10, 20, 30);
-        while (!f.available()) { actor->resume(1); }
-        int result = std::move(f).get();
+        int result = run_until_complete(f, [&] { actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 
@@ -231,8 +223,7 @@ static void BM_FullCycle_Coroutine(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
-        while (!f.available()) { actor->resume(1); }
-        int result = std::move(f).get();
+        int result = run_until_complete(f, [&] { actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 
