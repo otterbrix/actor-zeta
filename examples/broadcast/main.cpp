@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <actor-zeta.hpp>
@@ -50,6 +51,12 @@ inline actor_zeta::unique_future<std::size_t> worker_t::work_data_with_result(st
 class supervisor_lite final : public actor_zeta::actor::actor_mixin<supervisor_lite> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
 
     supervisor_lite(memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<supervisor_lite>()
@@ -115,19 +122,19 @@ int main() {
 
     int const actors = 5;
 
-    std::vector<supervisor_lite::unique_future<void>> create_futures;
-    create_futures.reserve(actors);
+    // The supervisor (an actor_mixin) processes create requests synchronously, so each
+    // create future is ready as soon as send() returns. The worker download results are
+    // produced on the supervisor's internal worker threads (sharing_scheduler e_), so we
+    // collect them with a non-blocking consumer poll: while(!f.is_ready()) yield; then
+    // take_ready(). The supervisor owns and stops e_ in its destructor, so the actors (and
+    // their scheduler) outlive this collection.
     for (auto i = actors; i > 0; --i) {
         auto [needs_sched, future] = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
-        create_futures.push_back(std::move(future));
+        (void) needs_sched; // synchronous actor_mixin: future is ready immediately
+        actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
     }
 
-    for (auto& future : create_futures) {
-        std::move(future).get();
-    }
-
-    std::vector<worker_t::unique_future<std::size_t>> futures;
-    futures.reserve(supervisor->worker_count());
+    std::size_t total_size = 0;
     for (std::size_t i = 0; i < supervisor->worker_count(); ++i) {
         auto* worker = supervisor->get_worker(i);
         if (worker) {
@@ -142,14 +149,9 @@ int main() {
             if (needs_sched) {
                 supervisor->schedule_worker(i);
             }
-            futures.push_back(std::move(future));
+            // Worker runs on the supervisor's internal scheduler (cross-thread).
+            total_size += actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
         }
-    }
-
-    std::size_t total_size = 0;
-    for (std::size_t i = 0; i < futures.size(); ++i) {
-        std::size_t result = std::move(futures[i]).get();
-        total_size += result;
     }
 
     std::cerr << "Total size from all workers: " << total_size << std::endl;

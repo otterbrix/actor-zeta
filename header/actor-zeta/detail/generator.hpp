@@ -9,13 +9,11 @@
 
 #include <system_error>
 
-#include <actor-zeta/detail/future_state.hpp>
 #include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
 namespace actor_zeta {
 
-/// Error marker for generator streaming
 struct stream_error {
     std::error_code ec;
 
@@ -51,18 +49,63 @@ struct final_awaiter;
 template<typename T>
 struct generator_promise_type;
 
+// State for generator coroutines. Held via raw generator_state<T>* throughout
+// (message result_slot, linked_state_, awaiter state_); refcount is manual.
 template<typename T>
-class generator_state final : public future_state_base {
+class generator_state final {
 public:
     explicit generator_state(std::pmr::memory_resource* res) noexcept
-        : future_state_base(res)
+        : resource_(res)
+        , state_(generator_states::created)
+        , refcount_(1)
         , value_ptr_(nullptr)
         , linked_state_(nullptr)
         , sync_(static_cast<uint8_t>(sync_state::idle)) {
-        store_state_raw(generator_states::created);
+        assert(res != nullptr && "generator_state: resource must not be null");
     }
 
-    ~generator_state() noexcept override = default;
+    ~generator_state() noexcept {
+        if (owns_coroutine_ && owning_coro_handle_) {
+            owning_coro_handle_.destroy();
+        }
+    }
+
+    generator_state(const generator_state&) = delete;
+    generator_state& operator=(const generator_state&) = delete;
+
+    void add_ref() noexcept {
+        refcount_.fetch_add(1, std::memory_order_relaxed);
+    }
+    void release() noexcept {
+        if (refcount_.fetch_sub(1, std::memory_order_release) == 1) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            destroy();
+        }
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept {
+        return resource_;
+    }
+
+    void store_state_raw(uint8_t s) noexcept {
+        state_.store(s, std::memory_order_release);
+    }
+    [[nodiscard]] uint8_t load_state_raw() const noexcept {
+        return state_.load(std::memory_order_acquire);
+    }
+
+    void set_coroutine(std::coroutine_handle<> h) noexcept {
+        resume_coro_handle_ = h;
+    }
+    void set_coroutine_owning(std::coroutine_handle<> h) noexcept {
+        owning_coro_handle_ = h;
+        owns_coroutine_ = true;
+    }
+    [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
+        auto h = resume_coro_handle_;
+        resume_coro_handle_ = {};
+        return h;
+    }
 
     [[nodiscard]] bool is_ready() const noexcept {
         return load_state_raw() == generator_states::suspended;
@@ -206,23 +249,26 @@ public:
         return sync_.load(std::memory_order_acquire) == static_cast<uint8_t>(sync_state::consumer_waiting);
     }
 
-    bool set_forward_target_void(future_state_base*) noexcept override {
-        return false;
-    }
-
-protected:
-    void destroy() noexcept override {
-        unlink();
-        this->~generator_state();
-        resource_->deallocate(this, sizeof(generator_state<T>), alignof(generator_state<T>));
-    }
-
 private:
+    void destroy() noexcept {
+        unlink();
+        auto* res = resource_;
+        this->~generator_state();
+        res->deallocate(this, sizeof(generator_state<T>), alignof(generator_state<T>));
+    }
+
     enum class sync_state : uint8_t {
         idle = 0,
         producer_waiting = 1,
         consumer_waiting = 2,
     };
+
+    std::pmr::memory_resource* resource_;
+    std::atomic<uint8_t> state_;
+    std::atomic<int> refcount_;
+    std::coroutine_handle<> owning_coro_handle_{};
+    std::coroutine_handle<> resume_coro_handle_{};
+    bool owns_coroutine_ = false;
 
     std::atomic<void*> value_ptr_;
     generator_state<T>* linked_state_;
@@ -275,20 +321,18 @@ struct next_awaiter {
     generator_state<T>* state_;
 
     bool await_ready() noexcept {
-        // Only skip await_suspend for terminal states (exhausted/cancelled)
-        // For suspended state (has value), we still need to go through await_suspend
-        // to properly handle advancing to the next value
+        // Skip await_suspend only on terminal states; for suspended, await_suspend
+        // is what advances to the next value.
         return state_->is_terminal();
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> consumer) noexcept {
         state_->set_consumer_handle(consumer);
 
-        // If we have a value from previous yield (state is suspended),
-        // mark it as consumed and advance to next value
+        // If a value from the previous yield is still here, mark it consumed
+        // and fall through to resume the producer for the next one.
         if (state_->is_ready()) {
             state_->reset_to_created();
-            // Fall through to resume producer for next value
         }
 
         if (state_->is_created()) {
@@ -368,7 +412,7 @@ struct generator_future_awaiter {
         , gen_state_(state) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return future_.available();
+        return future_.is_ready();
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> caller) noexcept {
@@ -385,7 +429,7 @@ struct generator_future_awaiter {
         }
 
         // Check if became ready during setup (race condition)
-        if (future_.available()) {
+        if (future_.is_ready()) {
             return caller;
         }
 
@@ -393,10 +437,18 @@ struct generator_future_awaiter {
     }
 
     auto await_resume() {
+        // Direct non-blocking take from the (already-ready) shared_state.
+        auto* s = future_.internal_state();
+        assert(s && s->has_result() && !s->has_error()
+               && "generator co_await future: future not ready or completed with error");
         if constexpr (std::is_void_v<FutT>) {
+            s->take_value();
+            future_.detach();
             return;
         } else {
-            return std::move(future_).get();
+            auto v = s->take_value();
+            future_.detach();
+            return v;
         }
     }
 };
@@ -452,7 +504,6 @@ struct generator_promise_type {
         return yield_awaiter<T>{state_, nullptr};
     }
 
-    // Support co_await unique_future<U> inside generator
     template<typename U>
     auto await_transform(unique_future<U>&& future) noexcept {
         return generator_future_awaiter<T, U>{future, state_};
@@ -463,7 +514,6 @@ struct generator_promise_type {
         return generator_future_awaiter<T, U>{future, state_};
     }
 
-    // Support co_await generator<U> inside generator (for forwarding)
     template<typename U>
     auto await_transform(generator<U>& gen) noexcept {
         return next_awaiter<U>{gen.internal_state()};

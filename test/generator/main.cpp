@@ -574,14 +574,14 @@ TEST_CASE("unique_future<generator<T>> from actor", "[generator][future]") {
         // Verify type is correct
         static_assert(type_traits::is_unique_future_v<decltype(future)>);
 
-        REQUIRE(!future.available());  // Not yet processed
+        REQUIRE(!future.is_ready());  // Not yet processed
 
         auto info = actor->resume(1);
         REQUIRE(info.messages_processed == 1);
 
-        REQUIRE(future.available());
+        REQUIRE(future.is_ready());
 
-        auto gen = std::move(future).get();
+        auto gen = std::move(future).take_ready();
         REQUIRE(gen.valid());
         REQUIRE(!gen.exhausted());
     }
@@ -709,14 +709,14 @@ TEST_CASE("unique_future<generator<T>> full chain", "[generator][future]") {
         // Step 1: Send message, get future
         auto [needs_sched, future] = send(actor.get(),
                            &AsyncGenActor::create_stream_async, 3);
-        REQUIRE(!future.available());
+        REQUIRE(!future.is_ready());
 
         // Step 2: Process message
         actor->resume(1);
-        REQUIRE(future.available());
+        REQUIRE(future.is_ready());
 
         // Step 3: Get generator from future
-        auto gen = std::move(future).get();
+        auto gen = std::move(future).take_ready();
         REQUIRE(gen.valid());
         REQUIRE(!gen.exhausted());
 
@@ -732,18 +732,18 @@ TEST_CASE("unique_future<generator<T>> full chain", "[generator][future]") {
         auto [ns2, future2] = send(actor.get(),
                             &AsyncGenActor::create_stream_async, 3);
 
-        REQUIRE(!future1.available());
-        REQUIRE(!future2.available());
+        REQUIRE(!future1.is_ready());
+        REQUIRE(!future2.is_ready());
 
         // Process both messages
         auto info = actor->resume(10);
         REQUIRE(info.messages_processed == 2);
 
-        REQUIRE(future1.available());
-        REQUIRE(future2.available());
+        REQUIRE(future1.is_ready());
+        REQUIRE(future2.is_ready());
 
-        auto gen1 = std::move(future1).get();
-        auto gen2 = std::move(future2).get();
+        auto gen1 = std::move(future1).take_ready();
+        auto gen2 = std::move(future2).take_ready();
 
         REQUIRE(gen1.valid());
         REQUIRE(gen2.valid());
@@ -755,14 +755,14 @@ TEST_CASE("unique_future<generator<T>> full chain", "[generator][future]") {
         auto [_2, gen_sync] = send(actor.get(),
                              &AsyncGenActor::stream_numbers, 3);
 
-        REQUIRE(!future.available());
+        REQUIRE(!future.is_ready());
         REQUIRE(gen_sync.valid());
 
         actor->resume(10);
 
-        REQUIRE(future.available());
+        REQUIRE(future.is_ready());
 
-        auto gen_async = std::move(future).get();
+        auto gen_async = std::move(future).take_ready();
         REQUIRE(gen_async.valid());
         REQUIRE(gen_sync.valid());
     }

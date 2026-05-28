@@ -244,7 +244,7 @@ TEST_CASE("Typed coroutine allocation") {
     SECTION("Int coroutine with get()") {
         {
             auto future = actor->int_coro(21);
-            int result = std::move(future).get();
+            int result = std::move(future).take_ready();
             CHECK(result == 42);
         }
 
@@ -254,7 +254,7 @@ TEST_CASE("Typed coroutine allocation") {
     SECTION("String coroutine with get()") {
         {
             auto future = actor->string_coro("test");
-            std::string result = std::move(future).get();
+            std::string result = std::move(future).take_ready();
             CHECK(result == "test_processed");
         }
 
@@ -264,7 +264,7 @@ TEST_CASE("Typed coroutine allocation") {
     SECTION("Large frame coroutine") {
         {
             auto future = actor->large_frame_coro(10);
-            int result = std::move(future).get();
+            int result = std::move(future).take_ready();
             CHECK(result > 10);
         }
 
@@ -285,7 +285,7 @@ TEST_CASE("Coroutine allocation patterns") {
         {
             auto future = actor->int_coro(1);
             first_peak = tracker.peak_allocated();
-            actor_zeta::detail::ignore_unused(std::move(future).get());
+            actor_zeta::detail::ignore_unused(std::move(future).take_ready());
         }
 
         tracker.reset();
@@ -294,7 +294,7 @@ TEST_CASE("Coroutine allocation patterns") {
         {
             auto future = actor->int_coro(2);
             second_peak = tracker.peak_allocated();
-            actor_zeta::detail::ignore_unused(std::move(future).get());
+            actor_zeta::detail::ignore_unused(std::move(future).take_ready());
         }
 
         // Memory pattern should be similar
@@ -318,7 +318,7 @@ TEST_CASE("Coroutine allocation patterns") {
         // Consume all
         int sum = 0;
         for (auto& f : futures) {
-            sum += std::move(f).get();
+            sum += std::move(f).take_ready();
         }
 
         CHECK(sum == 2 * (0 + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9));
@@ -337,7 +337,7 @@ TEST_CASE("promise/future allocation") {
             auto future = p.get_future();
             p.set_value(42);
 
-            int result = std::move(future).get();
+            int result = std::move(future).take_ready();
             CHECK(result == 42);
         }
 
@@ -353,7 +353,7 @@ TEST_CASE("promise/future allocation") {
             auto future = p.get_future();
             p.set_value();
 
-            std::move(future).get();
+            std::move(future).take_ready();
         }
 
         CHECK(tracker.all_freed());
@@ -373,7 +373,7 @@ TEST_CASE("Stress test - many coroutines") {
 
     for (int i = 0; i < ITERATIONS; ++i) {
         auto future = actor->int_coro(i);
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         CHECK(result == i * 2);
     }
 

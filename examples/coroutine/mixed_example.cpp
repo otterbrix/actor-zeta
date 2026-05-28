@@ -65,7 +65,7 @@ public:
 
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 it = pending_.erase(it);
             } else {
                 ++it;
@@ -89,16 +89,14 @@ int main() {
     {
         auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::add, 10, 20);
-        calculator->resume(100);
-        int result = std::move(future).get();
+        int result = actor_zeta::run_until_complete(future, [&] { calculator->resume(100); });
         std::cout << "Result: 10 + 20 = " << result << "\n\n";
     }
 
     {
         auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::multiply, 7, 8);
-        calculator->resume(100);
-        int result = std::move(future).get();
+        int result = actor_zeta::run_until_complete(future, [&] { calculator->resume(100); });
         std::cout << "Result: 7 * 8 = " << result << "\n\n";
     }
 
@@ -108,12 +106,10 @@ int main() {
         auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::square, 5);
 
-        while (!future.available()) {
+        int result = actor_zeta::run_until_complete(future, [&] {
             calculator->resume(100);
             calculator->poll_pending();
-        }
-
-        int result = std::move(future).get();
+        });
         std::cout << "Result: 5^2 = " << result << "\n\n";
     }
 

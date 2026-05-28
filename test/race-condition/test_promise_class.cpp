@@ -121,12 +121,11 @@ TEST_CASE("promise<string>: set_value with complex type") {
 
     REQUIRE_FALSE(p.valid());
 
-    // Wait and get
-    while (!future.available()) {
+    // Value already set above: future is ready immediately. Poll then take.
+    while (!future.is_ready()) {
         std::this_thread::yield();
     }
-
-    std::string result = std::move(future).get();
+    std::string result = std::move(future).take_ready();
     REQUIRE(result == "Hello, World!");
 }
 
@@ -142,7 +141,7 @@ TEST_CASE("promise<int>: set_error sets error and releases") {
     auto future = p.get_future();
 
     auto ec = std::make_error_code(std::errc::operation_canceled);
-    p.set_error(ec);
+    p.error(ec);
 
     REQUIRE(state->has_error());
     REQUIRE(state->get_error() == ec);
@@ -169,8 +168,8 @@ TEST_CASE("promise<int>: move construction") {
     REQUIRE(p2.valid());
 
     p2.set_value(123);
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 123);
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == 123);
 }
 
 TEST_CASE("promise<int>: move assignment") {
@@ -189,11 +188,11 @@ TEST_CASE("promise<int>: move assignment") {
     REQUIRE(p2.valid());
 
     p2.set_value(456);
-    REQUIRE(future1.available());
-    REQUIRE(std::move(future1).get() == 456);
+    REQUIRE(future1.is_ready());
+    REQUIRE(std::move(future1).take_ready() == 456);
 
     // p2's old state should have received error (broken_pipe) in destructor
-    REQUIRE(future2.available());
+    REQUIRE(future2.is_ready());
     REQUIRE(future2.failed());
     REQUIRE(future2.error() == std::make_error_code(std::errc::broken_pipe));
 }
@@ -213,7 +212,7 @@ TEST_CASE("promise<int>: destructor without set_value sets broken_pipe") {
     }());
 
     // Future should indicate failure with broken_pipe
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
 }
@@ -229,9 +228,9 @@ TEST_CASE("promise<int>: destructor after set_value does nothing") {
         // p destroyed here, but state_ is null so nothing happens
     }());
 
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
     REQUIRE_FALSE(future.failed());
-    REQUIRE(std::move(future).get() == 42);
+    REQUIRE(std::move(future).take_ready() == 42);
 }
 
 // =============================================================================
@@ -252,11 +251,14 @@ TEST_CASE("promise<int>: concurrent set_value and future read") {
             p.set_value(i);
         });
 
+        // Reader kept on its own thread (cross-thread producer/consumer): the
+        // writer thread sets the value, the reader just polls readiness and takes.
         std::thread reader([&future, &result]() {
-            while (!future.available()) {
+            while (!future.is_ready()) {
                 std::this_thread::yield();
             }
-            result.store(std::move(future).get(), std::memory_order_release);
+            int r = std::move(future).take_ready();
+            result.store(r, std::memory_order_release);
         });
 
         writer.join();
@@ -278,7 +280,7 @@ TEST_CASE("unique_future<int>: initial state from promise") {
 
     REQUIRE(future.valid());
     REQUIRE(future.internal_state() != nullptr);
-    REQUIRE_FALSE(future.available());
+    REQUIRE_FALSE(future.is_ready());
     REQUIRE_FALSE(future.failed());
 }
 
@@ -289,12 +291,12 @@ TEST_CASE("unique_future<int>: available checks is_ready") {
     auto future = p.get_future();
 
     // Before set_value: not available (is_ready = false)
-    REQUIRE_FALSE(future.available());
+    REQUIRE_FALSE(future.is_ready());
 
     p.set_value(42);
 
     // After set_value (which calls release_promise): available
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
 }
 
 TEST_CASE("unique_future<int>: move semantics") {
@@ -312,7 +314,7 @@ TEST_CASE("unique_future<int>: move semantics") {
     REQUIRE(future2.valid());
 
     p.set_value(789);
-    REQUIRE(future2.available());
+    REQUIRE(future2.is_ready());
 }
 
 TEST_CASE("unique_future: destructor calls release_future") {
@@ -364,8 +366,8 @@ TEST_CASE("make_ready_future<int>: creates ready future") {
     auto future = make_ready_future<int>(resource, 42);
 
     REQUIRE(future.valid());
-    REQUIRE(future.available());  // is_ready = true
-    REQUIRE(std::move(future).get() == 42);
+    REQUIRE(future.is_ready());  // is_ready = true
+    REQUIRE(std::move(future).take_ready() == 42);
 }
 
 TEST_CASE("make_ready_future<void>: creates ready void future") {
@@ -374,7 +376,7 @@ TEST_CASE("make_ready_future<void>: creates ready void future") {
     auto future = make_ready_future(resource);
 
     REQUIRE(future.valid());
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
 }
 
 // =============================================================================
@@ -388,7 +390,7 @@ TEST_CASE("make_error<int>: creates failed future") {
     auto future = make_error<int>(resource, ec);
 
     REQUIRE(future.valid());
-    REQUIRE(future.available());  // is_ready = true
+    REQUIRE(future.is_ready());  // is_ready = true
     REQUIRE(future.failed());
     REQUIRE(future.error() == ec);
 }
@@ -427,8 +429,8 @@ TEST_CASE("promise: dispatch pattern") {
     caller_promise.set_value(std::move(value_from_method));
 
     // Caller reads from their future
-    REQUIRE(caller_future.available());
-    REQUIRE(std::move(caller_future).get() == 42);
+    REQUIRE(caller_future.is_ready());
+    REQUIRE(std::move(caller_future).take_ready() == 42);
 }
 
 // =============================================================================
@@ -446,7 +448,7 @@ TEST_CASE("promise: queue_closed - future gets error") {
     }());
 
     // Future should indicate failure with broken_pipe
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
 }

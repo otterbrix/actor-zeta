@@ -174,7 +174,7 @@ public:
     /// With auto-resume in set_value(), coroutines resume automatically
     void poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] size coroutine completed", name_);
                 it = pending_.erase(it);
             } else {
@@ -182,7 +182,7 @@ public:
             }
         }
         for (auto it = pending_stream_.begin(); it != pending_stream_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] stream coroutine completed", name_);
                 it = pending_stream_.erase(it);
             } else {

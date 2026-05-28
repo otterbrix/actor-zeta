@@ -5,7 +5,6 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta/config.hpp>
-#include <actor-zeta/detail/future_state.hpp>
 
 // ============================================================================
 // Test 1: promise_type exists and can be used for co_return
@@ -97,8 +96,8 @@ TEST_CASE("simple coroutines with co_return") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.available());
-        int result = std::move(future).get();
+        REQUIRE(future.is_ready());
+        int result = std::move(future).take_ready();
         REQUIRE(result == 42);
     }
 
@@ -113,8 +112,8 @@ TEST_CASE("simple coroutines with co_return") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.available());
-        std::string result = std::move(future).get();
+        REQUIRE(future.is_ready());
+        std::string result = std::move(future).take_ready();
         REQUIRE(result == "hello");
     }
 
@@ -129,125 +128,10 @@ TEST_CASE("simple coroutines with co_return") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.available());
-        std::move(future).get();  // Should not throw
+        REQUIRE(future.is_ready());
+        std::move(future).take_ready();  // Should not throw
     }
 }
-
-// ============================================================================
-// Test 3: future_state has coroutine storage and methods
-// ============================================================================
-
-TEST_CASE("future_state coroutine methods") {
-    auto* resource =std::pmr::get_default_resource();
-
-    SECTION("future_state<int> has coroutine methods") {
-        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
-                                        alignof(actor_zeta::detail::future_state<int>));
-        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
-
-        // Test resume_coroutine exists and can be called
-        state->resume_coroutine();  // Should not crash (no-op if no coroutine)
-
-        // Cleanup
-        state->release();
-    }
-
-    SECTION("future_state<void> has coroutine methods") {
-        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<void>),
-                                        alignof(actor_zeta::detail::future_state<void>));
-        auto* state = new (mem) actor_zeta::detail::future_state<void>(resource);
-
-        // Test resume_coroutine exists
-        state->resume_coroutine();
-
-        // Cleanup
-        state->release();
-    }
-}
-
-// ============================================================================
-// Test 4: Coroutine handle storage via set_coroutine
-// ============================================================================
-
-TEST_CASE("coroutine handle can be stored in future_state") {
-    auto* resource =std::pmr::get_default_resource();
-    auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
-
-    SECTION("set_coroutine stores handle") {
-        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
-                                        alignof(actor_zeta::detail::future_state<int>));
-        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
-
-        // FIXED: Use send() instead of direct call
-        auto [needs_sched, future] = actor_zeta::send(
-            actor.get(),
-            &coroutine_test_actor::coro_storage
-        );
-
-        // Process message
-        actor->resume(100);
-
-        // Test resume_coroutine exists (no-op if no coroutine stored)
-        state->resume_coroutine();
-
-        // Cleanup
-        state->release();
-    }
-}
-
-// ============================================================================
-// Test 5: Virtual methods with `final` keyword (devirtualization check)
-// ============================================================================
-
-TEST_CASE("virtual methods marked as final") {
-    // This is a compile-time check - if it compiles, final is working
-    auto* resource =std::pmr::get_default_resource();
-
-    void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
-                                    alignof(actor_zeta::detail::future_state<int>));
-    auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
-
-    // Cast to base to ensure virtual call
-    actor_zeta::detail::future_state_base* base = state;
-
-    // Test resume_coroutine exists (no-op if no coroutine stored)
-    base->resume_coroutine();
-
-    // Cleanup
-    state->release();
-}
-
-// ============================================================================
-// Test 6: promise_type creates future_state correctly
-// ============================================================================
-
-// ============================================================================
-// Test 7: Coroutine destruction
-// ============================================================================
-
-TEST_CASE("future_state destroys stored coroutine") {
-    auto* resource =std::pmr::get_default_resource();
-
-    SECTION("destructor calls coro_handle_.destroy() if not done") {
-        // Create future_state
-        void* mem = resource->allocate(sizeof(actor_zeta::detail::future_state<int>),
-                                        alignof(actor_zeta::detail::future_state<int>));
-        auto* state = new (mem) actor_zeta::detail::future_state<int>(resource);
-
-        // Destroy immediately (no coroutine stored - should be safe)
-        state->~future_state();
-        resource->deallocate(state, sizeof(actor_zeta::detail::future_state<int>),
-                            alignof(actor_zeta::detail::future_state<int>));
-
-        // If we reach here, no crash occurred
-        REQUIRE(true);
-    }
-}
-
-// ============================================================================
-// Tests 8-11: REMOVED - behavior_t is outdated
-// ============================================================================
 
 // ============================================================================
 // Test 12: Coroutine futures (STATE mode)
@@ -266,9 +150,9 @@ TEST_CASE("Coroutine futures") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.available());
+        REQUIRE(future.is_ready());
 
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         REQUIRE(result == 42);
     }
 
@@ -284,9 +168,9 @@ TEST_CASE("Coroutine futures") {
 
         auto future2 = std::move(future1);
         REQUIRE(future2.valid());
-        REQUIRE(future2.available());
+        REQUIRE(future2.is_ready());
 
-        std::string result = std::move(future2).get();
+        std::string result = std::move(future2).take_ready();
         REQUIRE(result == "hello");
     }
 
@@ -296,10 +180,12 @@ TEST_CASE("Coroutine futures") {
         auto future_state = p.get_future();
 
         REQUIRE(future_state.valid());
-        REQUIRE_FALSE(future_state.is_cancelled());
+        REQUIRE_FALSE(future_state.failed());
 
-        future_state.cancel();
-        REQUIRE(future_state.is_cancelled());
+        // Cancellation is expressed by setting an error on the promise
+        p.error(std::make_error_code(std::errc::operation_canceled));
+        REQUIRE(future_state.failed());
+        REQUIRE(future_state.error() == std::make_error_code(std::errc::operation_canceled));
     }
 }
 
@@ -353,9 +239,9 @@ TEST_CASE("coroutine methods with unique_future return type") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.available());
+        REQUIRE(future.is_ready());
 
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         REQUIRE(result == 30);
     }
 
@@ -369,9 +255,9 @@ TEST_CASE("coroutine methods with unique_future return type") {
         actor->resume(100);
 
         REQUIRE(future.valid());
-        REQUIRE(future.available());
+        REQUIRE(future.is_ready());
 
-        std::string result = std::move(future).get();
+        std::string result = std::move(future).take_ready();
         REQUIRE(result == "hello world");
     }
 
@@ -383,11 +269,11 @@ TEST_CASE("coroutine methods with unique_future return type") {
         );
         actor->resume(100);
 
-        REQUIRE(future.available());
+        REQUIRE(future.is_ready());
 
         // get() should return immediately without blocking
         auto start = std::chrono::steady_clock::now();
-        int result = std::move(future).get();
+        int result = std::move(future).take_ready();
         auto elapsed = std::chrono::steady_clock::now() - start;
 
         REQUIRE(result == 12);
@@ -451,8 +337,8 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         // Process the message
         actor->resume(100);
 
-        REQUIRE(result.available());
-        int value = std::move(result).get();
+        REQUIRE(result.is_ready());
+        int value = std::move(result).take_ready();
         REQUIRE(value == 30);
     }
 
@@ -468,8 +354,8 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         // Process the message
         actor->resume(100);
 
-        REQUIRE(result.available());
-        int value = std::move(result).get();
+        REQUIRE(result.is_ready());
+        int value = std::move(result).take_ready();
         REQUIRE(value == 35);
     }
 
@@ -483,9 +369,9 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         // Process all messages
         actor->resume(100);
 
-        REQUIRE(std::move(r1).get() == 3);
-        REQUIRE(std::move(r2).get() == 7);
-        REQUIRE(std::move(r3).get() == 11);
+        REQUIRE(std::move(r1).take_ready() == 3);
+        REQUIRE(std::move(r2).take_ready() == 7);
+        REQUIRE(std::move(r3).take_ready() == 11);
     }
 
     SECTION("multiple calls to async method") {
@@ -498,9 +384,9 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         // Process all messages
         actor->resume(100);
 
-        REQUIRE(std::move(r1).get() == 6);
-        REQUIRE(std::move(r2).get() == 20);
-        REQUIRE(std::move(r3).get() == 42);
+        REQUIRE(std::move(r1).take_ready() == 6);
+        REQUIRE(std::move(r2).take_ready() == 20);
+        REQUIRE(std::move(r3).take_ready() == 42);
     }
 
     SECTION("mixed sync and async calls") {
@@ -512,8 +398,8 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         // Process all messages
         actor->resume(100);
 
-        REQUIRE(std::move(sync_result).get() == 15);
-        REQUIRE(std::move(async_result).get() == 12);
+        REQUIRE(std::move(sync_result).take_ready() == 15);
+        REQUIRE(std::move(async_result).take_ready() == 12);
     }
 }
 
@@ -561,8 +447,8 @@ TEST_CASE("coroutine cleanup does not crash") {
             );
             actor->resume(100);
             REQUIRE(future.valid());
-            REQUIRE(future.available());
-            int result = std::move(future).get();
+            REQUIRE(future.is_ready());
+            int result = std::move(future).take_ready();
             REQUIRE(result == 42);
         }
         // If we reach here without crash, basic cleanup works
@@ -579,7 +465,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             &coroutine_test_actor::coro_int
             );
             actor->resume(100);
-            int result = std::move(future).get();
+            int result = std::move(future).take_ready();
             REQUIRE(result == 42);
         }
         // No crash = basic cleanup works
@@ -595,7 +481,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             );
             actor->resume(100);
             REQUIRE(future.valid());
-            std::string result = std::move(future).get();
+            std::string result = std::move(future).take_ready();
             REQUIRE(result == "hello");
         }
         REQUIRE(true);
@@ -610,7 +496,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             );
             actor->resume(100);
             REQUIRE(future.valid());
-            std::move(future).get();  // Should not throw
+            std::move(future).take_ready();  // Should not throw
         }
         REQUIRE(true);
     }

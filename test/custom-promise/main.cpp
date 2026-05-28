@@ -17,13 +17,13 @@ TEST_CASE("promise<int> - basic set_value and get_future") {
 
     auto future = p.get_future();
     REQUIRE(future.valid());
-    REQUIRE_FALSE(future.available());
+    REQUIRE_FALSE(future.is_ready());
 
     p.set_value(42);
     REQUIRE_FALSE(p.valid());  // Promise invalidated after set_value
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 42);
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == 42);
 }
 
 TEST_CASE("promise<void> - basic set_value and get_future") {
@@ -34,12 +34,12 @@ TEST_CASE("promise<void> - basic set_value and get_future") {
 
     auto future = p.get_future();
     REQUIRE(future.valid());
-    REQUIRE_FALSE(future.available());
+    REQUIRE_FALSE(future.is_ready());
 
     p.set_value();
     REQUIRE_FALSE(p.valid());
 
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
 }
 
 TEST_CASE("promise<string> - complex type") {
@@ -50,8 +50,8 @@ TEST_CASE("promise<string> - complex type") {
 
     p.set_value("hello world");
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == "hello world");
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == "hello world");
 }
 
 // ============================================================================
@@ -123,13 +123,13 @@ TEST_CASE("vector of futures - same type from different actors") {
     worker3->resume(10);
 
     // Verify results
-    REQUIRE(futures[0].available());
-    REQUIRE(futures[1].available());
-    REQUIRE(futures[2].available());
+    REQUIRE(futures[0].is_ready());
+    REQUIRE(futures[1].is_ready());
+    REQUIRE(futures[2].is_ready());
 
-    REQUIRE(std::move(futures[0]).get() == 20);  // 10 * 2
-    REQUIRE(std::move(futures[1]).get() == 30);  // 10 * 3
-    REQUIRE(std::move(futures[2]).get() == 50);  // 10 * 5
+    REQUIRE(std::move(futures[0]).take_ready() == 20);  // 10 * 2
+    REQUIRE(std::move(futures[1]).take_ready() == 30);  // 10 * 3
+    REQUIRE(std::move(futures[2]).take_ready() == 50);  // 10 * 5
 }
 
 // ============================================================================
@@ -214,8 +214,8 @@ TEST_CASE("backward compatibility - old actor code works") {
 
     actor->resume(10);
 
-    REQUIRE(future1.available());
-    REQUIRE(std::move(future1).get() == 42);
+    REQUIRE(future1.is_ready());
+    REQUIRE(std::move(future1).take_ready() == 42);
     REQUIRE(actor->call_count() == 1);
 
     // Send to void method
@@ -226,8 +226,8 @@ TEST_CASE("backward compatibility - old actor code works") {
 
     actor->resume(10);
 
-    REQUIRE(future2.available());
-    std::move(future2).get();  // Should not crash
+    REQUIRE(future2.is_ready());
+    std::move(future2).take_ready();  // Should not crash
     REQUIRE(actor->call_count() == 2);
 }
 
@@ -276,22 +276,22 @@ TEST_CASE("make_ready_future - all overloads") {
 
     // void
     auto void_future = actor_zeta::make_ready_future(resource);
-    REQUIRE(void_future.available());
+    REQUIRE(void_future.is_ready());
 
     // int with value
     auto int_future = actor_zeta::make_ready_future<int>(resource, 42);
-    REQUIRE(int_future.available());
-    REQUIRE(std::move(int_future).get() == 42);
+    REQUIRE(int_future.is_ready());
+    REQUIRE(std::move(int_future).take_ready() == 42);
 
     // string with value
     auto str_future = actor_zeta::make_ready_future<std::string>(resource, std::string("test"));
-    REQUIRE(str_future.available());
-    REQUIRE(std::move(str_future).get() == "test");
+    REQUIRE(str_future.is_ready());
+    REQUIRE(std::move(str_future).take_ready() == "test");
 
     // int default constructed
     auto int_default = actor_zeta::make_ready_future<int>(resource);
-    REQUIRE(int_default.available());
-    REQUIRE(std::move(int_default).get() == 0);
+    REQUIRE(int_default.is_ready());
+    REQUIRE(std::move(int_default).take_ready() == 0);
 }
 
 // ============================================================================
@@ -309,7 +309,7 @@ TEST_CASE("promise destruction without set_value - sets broken_pipe") {
     }());
 
     // Future should be in failed state with broken_pipe
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
 }
@@ -324,9 +324,9 @@ TEST_CASE("promise set_error - propagates error to future") {
     actor_zeta::promise<int> p(resource);
     auto future = p.get_future();
 
-    p.set_error(std::make_error_code(std::errc::invalid_argument));
+    p.error(std::make_error_code(std::errc::invalid_argument));
 
-    REQUIRE(future.available());
+    REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::invalid_argument));
 }

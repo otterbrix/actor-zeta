@@ -1,7 +1,6 @@
 #pragma once
 
 #include <actor-zeta/mailbox/default_mailbox.hpp>
-#include <actor-zeta/mailbox/message_result.hpp>
 
 namespace actor_zeta::mailbox {
 

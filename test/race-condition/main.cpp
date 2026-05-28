@@ -104,7 +104,7 @@ TEST_CASE("Race condition stress test - future destruction timing") {
                 // 40% - read result (normal flow)
                 // Wait for result with timeout
                 auto start = std::chrono::steady_clock::now();
-                while (!future.available()) {
+                while (!future.is_ready()) {
                     auto elapsed = std::chrono::steady_clock::now() - start;
                     if (elapsed > std::chrono::milliseconds(100)) {
                         // Timeout - actor might be overloaded
@@ -113,7 +113,7 @@ TEST_CASE("Race condition stress test - future destruction timing") {
                     std::this_thread::yield();
                 }
 
-                if (future.available()) {
+                if (future.is_ready()) {
                     results_read.fetch_add(1, std::memory_order_relaxed);
                 }
                 // ~future() called here

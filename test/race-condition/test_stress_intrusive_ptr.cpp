@@ -61,10 +61,10 @@ T smart_get(typename Actor::template unique_future<T>&& future,
     int stall_iterations = 0;
     constexpr int MAX_STALL = 10;  // Reschedule every ~1ms
 
-    while (!future.available()) {
+    while (!future.is_ready()) {
         auto elapsed = std::chrono::steady_clock::now() - start_time;
         if (elapsed > timeout) {
-            // Timeout - but still try to get (will block or return error)
+            // Timeout - but still try to take (asserts readiness)
             break;
         }
 
@@ -80,7 +80,7 @@ T smart_get(typename Actor::template unique_future<T>&& future,
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 
-    return std::move(future).get();
+    return std::move(future).take_ready();
 }
 
 // =============================================================================

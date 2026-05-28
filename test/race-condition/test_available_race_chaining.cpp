@@ -21,6 +21,19 @@
 // These tests verify that destroying a future after available()==true is SAFE.
 // =============================================================================
 
+namespace {
+// Drive a cross-actor future to ready without taking — these tests destroy the
+// future untaken to exercise destroy-on-ready safety.
+template<typename Fut, typename Sched, typename A1, typename A2>
+inline void drive_until_ready(Fut& fut, Sched& sched, A1* a1, A2* a2) {
+    while (!fut.is_ready()) {
+        sched->enqueue(a1);
+        sched->enqueue(a2);
+        std::this_thread::yield();
+    }
+}
+} // namespace
+
 // Sentinel to track destructions
 class destruction_tracker {
 public:
@@ -168,18 +181,12 @@ TEST_CASE("available race chaining: basic chain is safe") {
         // Schedule worker once (it will be scheduled again via message passing)
         scheduler->enqueue(worker.get());
 
-        // Wait for future to become available
-        // With new architecture, available() is true only after coroutine fully completes
-        // Re-enqueue actors periodically to handle cross-actor messaging where
-        // send() inside coroutine cannot schedule the target actor directly
-        while (!future.available()) {
-            scheduler->enqueue(dispatcher.get());
-            scheduler->enqueue(worker.get());
-            std::this_thread::yield();
-        }
+        // Wait for future to become available (file-local driver: re-enqueues both
+        // actors to handle cross-actor messaging; does not take_ready — see helper).
+        drive_until_ready(future, scheduler, dispatcher.get(), worker.get());
 
         // Destroy future - this should be SAFE with new architecture
-        // because available() == true means release_promise() was called
+        // because is_ready() == true means release_promise() was called
         // which happens AFTER self.destroy() in final_suspend
         { auto temp = std::move(future); }
     }
@@ -234,8 +241,8 @@ TEST_CASE("available race chaining: poll_pending pattern") {
             scheduler->enqueue(dispatcher.get());
             scheduler->enqueue(worker.get());
             for (auto it = pending.begin(); it != pending.end();) {
-                if (it->available()) {
-                    // Safe to destroy - available() is true only after full completion
+                if (it->is_ready()) {
+                    // Safe to destroy - is_ready() is true only after full completion
                     it = pending.erase(it);
                 } else {
                     ++it;
@@ -285,12 +292,8 @@ TEST_CASE("available race chaining: concurrent senders") {
                 }
                 scheduler->enqueue(worker.get());
 
-                // Wait for completion
-                while (!future.available()) {
-                    scheduler->enqueue(dispatcher.get());
-                    scheduler->enqueue(worker.get());
-                    std::this_thread::yield();
-                }
+                // Wait for completion (file-local driver — see helper above).
+                drive_until_ready(future, scheduler, dispatcher.get(), worker.get());
 
                 // Safe to destroy
                 { auto temp = std::move(future); }

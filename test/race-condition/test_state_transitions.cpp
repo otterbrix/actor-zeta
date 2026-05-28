@@ -82,15 +82,16 @@ TEST_CASE("State Test 1.1: set_result vs cancel race") {
             scheduler->enqueue(actor.get());
         }
 
-        // Thread to cancel future (simulates timeout or user cancellation)
+        // Thread to drop the future (simulates timeout or user cancellation).
+        // unique_future no longer exposes cancel(); destroying the future from
+        // this thread races the actor's set_result(), exercising the same
+        // release-vs-set_result path that the cancel() variant used to.
         std::thread canceller([fut = std::move(future)]() mutable {
             // Random delay to create race window
             if (std::rand() % 3 == 0) {
                 std::this_thread::sleep_for(std::chrono::microseconds(500));
             }
-            // Cancel or destroy future
-            fut.cancel();
-            // Future destructor runs here
+            // Future destructor runs here (releases the shared state).
         });
 
         canceller.join();
@@ -144,7 +145,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
             bool last_state = false;  // Local to poller thread - no data race
 
             while (!stop_polling.load(std::memory_order_acquire)) {
-                bool current_state = future.available();
+                bool current_state = future.is_ready();
 
                 // Detect INVALID transition from true → false (should NEVER happen!)
                 if (last_state && !current_state) {
@@ -174,8 +175,8 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
         }
 
         // Consume future to clean up
-        if (future.available()) {
-            auto result = std::move(future).get();
+        if (future.is_ready()) {
+            auto result = std::move(future).take_ready();
             actor_zeta::detail::ignore_unused(result);
         }
     }
@@ -231,7 +232,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
             observers.emplace_back([&future, &stop_observing, &observers_saw_ready]() {
                 bool saw_ready = false;
                 while (!stop_observing.load(std::memory_order_acquire)) {
-                    if (future.available()) {
+                    if (future.is_ready()) {
                         saw_ready = true;
                         break;
                     }
@@ -259,8 +260,8 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
         REQUIRE(observers_saw_ready.load() >= 0);
 
         // Consume future
-        if (future.available()) {
-            auto result = std::move(future).get();
+        if (future.is_ready()) {
+            auto result = std::move(future).take_ready();
             REQUIRE(result == i + 1);
         }
     }
@@ -317,7 +318,7 @@ TEST_CASE("State Test 1.4: State transition ordering") {
         // Consumer thread: poll and read
         std::thread consumer([&future, expected_value, &ordering_violations, &successful_reads]() {
             // Spin until ready
-            while (!future.available()) {
+            while (!future.is_ready()) {
                 // Small delay to avoid pure spinning
                 std::this_thread::yield();
             }
@@ -326,7 +327,7 @@ TEST_CASE("State Test 1.4: State transition ordering") {
             // Memory ordering MUST guarantee that the result is visible.
 
             // Read the value
-            int actual_value = std::move(future).get();
+            int actual_value = std::move(future).take_ready();
 
             // Verify ordering: value must match expected
             // If memory ordering is broken, we might see:
@@ -387,7 +388,7 @@ TEST_CASE("State Test 1.5: Happens-before across state transitions") {
         std::thread consumer([&]() {
             // Wait for ready with timeout
             auto start = std::chrono::steady_clock::now();
-            while (!future.available()) {
+            while (!future.is_ready()) {
                 if (std::chrono::steady_clock::now() - start > std::chrono::seconds(2)) {
                     // Timeout - something wrong
                     visibility_failures.fetch_add(1, std::memory_order_relaxed);
@@ -398,7 +399,7 @@ TEST_CASE("State Test 1.5: Happens-before across state transitions") {
             }
 
             // Read and verify
-            int result = std::move(future).get();
+            int result = std::move(future).take_ready();
             if (result != i * 2) {  // compute returns value * 2
                 visibility_failures.fetch_add(1, std::memory_order_relaxed);
             }

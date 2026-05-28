@@ -14,14 +14,14 @@ template<typename T>
 std::pair<bool, T> wait_with_timeout(actor_zeta::unique_future<T>&& future,
                                       std::chrono::milliseconds timeout) {
     auto start = std::chrono::steady_clock::now();
-    while (!future.available()) {
+    while (!future.is_ready()) {
         auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed > timeout) {
             return {false, T{}};  // Timeout - return failure
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    return {true, std::move(future).get()};
+    return {true, std::move(future).take_ready()};
 }
 
 // Timeout constant for CI/CD (TSan adds 10-50x overhead)

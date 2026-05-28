@@ -96,15 +96,6 @@ namespace actor_zeta::actor {
         std::pmr::polymorphic_allocator<T> allocator() const noexcept {
             return {static_cast<const Derived*>(this)->resource()};
         }
-        /// Enqueue for sync processing (calls behavior() immediately)
-        /// This method is hidden by cooperative_actor::enqueue_impl for async actors
-        [[nodiscard]]
-        std::pair<bool, detail::enqueue_result> enqueue_impl(mailbox::message_ptr msg) {
-            auto* derived = static_cast<Derived*>(this);
-            derived->behavior(msg.get());
-            return {false, detail::enqueue_result::success};
-        }
-
     protected:
         actor_mixin() noexcept = default;
         ~actor_mixin() = default;

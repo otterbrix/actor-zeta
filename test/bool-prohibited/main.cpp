@@ -70,7 +70,7 @@ TEST_CASE("void methods work (fire-and-forget)") {
     actor->resume(10);
 
     // Wait for completion
-    std::move(future).get();
+    std::move(future).take_ready();
 
     REQUIRE(actor->get_ping_count() == 1);
 }
@@ -89,7 +89,7 @@ TEST_CASE("int methods work (request-response)") {
     actor->resume(10);
 
     // Wait for result
-    int result = std::move(future).get();
+    int result = std::move(future).take_ready();
     REQUIRE(result == 42);
 }
 
@@ -107,7 +107,7 @@ TEST_CASE("enum methods work (request-response)") {
     actor->resume(10);
 
     // Wait for result
-    auto status = std::move(future).get();
+    auto status = std::move(future).take_ready();
     REQUIRE(status == good_actor::status::ok);
 }
 
@@ -125,7 +125,7 @@ TEST_CASE("string methods work (request-response)") {
     actor->resume(10);
 
     // Wait for result
-    std::string name = std::move(future).get();
+    std::string name = std::move(future).take_ready();
     REQUIRE(name == "good_actor");
 }
 
@@ -141,7 +141,7 @@ TEST_CASE("address_t works with all method types") {
             addr,
             &good_actor::ping);
         actor->resume(10);
-        std::move(future).get();
+        std::move(future).take_ready();
     }
 
     // int via address_t
@@ -150,7 +150,7 @@ TEST_CASE("address_t works with all method types") {
             addr,
             &good_actor::calculate);
         actor->resume(10);
-        REQUIRE(std::move(future).get() == 42);
+        REQUIRE(std::move(future).take_ready() == 42);
     }
 
     // enum via address_t
@@ -159,7 +159,7 @@ TEST_CASE("address_t works with all method types") {
             addr,
             &good_actor::check_status);
         actor->resume(10);
-        REQUIRE(std::move(future).get() == good_actor::status::ok);
+        REQUIRE(std::move(future).take_ready() == good_actor::status::ok);
     }
 
     // string via address_t
@@ -168,7 +168,7 @@ TEST_CASE("address_t works with all method types") {
             addr,
             &good_actor::get_name);
         actor->resume(10);
-        REQUIRE(std::move(future).get() == "good_actor");
+        REQUIRE(std::move(future).take_ready() == "good_actor");
     }
 }
 

@@ -128,6 +128,12 @@ class sync_actor final : public actor_zeta::actor::actor_mixin<sync_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     explicit sync_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<sync_actor>()
         , resource_(ptr)
@@ -172,8 +178,8 @@ TEST_CASE("sync actor - actor_mixin processes immediately") {
         21);
 
     // With actor_mixin, result should be available immediately (no resume needed)
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 42);
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == 42);
     REQUIRE(actor->call_count() == 1);
 }
 
@@ -228,8 +234,8 @@ TEST_CASE("send via address_t - actor method dispatched correctly") {
     actor->resume(1);
 
     // Now future should be available
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 15);  // 5 + 10
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == 15);  // 5 + 10
     REQUIRE(actor->call_count() == 1);  // Method was called
 }
 
@@ -279,8 +285,8 @@ TEST_CASE("make_ready_future - void") {
 
     auto future = actor_zeta::make_ready_future(resource);
 
-    REQUIRE(future.available());
-    std::move(future).get(); // Should not throw/crash
+    REQUIRE(future.is_ready());
+    std::move(future).take_ready(); // Should not throw/crash
 }
 
 TEST_CASE("make_ready_future - int with value") {
@@ -288,8 +294,8 @@ TEST_CASE("make_ready_future - int with value") {
 
     auto future = actor_zeta::make_ready_future<int>(resource, 42);
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 42);
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == 42);
 }
 
 TEST_CASE("make_ready_future - string with value") {
@@ -297,8 +303,8 @@ TEST_CASE("make_ready_future - string with value") {
 
     auto future = actor_zeta::make_ready_future<std::string>(resource, std::string("hello"));
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == "hello");
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == "hello");
 }
 
 TEST_CASE("make_ready_future - int default constructed") {
@@ -306,8 +312,8 @@ TEST_CASE("make_ready_future - int default constructed") {
 
     auto future = actor_zeta::make_ready_future<int>(resource);
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == 0); // Default int is 0
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == 0); // Default int is 0
 }
 
 TEST_CASE("make_ready_future - string default constructed") {
@@ -315,8 +321,8 @@ TEST_CASE("make_ready_future - string default constructed") {
 
     auto future = actor_zeta::make_ready_future<std::string>(resource);
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get().empty()); // Default string is empty
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready().empty()); // Default string is empty
 }
 
 // ============================================================================
@@ -439,6 +445,12 @@ class sync_multi_actor final : public actor_zeta::actor::actor_mixin<sync_multi_
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     explicit sync_multi_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<sync_multi_actor>()
         , resource_(ptr)
@@ -506,8 +518,8 @@ TEST_CASE("sync actor - multiple methods") {
             &sync_multi_actor::add,
         10, 20);
 
-    REQUIRE(future1.available());
-    REQUIRE(std::move(future1).get() == 30);
+    REQUIRE(future1.is_ready());
+    REQUIRE(std::move(future1).take_ready() == 30);
     REQUIRE(actor->add_count() == 1);
 
     // Test multiply method
@@ -516,8 +528,8 @@ TEST_CASE("sync actor - multiple methods") {
             &sync_multi_actor::multiply,
         6, 7);
 
-    REQUIRE(future2.available());
-    REQUIRE(std::move(future2).get() == 42);
+    REQUIRE(future2.is_ready());
+    REQUIRE(std::move(future2).take_ready() == 42);
     REQUIRE(actor->multiply_count() == 1);
 
     // Test void method
@@ -525,8 +537,8 @@ TEST_CASE("sync actor - multiple methods") {
             actor.get(),
             &sync_multi_actor::reset);
 
-    REQUIRE(future3.available());
-    std::move(future3).get();  // Should not crash
+    REQUIRE(future3.is_ready());
+    std::move(future3).take_ready();  // Should not crash
     REQUIRE(actor->add_count() == 0);
     REQUIRE(actor->multiply_count() == 0);
 }
@@ -605,8 +617,8 @@ TEST_CASE("send via address_t - void return type") {
     // Process message
     actor->resume(1);
 
-    REQUIRE(future.available());
-    std::move(future).get();  // Should not crash
+    REQUIRE(future.is_ready());
+    std::move(future).take_ready();  // Should not crash
     REQUIRE(actor->called() == true);  // Method was called
 }
 
@@ -626,8 +638,8 @@ TEST_CASE("send via address_t - string return type") {
     // Process message
     actor->resume(1);
 
-    REQUIRE(future.available());
-    REQUIRE(std::move(future).get() == "test_name");  // Value from coroutine
+    REQUIRE(future.is_ready());
+    REQUIRE(std::move(future).take_ready() == "test_name");  // Value from coroutine
 }
 
 TEST_CASE("dispatch_traits - empty traits") {

@@ -53,28 +53,45 @@ unique_future<int> caller() {
     co_return result;
 }
 
-// Method 2: Polling
+// Method 2: top-level driver — pump until ready, then take.
+//   cross-thread (scheduler worker produces): pump = yield
+//   same-thread (no scheduler): pump = [&]{ worker->resume(1); }
 auto [needs_sched, future] = send(worker.get(), &Worker::compute, 42);
 if (needs_sched) scheduler->enqueue(worker.get());
-while (!future.available()) {
-    std::this_thread::yield();
-}
-int result = std::move(future).get();
+int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
 
 // Method 3: Fire-and-forget
 auto [_, fut] = send(logger.get(), &Logger::log, "message");
 fut.detach();  // Ignore result
 ```
 
+The blocking `get()` / `wait()` / `available()` API was removed (see CHANGELOG).
+There is no waiting method on `unique_future` anymore — the future is brought to
+ready externally (by a `co_await` inside a coroutine, by `run_until_complete`'s
+pump, or by an external producer thread), then the value is extracted with the
+non-blocking `take_ready()`.
+
 ## API Reference
 
 | Method | Description |
 |--------|-------------|
-| `available()` | Check if result is ready |
-| `get() &&` | Extract result (requires `available()`) |
-| `failed()` | Check for error |
-| `cancel()` | Cancel (best-effort) |
-| `co_await` | Wait in coroutine |
+| `co_await std::move(f)` | Wait inside a coroutine (primary API) |
+| `is_ready() const` | Non-blocking poll: has `release_promise()` been called? |
+| `take_ready() &&` | Extract the value — **asserts** the future is ready (no waiting). Pair with `co_await` / `run_until_complete` / external completion. |
+| `failed() const` | Future completed with an error |
+| `error() const` | Returns the error code (default-constructed if none) |
+| `detach()` | Fire-and-forget release |
+| `valid() const` | Future has a state (not moved-from) |
+
+Top-level driver (in `<actor-zeta/detail/run_loop.hpp>`, included by `<actor-zeta.hpp>`):
+
+```cpp
+template<typename T, typename Pump>
+T run_until_complete(unique_future<T>& f, Pump&& pump);   // void overload returns void
+```
+Invokes `pump()` repeatedly until `f.is_ready()`, then `take_ready()`s the value.
+Cancellation is observed via `failed()` / `error()` on the future (the producer
+sets it through `promise<T>::error(std::make_error_code(std::errc::operation_canceled))`).
 
 ## Patterns
 
@@ -91,24 +108,30 @@ for (auto& worker : workers) {
 }
 
 for (auto& future : futures) {
-    while (!future.available()) std::this_thread::yield();
-    int result = std::move(future).get();
+    int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
 }
 ```
 
-### Timeout
+### Timeout (poll with deadline)
+
+`unique_future` has no built-in timeout or `cancel()`. Either build your own
+deadline-poll loop using `is_ready()`, or have the producer set
+`std::errc::operation_canceled` (via `promise::error`) from another path:
 
 ```cpp
 auto [needs_sched, future] = send(worker.get(), &Worker::slow_task, data);
 if (needs_sched) scheduler->enqueue(worker.get());
 
-auto start = std::chrono::steady_clock::now();
-while (!future.available()) {
-    if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
-        future.cancel();
+auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+while (!future.is_ready()) {
+    if (std::chrono::steady_clock::now() > deadline) {
+        future.detach();           // give up on this future
         break;
     }
     std::this_thread::yield();
+}
+if (future.is_ready()) {
+    int result = std::move(future).take_ready();
 }
 ```
 
@@ -127,11 +150,12 @@ unique_future<int> chain(int x) {
 
 | Do | Don't |
 |----|-------|
-| Use `co_await` in coroutines | Busy-wait with `get()` |
-| Check `available()` before `get()` | Call `get()` blindly |
-| `reserve()` vector before adding futures | Let vector reallocate |
-| Wait for futures before destroying actor | Destroy actor with pending futures |
-| Use fire-and-forget for logging | Store futures indefinitely |
+| `co_await` inside coroutines (primary API) | Try `.get()` / `.wait()` / `.available()` — they no longer exist |
+| Drive top-level via `run_until_complete(f, pump)` | Hand-roll `while(!is_ready())` loops in production code |
+| Pair `take_ready()` with a guarantee of readiness | Call `take_ready()` on a future you haven't driven |
+| `reserve()` the vector before pushing futures | Let the vector reallocate (move-only futures) |
+| Stop the scheduler before destroying actors | Destroy actors with pending futures |
+| Fire-and-forget via `detach()` for logging | Store futures you'll never consume |
 
 ## Ownership Rules
 
@@ -145,16 +169,16 @@ unique_future<int> chain(int x) {
 
 | Issue | Solution |
 |-------|----------|
-| Hang in `get()` | Check handler uses `co_return`, actor is scheduled |
-| Assertion on actor destroy | Wait for all futures first |
-| Memory leak | Don't store futures indefinitely |
+| `take_ready()` aborts in debug | Future isn't ready: forgot `co_await` / `run_until_complete`, wrong actor in pump, handler didn't `co_return` |
+| `run_until_complete` debug-asserts after 100M iterations | Pump never makes progress — wrong actor, wrong scheduler, or future cancelled |
+| Use-after-free on actor destruction | Stop the scheduler / wait all futures BEFORE the actor is destroyed |
 
 ## Limitations
 
-- No timeout in `get()` - use polling with `available()`
-- No exceptions - use `failed()` and error codes
-- Single consumer - future is move-only
-- Actor must outlive futures
+- No built-in timeout — see the deadline-poll pattern above.
+- No exceptions — observe failure via `failed()` + `error()`.
+- Single consumer — `unique_future` is move-only.
+- Actor must outlive any future it produced (see CLAUDE.md "Actor Shutdown").
 
 ## See Also
 

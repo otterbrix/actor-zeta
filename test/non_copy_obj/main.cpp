@@ -34,6 +34,12 @@ class dummy_supervisor final : public actor_zeta::actor::actor_mixin<dummy_super
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     dummy_supervisor(memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<dummy_supervisor>()
         , resource_(ptr)
@@ -81,7 +87,8 @@ TEST_CASE("base move test") {
 
     auto [needs_sched, fut] = actor_zeta::send(supervisor.get(), &dummy_supervisor::check, std::move(ptr_data), data);
     REQUIRE(ptr_data == nullptr);
-    std::move(fut).get();
+    supervisor->scheduler_test()->run_once();
+    std::move(fut).take_ready();
 }
 
 TEST_CASE("construct in place") {
@@ -91,5 +98,6 @@ TEST_CASE("construct in place") {
     auto data = dummy_data();
 
     auto [needs_sched, fut] = actor_zeta::send(supervisor.get(), &dummy_supervisor::check, std::unique_ptr<dummy_data>(new dummy_data), data);
-    std::move(fut).get();
+    supervisor->scheduler_test()->run_once();
+    std::move(fut).take_ready();
 }

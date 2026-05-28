@@ -14,14 +14,14 @@ template<typename T>
 std::pair<bool, T> wait_with_timeout(actor_zeta::unique_future<T>&& future,
                                       std::chrono::milliseconds timeout) {
     auto start = std::chrono::steady_clock::now();
-    while (!future.available()) {
+    while (!future.is_ready()) {
         auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed > timeout) {
             return {false, T{}};
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    return {true, std::move(future).get()};
+    return {true, std::move(future).take_ready()};
 }
 
 // Wait for available() with timeout
@@ -29,7 +29,7 @@ template<typename T>
 bool wait_available_with_timeout(actor_zeta::unique_future<T>& future,
                                   std::chrono::milliseconds timeout) {
     auto start = std::chrono::steady_clock::now();
-    while (!future.available()) {
+    while (!future.is_ready()) {
         auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed > timeout) {
             return false;
@@ -203,8 +203,8 @@ TEST_CASE("Refcount Test 2.2: Stress test with 1000 concurrent futures") {
                         break;
                     case 3:
                         // Wait for ready then destroy
-                        if (future.available()) {
-                            auto result = std::move(future).get();
+                        if (future.is_ready()) {
+                            auto result = std::move(future).take_ready();
                             actor_zeta::detail::ignore_unused(result);
                         }
                         break;
@@ -330,8 +330,8 @@ TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction pat
                         case 0: // Immediate destroy
                             break;
                         case 1: // Consume
-                            if (future.available()) {
-                                actor_zeta::detail::ignore_unused(std::move(future).get());
+                            if (future.is_ready()) {
+                                actor_zeta::detail::ignore_unused(std::move(future).take_ready());
                             }
                             break;
                         case 2: // Wait then destroy (with timeout)

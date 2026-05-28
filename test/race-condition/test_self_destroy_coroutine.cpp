@@ -56,8 +56,8 @@ TEST_CASE("unique_future: no handle_ member") {
     // This test verifies the structure by checking state_ via internal_state()
     REQUIRE(future.valid());
     REQUIRE(future.internal_state() != nullptr);
-    // Initially no result set, future not available
-    REQUIRE_FALSE(future.available());
+    // Initially no result set, future not ready
+    REQUIRE_FALSE(future.is_ready());
 
     p.set_value(42);
 }

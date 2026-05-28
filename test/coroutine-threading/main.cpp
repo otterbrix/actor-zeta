@@ -125,7 +125,7 @@ public:
     /// when awaited future becomes ready. We just clean up completed ones.
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->available()) {
+            if (it->is_ready()) {
                 g_log.log("[%::poll_pending] coroutine completed", name_);
                 it = pending_.erase(it);
             } else {
@@ -147,7 +147,7 @@ public:
         // Send request to worker via address_t
         g_log.log("[%::process] Sending to worker...", name_);
         auto [needs_sched, future] = send(worker_address_, &worker_actor::compute, x);
-        g_log.log("[%::process] future.available()=%", name_, future.available());
+        g_log.log("[%::process] future.is_ready()=%", name_, future.is_ready());
 
         // co_await - suspend if not ready, continue when ready
         auto tid_before_await = thread_id_str();
@@ -232,8 +232,8 @@ TEST_CASE("single-thread: worker only") {
     auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
     worker->resume(1);
 
-    REQUIRE(future.available());
-    int result = std::move(future).get();
+    REQUIRE(future.is_ready());
+    int result = std::move(future).take_ready();
 
     REQUIRE(result == 42);
     REQUIRE(worker->last_compute_thread() == main_thread);
@@ -258,7 +258,7 @@ TEST_CASE("single-thread: client-worker") {
     //    process() sends message to worker, suspends on co_await
     client->resume(1);
     g_log.log("[TEST] After client resume");
-    REQUIRE(!future.available());  // Still waiting for worker
+    REQUIRE(!future.is_ready());  // Still waiting for worker
 
     // 2. Resume worker - processes compute(), inner_future becomes ready
     worker->resume(1);
@@ -266,10 +266,10 @@ TEST_CASE("single-thread: client-worker") {
 
     // 3. Resume client again - the awaiting coroutine resumes and completes
     client->resume(10);
-    g_log.log("[TEST] After second client resume, future.available()=%", future.available());
+    g_log.log("[TEST] After second client resume, future.is_ready()=%", future.is_ready());
 
-    REQUIRE(future.available());
-    int result = std::move(future).get();
+    REQUIRE(future.is_ready());
+    int result = std::move(future).take_ready();
 
     // 21 * 2 + 10 = 52
     REQUIRE(result == 52);
@@ -321,11 +321,11 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
 
         // 3. Resume client again - the awaiting coroutine resumes and completes
         client->resume(10);
-        g_log.log("[CLIENT_THREAD] After second client resume, future.available()=%", future.available());
+        g_log.log("[CLIENT_THREAD] After second client resume, future.is_ready()=%", future.is_ready());
 
-        future_available = future.available();
+        future_available = future.is_ready();
         if (future_available) {
-            result = std::move(future).get();
+            result = std::move(future).take_ready();
         }
         g_log.log("[CLIENT_THREAD] result=%", result.load());
 
@@ -381,9 +381,9 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         worker1->resume(1);
         client1->resume(10);  // Resume to complete awaiting coroutine
 
-        future1_available = future.available();
+        future1_available = future.is_ready();
         if (future1_available) {
-            result1 = std::move(future).get();
+            result1 = std::move(future).take_ready();
         }
         g_log.log("[THREAD1] result1=%", result1.load());
     });
@@ -397,9 +397,9 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         worker2->resume(1);
         client2->resume(10);  // Resume to complete awaiting coroutine
 
-        future2_available = future.available();
+        future2_available = future.is_ready();
         if (future2_available) {
-            result2 = std::move(future).get();
+            result2 = std::move(future).take_ready();
         }
         g_log.log("[THREAD2] result2=%", result2.load());
     });
@@ -482,9 +482,9 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
         worker->resume(1);
         client->resume(10);  // Resume to complete awaiting coroutine
 
-        future_available = future.available();
+        future_available = future.is_ready();
         if (future_available) {
-            result = std::move(future).get();
+            result = std::move(future).take_ready();
         }
         g_log.log("[CLIENT_THREAD] result=%", result.load());
     });
@@ -539,8 +539,8 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
             local_worker->resume(1);
             local_client->resume(10);  // Resume to complete awaiting coroutine
 
-            if (future.available()) {
-                int result = std::move(future).get();
+            if (future.is_ready()) {
+                int result = std::move(future).take_ready();
                 int expected = (i + 1) * 10 * 2 + 10;
                 g_log.log("[THREAD %] result=% expected=%", i, result, expected);
 
