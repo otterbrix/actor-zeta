@@ -90,71 +90,51 @@ namespace actor_zeta::detail {
         }
 
 
-        /// @brief Atomically take the continuation handle
-        /// @return The continuation handle, or null handle if none was set
         [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
             return continuation_.exchange(nullptr, std::memory_order_acq_rel);
         }
 
-
-        /// @brief Release the promise side.
-        /// @return true if this call deallocated the state (future was already released),
-        ///         meaning the continuation should NOT be resumed (cancelled).
+        // Returns true if this call deallocated the state (future already released =>
+        // cancelled; the continuation must NOT be resumed).
         [[nodiscard]] bool release_promise() noexcept {
             auto old = flags_.fetch_or(state_flags::promise_released,std::memory_order_acq_rel);
 
             if (old & state_flags::future_released) {
-                deallocate();  // Last one out
-                return true;   // Cancelled - don't resume continuation
+                deallocate();
+                return true;
             }
-            return false;  // Future still alive - safe to resume continuation
+            return false;
         }
 
         void release_future() noexcept {
             auto old = flags_.fetch_or(state_flags::future_released, std::memory_order_acq_rel);
-            // Deallocate only if:
-            // - Promise was already released (promise_released set)
-            // - AND producer is NOT in final_suspend path (promise_finalizing not set)
-            // If producer is finalizing, it will handle deallocation after its double-check.
+            // Last-One-Out: deallocate only if the promise is fully done; if the producer
+            // is in its final_suspend path (promise_finalizing set), it will deallocate
+            // after its double-check.
             bool promise_was_released = old & state_flags::promise_released;
             bool producer_is_finalizing = old & state_flags::promise_finalizing;
             if (promise_was_released && !producer_is_finalizing) {
-                deallocate();  // Last one out, and producer is completely done
+                deallocate();
             }
-            // If producer is finalizing, it will see our future_released flag
-            // in its double-check and handle deallocation.
         }
 
-        /// @brief Try to complete the finalize phase by clearing the finalizing flag.
-        /// Uses CAS to atomically check if future was released concurrently.
-        /// @return true if finalizing was cleared (consumer will deallocate later)
-        /// @return false if future_released was set (producer should deallocate)
+        // CAS the finalizing flag off; returns false if future_released raced in
+        // (then we deallocate ourselves).
         [[nodiscard]] bool try_complete_finalize() noexcept {
-            // Expected: finalizing + released (no future_released)
-            std::uint8_t expected = state_flags::promise_finalizing | state_flags::promise_released;
-            // Also allow value_set or error_set flags
-            std::uint8_t current = flags_.load(std::memory_order_acquire);
-            expected = static_cast<std::uint8_t>(current & ~state_flags::future_released);  // Current minus future_released
-
-            // Try to clear finalizing flag
-            std::uint8_t desired = static_cast<std::uint8_t>(expected & ~state_flags::promise_finalizing);
+            std::uint8_t current  = flags_.load(std::memory_order_acquire);
+            std::uint8_t expected = static_cast<std::uint8_t>(current & ~state_flags::future_released);
+            std::uint8_t desired  = static_cast<std::uint8_t>(expected & ~state_flags::promise_finalizing);
 
             if (flags_.compare_exchange_strong(expected, desired,
                                                std::memory_order_acq_rel,
                                                std::memory_order_acquire)) {
-                // CAS succeeded: finalizing cleared, future will deallocate later
                 return true;
             }
-
-            // CAS failed: check if future_released was set
             if (expected & state_flags::future_released) {
-                // Future was released concurrently - we should deallocate
                 deallocate();
                 return false;
             }
-
-            // Something else changed (shouldn't happen normally)
-            // Try clearing finalizing anyway for safety
+            // Defensive: clear finalizing on unexpected race.
             flags_.fetch_and(static_cast<std::uint8_t>(~state_flags::promise_finalizing), std::memory_order_release);
             return true;
         }
@@ -217,9 +197,8 @@ namespace actor_zeta::detail {
         }
 
 
-        /// @brief Release the promise side.
-        /// @return true if this call deallocated the state (future was already released),
-        ///         meaning the continuation should NOT be resumed (cancelled).
+        // Returns true if this call deallocated the state (future already released =>
+        // cancelled; the continuation must NOT be resumed).
         [[nodiscard]] bool release_promise() noexcept {
             auto old = flags_.fetch_or(state_flags::promise_released,
                                        std::memory_order_acq_rel);
@@ -232,23 +211,18 @@ namespace actor_zeta::detail {
 
         void release_future() noexcept {
             auto old = flags_.fetch_or(state_flags::future_released, std::memory_order_acq_rel);
-            // Deallocate only if:
-            // - Promise was already released (promise_released set)
-            // - AND producer is NOT in final_suspend path (promise_finalizing not set)
-            // If producer is finalizing, it will handle deallocation after its double-check.
+            // Last-One-Out: deallocate only if the promise is fully done; if the producer
+            // is in its final_suspend path (promise_finalizing set), it will deallocate
+            // after its double-check.
             bool promise_was_released = old & state_flags::promise_released;
             bool producer_is_finalizing = old & state_flags::promise_finalizing;
             if (promise_was_released && !producer_is_finalizing) {
-                deallocate();  // Last one out, and producer is completely done
+                deallocate();
             }
-            // If producer is finalizing, it will see our future_released flag
-            // in its double-check and handle deallocation.
         }
 
-        /// @brief Try to complete the finalize phase by clearing the finalizing flag.
-        /// Uses CAS to atomically check if future was released concurrently.
-        /// @return true if finalizing was cleared (consumer will deallocate later)
-        /// @return false if future_released was set (producer should deallocate)
+        // CAS the finalizing flag off; returns false if future_released raced in
+        // (then we deallocate ourselves).
         [[nodiscard]] bool try_complete_finalize() noexcept {
             std::uint8_t current = flags_.load(std::memory_order_acquire);
             std::uint8_t expected = static_cast<std::uint8_t>(current & ~state_flags::future_released);
