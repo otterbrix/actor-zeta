@@ -56,6 +56,12 @@ class supervisor_actor final : public actor_zeta::actor::actor_mixin<supervisor_
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     supervisor_actor(std::pmr::memory_resource* ptr, actor_zeta::scheduler::sharing_scheduler* scheduler)
         : actor_zeta::actor::actor_mixin<supervisor_actor>()
         , resource_(ptr)
@@ -154,10 +160,9 @@ int main() {
     // while we drive, and is stopped before the actor is destroyed.
     auto await_request = [](auto future_pair) {
         auto& future = future_pair.second;
-        while (!future.is_ready()) {
-            std::this_thread::yield();
-        }
-        std::move(future).take_ready();
+        // Drive via run_until_complete with a yield pump (the real scheduler produces
+        // cross-thread; nothing to pump locally). Result intentionally discarded here.
+        (void) actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
     };
 
     std::cerr << "--- Creating Workers ---" << std::endl;

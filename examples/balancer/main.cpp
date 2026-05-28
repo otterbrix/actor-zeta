@@ -92,6 +92,12 @@ class collection_t final : public actor_zeta::actor::actor_mixin<collection_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     collection_t(std::pmr::memory_resource* resource, actor_zeta::sharing_scheduler*)
         : actor_zeta::actor::actor_mixin<collection_t>()
         , resource_(resource) {

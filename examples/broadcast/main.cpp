@@ -52,6 +52,12 @@ class supervisor_lite final : public actor_zeta::actor::actor_mixin<supervisor_l
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     supervisor_lite(memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<supervisor_lite>()
         , resource_(ptr)
@@ -125,10 +131,8 @@ int main() {
     for (auto i = actors; i > 0; --i) {
         auto [needs_sched, future] = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
         (void) needs_sched; // synchronous actor_mixin: future is ready immediately
-        while (!future.is_ready()) {
-            std::this_thread::yield();
-        }
-        std::move(future).take_ready();
+        // Drive via run_until_complete (yield pump); loop body never runs when already ready.
+        actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
     }
 
     std::size_t total_size = 0;
@@ -146,11 +150,9 @@ int main() {
             if (needs_sched) {
                 supervisor->schedule_worker(i);
             }
-            // Worker runs on the supervisor's internal scheduler (cross-thread): poll.
-            while (!future.is_ready()) {
-                std::this_thread::yield();
-            }
-            total_size += std::move(future).take_ready();
+            // Worker runs on the supervisor's internal scheduler (cross-thread): drive
+            // via run_until_complete with a yield pump (nothing to pump locally).
+            total_size += actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
         }
     }
 

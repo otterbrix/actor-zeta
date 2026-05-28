@@ -40,6 +40,12 @@ namespace actor_zeta { namespace mailbox {
         message* prev;
         auto command() const noexcept -> message_id;
 
+        // Re-stamp the command without touching body/result_slot. Enables router/proxy
+        // patterns (actor_mixin enqueue_impl that delegates to a worker by changing the
+        // command id and forwarding the same message — caller's future is filled by the
+        // worker via the inherited result_slot_).
+        void set_command(message_id id) noexcept { command_ = id; }
+
         auto body() -> actor_zeta::detail::rtt&;
         operator bool();
         void swap(message& other) noexcept;

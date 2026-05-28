@@ -55,6 +55,12 @@ class dummy_supervisor_sub final : public actor_zeta::actor::actor_mixin<dummy_s
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     dummy_supervisor_sub(dummy_supervisor* ptr);
 
     dummy_supervisor_sub(std::pmr::memory_resource* ptr, dummy_supervisor*)
@@ -91,6 +97,12 @@ private:
 class dummy_supervisor final : public actor_zeta::actor::actor_mixin<dummy_supervisor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
 
     dummy_supervisor(std::pmr::memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<dummy_supervisor>()

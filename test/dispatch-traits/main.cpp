@@ -128,6 +128,12 @@ class sync_actor final : public actor_zeta::actor::actor_mixin<sync_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
+
     explicit sync_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<sync_actor>()
         , resource_(ptr)
@@ -438,6 +444,12 @@ TEST_CASE("address_t - empty_address has nullptr resource") {
 class sync_multi_actor final : public actor_zeta::actor::actor_mixin<sync_multi_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
+
+    [[nodiscard]] std::pair<bool, actor_zeta::detail::enqueue_result>
+    enqueue_impl(actor_zeta::mailbox::message_ptr msg) {
+        behavior(msg.get());
+        return {false, actor_zeta::detail::enqueue_result::success};
+    }
 
     explicit sync_multi_actor(std::pmr::memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<sync_multi_actor>()
