@@ -48,24 +48,19 @@ namespace actor_zeta {
             if constexpr (type_traits::is_unique_future_v<method_result_type>) {
                 using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
-                // Create message with shared_state for the result
                 auto [msg, future] = detail::make_message<value_type>(
                     actor->resource(), cmd, std::forward<Args>(args)...);
 
-                // Enqueue the message
+                // On queue_closed the message destructor calls cleanup_fn_, which sets
+                // operation_canceled on the slot and releases the promise — no manual
+                // handling needed here.
                 auto [needs_sched, result] = actor->enqueue_impl(std::move(msg));
-
-                // On queue_closed, the message destructor will automatically call cleanup_fn_
-                // which sets error and releases promise - no need to manually handle it
                 ignore_unused(result);
-
-                // Return pair<bool, future> for new API
                 return {needs_sched, std::move(future)};
 
             } else if constexpr (type_traits::is_generator_v<method_result_type>) {
                 using value_type = typename method_result_type::value_type;
 
-                // Create message with generator_state
                 auto [msg, gen] = detail::make_generator_message<value_type>(
                     actor->resource(), cmd, std::forward<Args>(args)...);
 
@@ -94,23 +89,15 @@ namespace actor_zeta {
             if constexpr (type_traits::is_unique_future_v<method_result_type>) {
                 using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
-                // Create message with shared_state for the result
                 auto [msg, future] = detail::make_message<value_type>(
                     target.resource(), cmd, std::forward<Args>(args)...);
-
-                // Enqueue the message
                 auto [needs_sched, result] = target.enqueue_impl(std::move(msg));
-
-                // On queue_closed, the message destructor will automatically call cleanup_fn_
                 ignore_unused(result);
-
-                // Return pair<bool, future> for new API
                 return {needs_sched, std::move(future)};
 
             } else if constexpr (type_traits::is_generator_v<method_result_type>) {
                 using value_type = typename method_result_type::value_type;
 
-                // Create message with generator_state
                 auto [msg, gen] = detail::make_generator_message<value_type>(
                     target.resource(), cmd, std::forward<Args>(args)...);
 
@@ -134,7 +121,6 @@ namespace actor_zeta {
         -> detail::send_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
 
-        // Compile-time validation: method must be registered in dispatch_traits
         static_assert(detail::validate_method_for_send<Actor, Method>::valid,
                       "send(): Method validation failed - see above for details");
 
@@ -157,7 +143,6 @@ namespace actor_zeta {
         -> detail::send_result_t<Interface, typename type_traits::callable_trait<Method>::result_type> {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
 
-        // Compile-time validation: method must be registered in dispatch_traits
         static_assert(detail::validate_method_for_send<Interface, Method>::valid,
                       "send(): Method validation failed - see above for details");
 
@@ -173,9 +158,7 @@ namespace actor_zeta {
             method, target, std::forward<Args>(args)...);
     }
 
-    // send() for address_t when Method belongs to Actor (not Interface)
-    // This allows sending to an actor via its address
-
+    // send() for address_t when Method belongs to Actor (not Interface).
     template<typename Method, typename... Args,
              typename Actor = typename type_traits::callable_trait<Method>::class_type>
         requires detail::is_actor<Actor>
@@ -183,7 +166,6 @@ namespace actor_zeta {
         -> detail::send_result_t<Actor, typename type_traits::callable_trait<Method>::result_type> {
         using result_type = typename type_traits::callable_trait<Method>::result_type;
 
-        // Compile-time validation: method must be registered in dispatch_traits
         static_assert(detail::validate_method_for_send<Actor, Method>::valid,
                       "send(): Method validation failed - see above for details");
 
@@ -193,8 +175,7 @@ namespace actor_zeta {
 
         assert(target && "target address must not be empty");
 
-        // Cast address back to Actor* and use direct dispatch
-        auto* actor = static_cast<Actor*>(target.get());
+        auto* actor = static_cast<Actor*>(target.get());   // direct dispatch path
         using methods = typename Actor::dispatch_traits::methods;
 
         return runtime_dispatch_helper<Actor, Method, methods>::dispatch(
