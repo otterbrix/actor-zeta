@@ -118,8 +118,7 @@ namespace actor_zeta { namespace actor {
         template<typename T>
         using unique_future = actor_zeta::unique_future<T>;
 
-        /// Type-erased enqueue for address_t polymorphism
-        /// Returns: {needs_scheduling, enqueue_result}
+        /// Type-erased enqueue for address_t polymorphism.
         [[nodiscard]]
         std::pair<bool, detail::enqueue_result> enqueue_impl(mailbox::message_ptr msg) {
             if (is_destroying(state_.load(std::memory_order_acquire))) {
@@ -194,12 +193,11 @@ namespace actor_zeta { namespace actor {
                     if (state_.compare_exchange_weak(current, desired,
                                                      std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
-                        return true;  // Successfully acquired
+                        return true;
                     }
                 }
             };
 
-            // Try to acquire - if actor already running, return immediately
             if (!try_acquire_running()) {
                 return scheduler::resume_info(scheduler::resume_result::done, 0);
             }
@@ -295,19 +293,16 @@ namespace actor_zeta { namespace actor {
                 return finalize(scheduler::resume_result::awaiting, 0, false);
             }
 
-            // Q6: If behavior is suspended on co_await, check if deepest future is ready
+            // Q6: behavior suspended on co_await — if its deepest awaited future is
+            // ready, take the continuation and unwind the chain via symmetric transfer
+            // in final_suspend; otherwise spin and keep the actor scheduled.
             if (current_behavior_.is_busy()) {
                 if (current_behavior_.is_awaited_ready()) {
-                    // Deepest future ready — take and resume its continuation
-                    // This unwinds the coroutine chain via symmetric transfer in final_suspend
                     auto cont = current_behavior_.take_awaited_continuation();
                     if (cont) {
-                        cont.resume();  // Unwinds chain: process → dispatch → behavior_t
+                        cont.resume();
                     }
-                    // After unwinding, behavior may be done or not busy
-                    // Continue to process messages if not busy
                 } else {
-                    // Future not ready — spinning, keep actor scheduled
                     return finalize(scheduler::resume_result::resume, 0, true);
                 }
             }
@@ -337,22 +332,19 @@ namespace actor_zeta { namespace actor {
                     return finalize(scheduler::resume_result::awaiting, handled, false);
                 }
 
-                // Q6: Check if behavior became busy after processing previous message
+                // Q6 (see resume_impl entry above): if the awaited future is ready,
+                // unwind via symmetric transfer; otherwise spin.
                 if (current_behavior_.is_busy()) {
                     if (current_behavior_.is_awaited_ready()) {
-                        // Deepest future ready — take and resume its continuation
                         auto cont = current_behavior_.take_awaited_continuation();
                         if (cont) {
-                            cont.resume();  // Unwinds chain via symmetric transfer
+                            cont.resume();
                         }
-                        // Continue loop if not busy anymore
                     } else {
-                        // Future not ready — spinning, keep actor scheduled
                         return finalize(scheduler::resume_result::resume, handled, true);
                     }
                 }
 
-                // Skip message processing if still busy after resume attempt
                 if (current_behavior_.is_busy()) {
                     return finalize(scheduler::resume_result::resume, handled, true);
                 }
@@ -409,7 +401,6 @@ namespace actor_zeta { namespace actor {
                 return finalize(scheduler::resume_result::done, handled, false);
             }
 
-            // If still busy after processing messages, keep spinning
             if (current_behavior_.is_busy()) {
                 return finalize(scheduler::resume_result::resume, handled, true);
             }
