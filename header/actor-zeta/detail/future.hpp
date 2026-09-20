@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <exception>
 #include <concepts>
 #include <memory_resource>
 #include <new>
@@ -208,6 +209,11 @@ namespace actor_zeta {
         // take_ready() - extract the value of an already-ready future without blocking.
         // Asserts readiness instead of waiting. Replaces the removed blocking get().
         [[nodiscard]] T take_ready() && requires(!std::is_void_v<T>) {
+            // Rethrow BEFORE the readiness assert: a captured exception sets error_set,
+            // so the assert would trip on it first and hide the real cause.
+            if (state_) {
+                state_->rethrow_if_exception();
+            }
             assert(state_ && state_->has_result() && !state_->has_error()
                    && "take_ready() on a future that is not ready or completed with error");
             T r = state_->take_value();
@@ -216,6 +222,9 @@ namespace actor_zeta {
         }
 
         void take_ready() && requires(std::is_void_v<T>) {
+            if (state_) {
+                state_->rethrow_if_exception();
+            }
             assert(state_ && state_->has_result() && !state_->has_error()
                    && "take_ready() on a future that is not ready or completed with error");
             release();
@@ -386,7 +395,21 @@ namespace actor_zeta {
             // are inherited from detail::future_awaiter_mixin<PromiseDerived>.
 
             void unhandled_exception() noexcept {
-                assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
+#ifdef __cpp_exceptions
+                // Reachable ONLY in an -fexceptions build. Returning from here is not
+                // undefined -- it is SPECIFIED to mean "handled, carry on to
+                // final_suspend", i.e. the exception is swallowed and the coroutine
+                // reports normal completion. Capture it instead; take_ready() and
+                // await_resume() rethrow it where the value would have been produced.
+                if (this->state_) {
+                    this->state_->set_exception(std::current_exception());
+                }
+#else
+                // With -fno-exceptions the compiler emits no catch wrapper for a coroutine
+                // body, so nothing can reach this. Kept because the promise concept
+                // requires the member to exist.
+                std::terminate();
+#endif
             }
 
             promise_type_base() noexcept

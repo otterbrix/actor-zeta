@@ -4,11 +4,27 @@
 #include <cassert>
 #include <cstdint>
 #include <memory_resource>
+#include <exception>
 #include <system_error>
 
 #include <actor-zeta/detail/coroutine.hpp>
 #include <actor-zeta/detail/result_storage.hpp>
 #include <actor-zeta/detail/state_flags.hpp>
+
+
+// The exception_ptr machinery below is gated on __cpp_exceptions -- the compiler's own
+// answer, which is what actually decides whether a coroutine body gets a catch wrapper
+// at all. __EXCEPTIONS_DISABLE__ is the project's CMake intent; if the two disagree,
+// the build is misconfigured and everything here reasons about the wrong mode.
+#if defined(__EXCEPTIONS_DISABLE__) && defined(__cpp_exceptions)
+#error "EXCEPTIONS_DISABLE=ON, but the compiler still has exceptions enabled -- check that -fno-exceptions actually reached this translation unit"
+#endif
+
+// ODR REQUIREMENT, accepted deliberately. shared_state carries an exception_ptr only in
+// an -fexceptions build, so sizeof() and several inline bodies differ between the two
+// modes. The library is header-only and the setting is a global compiler flag, so every
+// translation unit in one build already agrees; linking objects compiled with DIFFERENT
+// settings is undefined and nothing here can diagnose it.
 
 namespace actor_zeta::detail {
 
@@ -32,6 +48,13 @@ namespace actor_zeta::detail {
         result_storage<T> value_;
         std::atomic<std::coroutine_handle<>> continuation_{nullptr};   // non-owning
         std::error_code error_{};
+#ifdef __cpp_exceptions
+        // Captured by unhandled_exception() when the coroutine body escapes with an
+        // exception, and rethrown at extraction. Exists ONLY in an -fexceptions build:
+        // with -fno-exceptions the compiler emits no catch wrapper for a coroutine body,
+        // so nothing can ever be stored here. See the ODR note at the top.
+        std::exception_ptr exception_{};
+#endif
 
         explicit shared_state(std::pmr::memory_resource* r) noexcept
             : resource_(r)
@@ -59,6 +82,31 @@ namespace actor_zeta::detail {
             error_ = ec;
             flags_.fetch_or(state_flags::error_set, std::memory_order_release);
         }
+
+#ifdef __cpp_exceptions
+        // Capture an escaped exception. Also stamps an error code so a consumer that only
+        // polls failed()/error() -- never extracting -- still sees a real failure and can
+        // tell it apart from "released without an outcome" (state_not_recoverable,
+        // written by release_promise()'s totality repair).
+        void set_exception(std::exception_ptr ep) noexcept {
+            exception_ = ep;
+            error_ = std::make_error_code(std::errc::interrupted);
+            flags_.fetch_or(state_flags::error_set, std::memory_order_release);
+        }
+
+        // Rethrow at the extraction point, so the exception surfaces where the value
+        // would have. Called before any has_error() gate, since a captured exception sets
+        // error_set and would otherwise trip it first.
+        void rethrow_if_exception() const {
+            if ((flags_.load(std::memory_order_acquire) & state_flags::error_set) && exception_) {
+                std::rethrow_exception(exception_);
+            }
+        }
+#else
+        // No exceptions: nothing can be captured, so this is an empty hook that keeps the
+        // extraction sites free of #ifdef.
+        void rethrow_if_exception() const noexcept {}
+#endif
 
         // Read API (from future).
         [[nodiscard]] bool is_ready() const noexcept {
@@ -193,6 +241,13 @@ namespace actor_zeta::detail {
         std::atomic<std::uint8_t> flags_{state_flags::empty};
         std::atomic<std::coroutine_handle<>> continuation_{nullptr};
         std::error_code error_{};
+#ifdef __cpp_exceptions
+        // Captured by unhandled_exception() when the coroutine body escapes with an
+        // exception, and rethrown at extraction. Exists ONLY in an -fexceptions build:
+        // with -fno-exceptions the compiler emits no catch wrapper for a coroutine body,
+        // so nothing can ever be stored here. See the ODR note at the top.
+        std::exception_ptr exception_{};
+#endif
 
         explicit shared_state(std::pmr::memory_resource* r) noexcept
             : resource_(r) {}
@@ -212,6 +267,31 @@ namespace actor_zeta::detail {
             error_ = ec;
             flags_.fetch_or(state_flags::error_set, std::memory_order_release);
         }
+
+#ifdef __cpp_exceptions
+        // Capture an escaped exception. Also stamps an error code so a consumer that only
+        // polls failed()/error() -- never extracting -- still sees a real failure and can
+        // tell it apart from "released without an outcome" (state_not_recoverable,
+        // written by release_promise()'s totality repair).
+        void set_exception(std::exception_ptr ep) noexcept {
+            exception_ = ep;
+            error_ = std::make_error_code(std::errc::interrupted);
+            flags_.fetch_or(state_flags::error_set, std::memory_order_release);
+        }
+
+        // Rethrow at the extraction point, so the exception surfaces where the value
+        // would have. Called before any has_error() gate, since a captured exception sets
+        // error_set and would otherwise trip it first.
+        void rethrow_if_exception() const {
+            if ((flags_.load(std::memory_order_acquire) & state_flags::error_set) && exception_) {
+                std::rethrow_exception(exception_);
+            }
+        }
+#else
+        // No exceptions: nothing can be captured, so this is an empty hook that keeps the
+        // extraction sites free of #ifdef.
+        void rethrow_if_exception() const noexcept {}
+#endif
 
         [[nodiscard]] bool is_ready() const noexcept {
             return flags_.load(std::memory_order_acquire) & state_flags::promise_released;

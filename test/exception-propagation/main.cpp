@@ -1,0 +1,126 @@
+/// @file
+/// An exception escaping a coroutine body must reach the consumer.
+///
+/// This target is deliberately built with -fexceptions while the rest of the suite
+/// is -fno-exceptions, because the machinery under test EXISTS only in that mode:
+/// with -fno-exceptions the compiler emits no catch wrapper for a coroutine body at
+/// all, so unhandled_exception() is dead code there.
+///
+/// What used to happen: unhandled_exception() contained only assert(false) and
+/// RETURNED. Returning is not undefined -- it is specified to mean "handled, carry
+/// on to final_suspend" -- so the exception was swallowed and the future reported
+/// is_ready()==1, failed()==0 and a garbage value. Under NDEBUG (every Release
+/// build) there was no diagnostic at all.
+///
+/// No Catch2 here on purpose: Catch2 is header-only, and pulling it into a
+/// -fexceptions translation unit alongside a -fno-exceptions library would mix two
+/// compilation modes. This target compiles the library source itself instead.
+
+#include <cstdio>
+#include <memory_resource>
+#include <stdexcept>
+#include <string>
+
+#include <actor-zeta.hpp>
+#include <actor-zeta/actor/dispatch.hpp>
+
+using namespace actor_zeta;
+
+namespace {
+
+    int failures = 0;
+
+    void check(bool ok, const char* what) {
+        std::printf("%s  %s\n", ok ? "ok  " : "FAIL", what);
+        if (!ok) {
+            ++failures;
+        }
+    }
+
+    class thrower_actor final : public basic_actor<thrower_actor> {
+    public:
+        explicit thrower_actor(std::pmr::memory_resource* resource)
+            : basic_actor<thrower_actor>(resource) {}
+
+        unique_future<int> inner(int x) {
+            if (x < 0) {
+                throw std::runtime_error("inner said no");
+            }
+            co_return x * 2;
+        }
+
+        /// Awaits inner(), so a failure has to cross a co_await to get here.
+        unique_future<int> outer(int x) {
+            const int v = co_await inner(x);
+            co_return v + 1;
+        }
+
+        using dispatch_traits = actor_zeta::dispatch_traits<&thrower_actor::inner,
+                                                            &thrower_actor::outer>;
+
+        behavior_t behavior(mailbox::message*) { co_return; }
+    };
+
+} // namespace
+
+int main() {
+    auto* resource = std::pmr::get_default_resource();
+    auto actor = spawn<thrower_actor>(resource);
+
+    // A consumer that only polls -- downstream does exactly this -- never extracts,
+    // so it never sees the exception. It must still see a failure, and one whose
+    // code is distinguishable from "producer released without an outcome"
+    // (state_not_recoverable, written by release_promise()'s totality repair).
+    {
+        auto future = actor->inner(-1);
+        check(future.is_ready(), "poller: a thrown body still completes the future");
+        check(future.failed(), "poller: and it is reported as failed");
+        check(future.error() == std::make_error_code(std::errc::interrupted),
+              "poller: with a code distinct from state_not_recoverable");
+        future.detach();
+    }
+
+    // Extracting rethrows the ORIGINAL exception, not a stand-in.
+    {
+        auto future = actor->inner(-1);
+        bool rethrown = false;
+        std::string what;
+        try {
+            const int value = std::move(future).take_ready();
+            std::printf("     take_ready() returned %d instead of rethrowing\n", value);
+        } catch (const std::runtime_error& e) {
+            rethrown = true;
+            what = e.what();
+        }
+        check(rethrown, "take_ready(): rethrows rather than returning a value");
+        check(what == "inner said no", "take_ready(): the original exception, not a stand-in");
+    }
+
+    // The same across a co_await boundary: inner's exception surfaces in outer's
+    // await_resume, is captured by outer's own unhandled_exception, and is rethrown
+    // when outer's future is extracted.
+    {
+        auto future = actor->outer(-1);
+        bool rethrown = false;
+        std::string what;
+        try {
+            const int value = std::move(future).take_ready();
+            std::printf("     take_ready() returned %d instead of rethrowing\n", value);
+        } catch (const std::runtime_error& e) {
+            rethrown = true;
+            what = e.what();
+        }
+        check(rethrown, "co_await chain: the failure propagates through the awaiter");
+        check(what == "inner said no", "co_await chain: the original exception survives");
+    }
+
+    // The success path must be untouched by any of this.
+    {
+        auto future = actor->outer(21);
+        check(future.is_ready() && !future.failed(), "success path: ready and not failed");
+        check(std::move(future).take_ready() == 43, "success path: outer(21) == 43");
+    }
+
+    std::printf("\n%s (%d failure(s))\n", failures == 0 ? "PASSED" : "FAILED", failures);
+    return failures == 0 ? 0 : 1;
+}

@@ -128,6 +128,11 @@ namespace actor_zeta {
                         promise_->clear_awaited_chain();
 
                         auto* state = owned_.internal_state();
+                        // Rethrow at the co_await point, so the exception surfaces where the
+                        // value would have. It then reaches THIS coroutine's own
+                        // unhandled_exception() and is captured into its state -- which is how
+                        // a failure propagates up a chain of awaits.
+                        state->rethrow_if_exception();
                         assert(!state->has_error() && "future completed with error");
                         if constexpr (std::is_void_v<U>) {
                             state->take_value();
@@ -163,6 +168,11 @@ namespace actor_zeta {
                         promise_->clear_awaited_chain();
 
                         auto* state = owned_.internal_state();
+                        // Rethrow at the co_await point, so the exception surfaces where the
+                        // value would have. It then reaches THIS coroutine's own
+                        // unhandled_exception() and is captured into its state -- which is how
+                        // a failure propagates up a chain of awaits.
+                        state->rethrow_if_exception();
                         assert(!state->has_error() && "future completed with error");
                         if constexpr (std::is_void_v<U>) {
                             state->take_value();
