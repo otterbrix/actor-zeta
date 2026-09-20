@@ -106,10 +106,11 @@ public:
         g_log.log("[%::size] Sending request to memory_storage...", name_);
 
         // Single co_await - wait for storage response
-        auto [_, result] = co_await send(memory_storage_,
+        auto sent_result = send(memory_storage_,
             &memory_storage_t::size,
             session,
             collection_full_name_t{database_name, collection});
+        auto result = co_await std::move(sent_result.second);
 
         g_log.log("[%::size] Got result from storage: %", name_, result);
 
@@ -141,10 +142,11 @@ public:
 
         g_log.log("[%::execute_plan] Sending request to memory_storage...", name_);
 
-        auto [_1, cursor] = co_await send(memory_storage_,
+        auto sent_cursor = send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             std::move(plan));
+        auto cursor = co_await std::move(sent_cursor.second);
 
         g_log.log("[%::execute_plan] Got cursor with % rows, error=%",
                   name_, cursor->row_count(), cursor->has_error);
@@ -189,10 +191,11 @@ public:
         g_log.log("[%::execute_transaction] Step 1: Execute plan for %", name_, collection1);
 
         // STEP 1: First query
-        auto [_1, cursor1] = co_await send(memory_storage_,
+        auto sent_cursor1 = send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection1)));
+        auto cursor1 = co_await std::move(sent_cursor1.second);
 
         if (!cursor1) {
             g_log.log("[%::execute_transaction] ERROR: cursor1 is NULL after first co_await!", name_);
@@ -213,10 +216,11 @@ public:
         std::size_t cursor1_row_count = cursor1->row_count();
 
         // STEP 2: Second query (depends on step 1 success)
-        auto [_2, cursor2] = co_await send(memory_storage_,
+        auto sent_cursor2 = send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection2)));
+        auto cursor2 = co_await std::move(sent_cursor2.second);
 
         if (!cursor2) {
             g_log.log("[%::execute_transaction] ERROR: cursor2 is NULL!", name_);
@@ -324,10 +328,11 @@ public:
             g_log.log("[%::get_aggregate_detail] Large dataset, getting extra info...", name_);
 
             // Additional co_await inside nested coroutine
-            auto [_, extra_size] = co_await send(memory_storage_,
+            auto sent_extra_size = send(memory_storage_,
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", "users"));
+            auto extra_size = co_await std::move(sent_extra_size.second);
 
             detail = "large_dataset:total=" + std::to_string(total) +
                      ",count=" + std::to_string(count) +
@@ -399,10 +404,11 @@ public:
         };
 
         // co_await - wait for storage response
-        auto [_, size] = co_await send(memory_storage_,
+        auto sent_size = send(memory_storage_,
             &memory_storage_t::size,
             session,
             collection_full_name_t("test_db", collection));
+        auto size = co_await std::move(sent_size.second);
 
         // Use lambda to process result AFTER co_await
         // collection is valid here because it was passed BY VALUE
@@ -441,10 +447,11 @@ public:
             g_log.log("[%::coroutine_lambda] Starting async operation...", name_);
 
             // co_await INSIDE lambda - this makes lambda a coroutine
-            auto [_ns, size] = co_await send(memory_storage_,
+            auto sent_size = send(memory_storage_,
                 &memory_storage_t::size,
                 session_copy,
                 collection_full_name_t("test_db", collection_copy));
+            auto size = co_await std::move(sent_size.second);
 
             g_log.log("[%::coroutine_lambda] Got size=%, applying multiplier=%",
                       name_, size, multiplier_copy);
@@ -474,8 +481,9 @@ public:
             std::string collection) {
         auto build_cursor = [this, s = std::move(session), coll = std::move(collection)]
                 (std::pmr::memory_resource*) -> unique_future<cursor_t_ptr> {
-            auto [_ns, size] = co_await send(memory_storage_, &memory_storage_t::size,
+            auto sent_size = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            auto size = co_await std::move(sent_size.second);
             auto cursor = std::make_unique<cursor_t>();
             for (std::size_t i = 0; i < std::min(size, std::size_t(10)); ++i)
                 cursor->data.push_back("row_" + std::to_string(i) + "_from_" + coll);
@@ -503,8 +511,9 @@ public:
                 err->error_message = "Validation failed";
                 co_return std::move(err);
             }
-            auto [_ns, cursor] = co_await send(memory_storage_,
+            auto sent_cursor = send(memory_storage_,
                 &memory_storage_t::execute_plan, s, std::move(p));
+            auto cursor = co_await std::move(sent_cursor.second);
             co_return std::move(cursor);
         };
         co_return co_await execute(resource(), std::move(plan));
@@ -514,8 +523,9 @@ public:
     unique_future<aggregate_result_t> get_database_statistics(session_id_t session) {
         auto fetch_size = [this, s = session](std::pmr::memory_resource*, std::string coll)
                 -> unique_future<std::size_t> {
-            auto [_ns, result] = co_await send(memory_storage_, &memory_storage_t::size,
+            auto sent_result = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            auto result = co_await std::move(sent_result.second);
             co_return result;
         };
         // Parallel fetch all collection sizes
@@ -584,8 +594,9 @@ public:
                 (std::pmr::memory_resource*, bool simulate_error) -> unique_future<size_result_t> {
             if (simulate_error)
                 co_return size_result_t::error("connection_timeout");
-            auto [_ns, size] = co_await send(memory_storage_, &memory_storage_t::size,
+            auto sent_size = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            auto size = co_await std::move(sent_size.second);
             co_return size_result_t(size);
         };
         // First attempt fails if max_retries > 0 (simulate retry scenario)
@@ -619,10 +630,11 @@ public:
         // Goes straight to storage rather than through this actor's own
         // execute_plan(), which would register the cursor in result_storage_ and
         // leave a dangling pointer once the cursor dies with this frame.
-        auto [_, cursor] = co_await send(memory_storage_,
+        auto sent_cursor = send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection)));
+        auto cursor = co_await std::move(sent_cursor.second);
 
         if (cursor->has_error) {
             g_log.log("[%::fetch_row_batch] Storage error: %", name_, cursor->error_message);

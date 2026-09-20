@@ -50,6 +50,11 @@ using namespace dispatcher_test;
 // enqueue is unconditional on purpose: a manual driver runs the actor regardless
 // of what send() reports, so needs_sched carries no decision here. That is why
 // the pair is consumed in place instead of being bound and half-ignored.
+//
+// The actors below cannot discharge the obligation themselves -- none of them
+// holds a scheduler -- so these enqueues ARE the discharge, not a workaround for
+// one that went missing. They used to cover for `co_await send(...)`, which
+// suspended without ever scheduling the target; that shape no longer compiles.
 
 
 

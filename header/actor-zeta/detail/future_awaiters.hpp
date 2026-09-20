@@ -143,47 +143,31 @@ namespace actor_zeta {
             }
 
             // === await_transform: pair<bool, unique_future<U>>&& from send() ===
-            // CRITICAL: Must own the future to prevent premature destruction (see above).
+            //
+            // Prohibited, and the overload exists only to say so.
+            //
+            // `co_await send(target, ...)` compiles into a suspension that can never
+            // end. send() returns {needs_sched, future}: needs_sched is the obligation
+            // to put `target` in a run queue, and NOTHING in the library discharges it.
+            // An awaiter could only hand it back from await_resume() -- i.e. AFTER the
+            // wait -- and the wait cannot finish until `target` has run. A coroutine has
+            // an address_t and no scheduler, so it cannot discharge the obligation
+            // itself. The actor then spins in the run queue forever, with no diagnostic.
+            //
+            // It is not "wrong under some conditions": the bool is delivered past the
+            // point where it was needed, always. So this is a compile error rather than
+            // an assert -- the shape is decidable from the type alone.
             template<typename U>
             auto await_transform(std::pair<bool, unique_future<U>>&& p) noexcept {
-                propagate_awaited_state(p.second);
-
-                struct owning_pair_awaiter {
-                    bool needs_sched_;
-                    unique_future<U> owned_;
-                    future_awaiter_mixin* promise_;
-
-                    bool await_ready() const noexcept {
-                        return owned_.internal_state()->has_result();
-                    }
-
-                    detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> h) noexcept {
-                        return detail::future_await_suspend_cas(owned_.internal_state(), h);
-                    }
-
-                    auto await_resume() {
-                        // Clear the entire awaited chain BEFORE freeing the state.
-                        promise_->clear_awaited_chain();
-
-                        auto* state = owned_.internal_state();
-                        // Rethrow first -- see the awaiter above.
-                        state->rethrow_if_exception();
-                        // No exception to rethrow and still an error: there is no value
-                        // here and co_await has no channel to report that. Refuse rather
-                        // than extract -- see refuse_valueless_extraction(). Cancellation
-                        // is observed by polling failed(), not by awaiting.
-                        if (state->has_error()) {
-                            refuse_valueless_extraction("co_await");
-                        }
-                        if constexpr (std::is_void_v<U>) {
-                            state->take_value();
-                            return needs_sched_;
-                        } else {
-                            return std::make_pair(needs_sched_, state->take_value());
-                        }
-                    }
-                };
-                return owning_pair_awaiter{p.first, std::move(p.second), this};
+                static_assert(sizeof(U) == 0,
+                              "co_await send(...) never completes: the needs_sched half "
+                              "of send()'s result is only delivered after the await, and "
+                              "the await cannot finish until someone has scheduled the "
+                              "target with it. Split it: "
+                              "auto [needs_sched, f] = send(target, &T::m, args...); "
+                              "if (needs_sched) scheduler->enqueue(target); "
+                              "auto r = co_await std::move(f);");
+                return detail::suspend_never{};
             }
 
             // NOTE: there is intentionally NO generic foreign-awaitable passthrough

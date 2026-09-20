@@ -75,12 +75,13 @@ public:
                   name_, tid, session.data(), database, collection);
 
         // Send request to dispatcher, wait for response
-        auto [_, result] = co_await send(
+        auto sent_result = send(
             dispatcher_,
             &manager_dispatcher_t::size,
             session,
             database,
             collection);
+        auto result = co_await std::move(sent_result.second);
 
         g_log.log("[%::request_collection_size] Got result: size=% error=%",
                   name_, result.size, result.has_error);
