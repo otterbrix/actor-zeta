@@ -43,21 +43,19 @@ public:
         co_return;
     }
 
+    // Start ping-pong - send start message to actor0.
+    //
+    // The scheduler is the only driver in this chain: ping_pong_actor enqueues its own
+    // partner and the worker discharges every `resume` verdict, so this supervisor only
+    // has to report the initial unblock. There is no hand-driven fallback -- the
+    // children's start()/ping() are guarded on scheduler_.
     actor_zeta::unique_future<void> send() {
-        // Start ping-pong - send start message to actor0
         if (actor_0_ && scheduler_) {
             auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
             // Only enqueue if actor was unblocked by this message
             if (needs_sched) {
                 scheduler_->enqueue(actor_0_.get());
             }
-        } else if (actor_0_) {
-            // Synchronous mode (no scheduler)
-            auto [needs_sched_sync, future_sync] = actor_zeta::send(actor_0_.get(), &Actor::start);
-            actor_zeta::detail::ignore_unused(future_sync);
-            (void)actor_0_->resume(1);
-            (void)actor_1_->resume(1);
-            (void)actor_0_->resume(1);
         }
         co_return;
     }

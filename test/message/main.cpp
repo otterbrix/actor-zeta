@@ -31,7 +31,6 @@ constexpr static auto three = actor_zeta::mailbox::make_message_id(3);
 namespace {
 
 // Helper functions for testing message in containers
-// Note: message constructor no longer takes result_slot parameter
 
 template<class Seq>
 void check_seq_push_back(Seq& v, std::pmr::memory_resource* res) {
@@ -210,7 +209,6 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("init_future_slot and transfer_ownership") {
-        // Test the new unified slot API
         message msg(resource, one);
         REQUIRE( !msg.has_result_slot() );
 
@@ -226,7 +224,8 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         // (We can't directly test this, but it should not crash)
 
         // Clean up manually since ownership was transferred
-        (void)state->release_promise();
+        const bool deallocated = state->release_promise();
+        REQUIRE_FALSE(deallocated);
         state->release_future();
     }
 }

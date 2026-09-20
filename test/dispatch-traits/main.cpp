@@ -3,6 +3,7 @@
 
 #include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 class test_actor final : public actor_zeta::basic_actor<test_actor> {
 public:
@@ -31,7 +32,7 @@ public:
         co_return;
     }
 
-    // New dispatch_traits syntax - AFTER method definitions!
+    // dispatch_traits must come AFTER the method definitions.
     using dispatch_traits = actor_zeta::dispatch_traits<
         &test_actor::method1,
         &test_actor::method2,
@@ -107,9 +108,6 @@ TEST_CASE("dispatch_traits - sequential indexing") {
 }
 
 TEST_CASE("dispatch_traits - simple one-line syntax") {
-    // This test verifies that the new syntax compiles
-    // using dispatch_traits = actor_zeta::dispatch_traits<&Actor::method1, ...>;
-
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
@@ -147,7 +145,6 @@ public:
         co_return value * 2;
     }
 
-    // Sync actor - behavior() called immediately via actor_mixin::enqueue_impl
     using dispatch_traits = actor_zeta::dispatch_traits<
         &sync_actor::compute
     >;
@@ -218,6 +215,7 @@ private:
 TEST_CASE("send via address_t - actor method dispatched correctly") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_test_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     REQUIRE(actor != nullptr);
 
@@ -230,10 +228,11 @@ TEST_CASE("send via address_t - actor method dispatched correctly") {
     // Future is not ready until actor processes the message
     REQUIRE(future.valid());
 
-    // Process message by running actor's behavior
-    (void)actor->resume(1);
+    // Process message through the scheduler: run_once() consumes the resume verdict
+    // and re-queues the job while it keeps asking to be resumed.
+    sched.enqueue(actor.get());
+    sched.run();
 
-    // Now future should be available
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).take_ready() == 15);  // 5 + 10
     REQUIRE(actor->call_count() == 1);  // Method was called
@@ -245,10 +244,8 @@ TEST_CASE("optional send - address_t stores resource from actor") {
 
     REQUIRE(actor != nullptr);
 
-    // Get address from actor
     auto addr = actor->address();
 
-    // Verify address has resource
     REQUIRE(addr.resource() != nullptr);
     REQUIRE(addr.resource() == resource);
 }
@@ -260,13 +257,11 @@ TEST_CASE("optional send - address_t stores resource from actor") {
 #include <actor-zeta/scheduler.hpp>
 
 TEST_CASE("scheduler type aliases") {
-    // Verify scheduler_ptr is std::unique_ptr<sharing_scheduler>
     static_assert(std::is_same_v<
         actor_zeta::scheduler_ptr,
         std::unique_ptr<actor_zeta::sharing_scheduler>
     >, "scheduler_ptr should be unique_ptr<sharing_scheduler>");
 
-    // Verify scheduler_raw is sharing_scheduler*
     static_assert(std::is_same_v<
         actor_zeta::scheduler_raw,
         actor_zeta::sharing_scheduler*
@@ -427,8 +422,8 @@ TEST_CASE("address_t - move assignment transfers resource") {
 }
 
 TEST_CASE("address_t - empty_address has nullptr resource") {
-    // Document: empty_address() has nullptr resource
-    // This is intentional - use actor->address() when resource is needed
+    // empty_address() intentionally carries a nullptr resource -- use
+    // actor->address() wherever one is needed.
     auto addr = actor_zeta::address_t::empty_address();
 
     REQUIRE(addr.get() == nullptr);
@@ -476,7 +471,6 @@ public:
         co_return;
     }
 
-    // Sync actor - actor_mixin processes immediately (no mailbox)
     using dispatch_traits = actor_zeta::dispatch_traits<
         &sync_multi_actor::add,
         &sync_multi_actor::multiply,
@@ -604,18 +598,18 @@ private:
 TEST_CASE("send via address_t - void return type") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_void_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     REQUIRE(actor != nullptr);
 
-    // Send to actor via address_t for void method
     auto [needs_sched, future] = actor_zeta::send(
         actor->address(),
         &optional_void_actor::do_work);
 
     REQUIRE(future.valid());
 
-    // Process message
-    (void)actor->resume(1);
+    sched.enqueue(actor.get());
+    sched.run();
 
     REQUIRE(future.is_ready());
     std::move(future).take_ready();  // Should not crash
@@ -625,25 +619,24 @@ TEST_CASE("send via address_t - void return type") {
 TEST_CASE("send via address_t - string return type") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_void_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     REQUIRE(actor != nullptr);
 
-    // Send to actor via address_t for string method
     auto [needs_sched, future] = actor_zeta::send(
         actor->address(),
         &optional_void_actor::get_name);
 
     REQUIRE(future.valid());
 
-    // Process message
-    (void)actor->resume(1);
+    sched.enqueue(actor.get());
+    sched.run();
 
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).take_ready() == "test_name");  // Value from coroutine
 }
 
 TEST_CASE("dispatch_traits - empty traits") {
-    // Empty dispatch_traits should be valid
     using empty_traits = actor_zeta::dispatch_traits<>;
     static_assert(std::is_same_v<empty_traits::methods, actor_zeta::type_traits::type_list<>>,
                   "Empty dispatch_traits should have empty methods list");

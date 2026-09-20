@@ -14,17 +14,45 @@
 /// - memory_storage.hpp - Storage actor (bottom level)
 /// - manager_dispatcher.hpp - Dispatcher actor (middle level)
 /// - client.hpp - Client actor (top level)
+///
+/// Driving the actors: resume() hands back a verdict the caller is obliged to act
+/// on, so the tests never call it directly. Every step enqueues the actor into a
+/// scheduler_test_t, which owns the verdict -- run_once() re-queues a job that
+/// asked to be resumed and drops one that parked. The drain call is stop(), not
+/// run(): a behavior suspended on a still-pending co_await keeps answering
+/// `resume` with zero messages handled, so "queue empty" (run()'s condition) is
+/// never reached, while stop() ends on a full sweep that made no progress.
+///
+/// The scheduler is declared after the actors in every test: its deque holds raw
+/// job pointers, so it has to be destroyed first.
 
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
 #include "client.hpp"  // Includes all other headers
 
+#include <test/tooltestsuites/scheduler_test.hpp>
+
 #include <thread>
 #include <atomic>
 
 using namespace actor_zeta;
 using namespace dispatcher_test;
+
+// Drive steps below follow one shape:
+//
+//     send(target, &Actor::method, ...).second.detach();
+//     sched.enqueue(target);
+//
+// send() is [[nodiscard]] on BOTH halves -- the bool is a scheduling obligation
+// and the future owns the result slot. These messages carry no result the test
+// consumes, so the future is detached rather than dropped on the floor. The
+// enqueue is unconditional on purpose: a manual driver runs the actor regardless
+// of what send() reports, so needs_sched carries no decision here. That is why
+// the pair is consumed in place instead of being bound and half-ignored.
+
+
+
 
 // ============================================================================
 // Basic flow tests
@@ -40,9 +68,10 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
     auto client = spawn<client_t>(resource, dispatcher->address(), "Client");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-001");
 
-    // Send request
     auto [needs_sched, future] = send(
         client.get(),
         &client_t::request_collection_size,
@@ -54,23 +83,27 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
     // poll_pending() is called inside behavior() automatically
 
     // 1. Client behavior -> starts coroutine, suspends on co_await send(dispatcher)
-    (void)client->resume(1);
+    sched.enqueue(client.get());
+    sched.stop();
 
     // 2. Dispatcher behavior -> starts coroutine, suspends on co_await send(storage)
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     // 3. Storage behavior -> executes size(), returns ready future
-    (void)storage->resume(1);
+    sched.enqueue(storage.get());
+    sched.stop();
 
     // 4. Send poll to dispatcher to trigger behavior() and poll_pending()
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     // 5. Send poll to client to trigger behavior() and poll_pending()
-    (void)send(client.get(), &client_t::poll);
-    (void)client->resume(1);
+    send(client.get(), &client_t::poll).second.detach();
+    sched.enqueue(client.get());
+    sched.stop();
 
-    // Check result
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
 
@@ -89,6 +122,8 @@ TEST_CASE("dispatcher-pattern: error handling") {
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
     auto client = spawn<client_t>(resource, dispatcher->address(), "Client");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-002");
 
     // Send request with empty database name (should trigger error)
@@ -99,17 +134,18 @@ TEST_CASE("dispatcher-pattern: error handling") {
         std::string(""),  // Empty - triggers error
         std::string("users"));
 
-    // Execute
-    (void)client->resume(1);
+    sched.enqueue(client.get());
+    sched.stop();
 
     // Dispatcher returns error immediately (co_return before co_await)
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     // Send poll to client to trigger poll_pending()
-    (void)send(client.get(), &client_t::poll);
-    (void)client->resume(1);
+    send(client.get(), &client_t::poll).second.detach();
+    sched.enqueue(client.get());
+    sched.stop();
 
-    // Check result
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
 
@@ -128,6 +164,8 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
     auto client = spawn<client_t>(resource, dispatcher->address(), "Client");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     // Request 1: users
     auto [needs_sched1, future1] = send(
         client.get(),
@@ -136,13 +174,18 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
         std::string("test_db"),
         std::string("users"));
 
-    (void)client->resume(1);
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
-    (void)send(client.get(), &client_t::poll);
-    (void)client->resume(1);
+    sched.enqueue(client.get());
+    sched.stop();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    send(client.get(), &client_t::poll).second.detach();
+    sched.enqueue(client.get());
+    sched.stop();
 
     REQUIRE(future1.is_ready());
     auto result1 = std::move(future1).take_ready();
@@ -156,13 +199,18 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
         std::string("test_db"),
         std::string("orders"));
 
-    (void)client->resume(1);
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
-    (void)send(client.get(), &client_t::poll);
-    (void)client->resume(1);
+    sched.enqueue(client.get());
+    sched.stop();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    send(client.get(), &client_t::poll).second.detach();
+    sched.enqueue(client.get());
+    sched.stop();
 
     REQUIRE(future2.is_ready());
     auto result2 = std::move(future2).take_ready();
@@ -176,13 +224,18 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
         std::string("test_db"),
         std::string("products"));
 
-    (void)client->resume(1);
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
-    (void)send(client.get(), &client_t::poll);
-    (void)client->resume(1);
+    sched.enqueue(client.get());
+    sched.stop();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    send(client.get(), &client_t::poll).second.detach();
+    sched.enqueue(client.get());
+    sched.stop();
 
     REQUIRE(future3.is_ready());
     auto result3 = std::move(future3).take_ready();
@@ -200,6 +253,8 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
     auto client = spawn<client_t>(resource, dispatcher->address(), "Client");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-006");
 
     // Request non-existent collection
@@ -210,13 +265,18 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
         std::string("test_db"),
         std::string("nonexistent"));
 
-    (void)client->resume(1);
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
-    (void)send(client.get(), &client_t::poll);
-    (void)client->resume(1);
+    sched.enqueue(client.get());
+    sched.stop();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    send(client.get(), &client_t::poll).second.detach();
+    sched.enqueue(client.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -237,6 +297,8 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
     auto client = spawn<client_t>(resource, dispatcher->address(), "Client");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     std::atomic<bool> done{false};
     std::atomic<std::size_t> result_size{0};
     std::atomic<bool> result_has_error{true};
@@ -256,13 +318,18 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
             std::string("orders"));
 
         // Execute entire chain in this thread
-        (void)client->resume(1);
-        (void)dispatcher->resume(1);
-        (void)storage->resume(1);
-        (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-        (void)dispatcher->resume(1);
-        (void)send(client.get(), &client_t::poll);
-        (void)client->resume(1);
+        sched.enqueue(client.get());
+        sched.stop();
+        sched.enqueue(dispatcher.get());
+        sched.stop();
+        sched.enqueue(storage.get());
+        sched.stop();
+        send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+        sched.enqueue(dispatcher.get());
+        sched.stop();
+        send(client.get(), &client_t::poll).second.detach();
+        sched.enqueue(client.get());
+        sched.stop();
 
         future_available = future.is_ready();
         if (future_available) {
@@ -297,6 +364,8 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-exec-001");
 
     logical_plan_t plan("select",
@@ -309,10 +378,13 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
         session,
         std::move(plan));
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -323,9 +395,9 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
     REQUIRE(cursor->is_open);
 
     // Cleanup
-    (void)send(dispatcher.get(),
-         &manager_dispatcher_t::close_cursor, session);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::close_cursor, session).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     g_log.log("========== TEST PASSED ==========");
 }
@@ -337,6 +409,8 @@ TEST_CASE("dispatcher-pattern: execute_plan with invalid plan") {
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
+
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     session_id_t session("session-exec-002");
 
@@ -350,7 +424,8 @@ TEST_CASE("dispatcher-pattern: execute_plan with invalid plan") {
         session,
         std::move(plan));
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -369,6 +444,8 @@ TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-exec-003");
 
     logical_plan_t plan("select",
@@ -381,10 +458,13 @@ TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
         session,
         std::move(plan));
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -407,6 +487,8 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-tx-001");
 
     auto [needs_sched, future] = send(
@@ -417,19 +499,24 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
         std::string("orders"));
 
     // Execute: dispatcher -> storage (step 1)
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
 
     // Poll to resume after first co_await
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     // Step 2
-    (void)storage->resume(1);
+    sched.enqueue(storage.get());
+    sched.stop();
 
     // Poll to complete
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -449,6 +536,8 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-tx-002");
 
     auto [needs_sched, future] = send(
@@ -458,10 +547,13 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
         std::string("nonexistent"),  // Does not exist
         std::string("orders"));
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -485,6 +577,8 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-agg-001");
 
     auto [needs_sched, future] = send(
@@ -493,31 +587,43 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
         session,
         std::vector<std::string>{"users", "orders", "products"});
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
-    // Storage receives 3 parallel requests
-    (void)storage->resume(1);
-    (void)storage->resume(1);
-    (void)storage->resume(1);
+    // Storage receives 3 parallel requests. Drive them ONE MESSAGE AT A TIME:
+    // sched.stop() drains to quiescence, so a single enqueue+stop would handle
+    // all three and the next two stages would process nothing at all. Asserting
+    // messages_processed is what keeps a stage from silently becoming a no-op.
+    for (int i = 0; i < 3; ++i) {
+        const auto info = storage->resume(1);
+        REQUIRE(info.messages_processed == 1);
+    }
 
     // Poll - first co_await ready
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     // Poll - second co_await
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     // Poll - third co_await
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     // Nested coroutine get_aggregate_detail
     // total = 400 > 200, so extra co_await
-    (void)storage->resume(1);
+    {
+        const auto info = storage->resume(1);
+        REQUIRE(info.messages_processed == 1);
+    }
 
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -539,6 +645,8 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-agg-002");
 
     // Only products (50) - small dataset, total < 200
@@ -548,11 +656,14 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
         session,
         std::vector<std::string>{"products"});
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
 
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -573,6 +684,8 @@ TEST_CASE("dispatcher-pattern: aggregate - empty collection list") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-agg-003");
 
     auto [needs_sched, future] = send(
@@ -581,7 +694,8 @@ TEST_CASE("dispatcher-pattern: aggregate - empty collection list") {
         session,
         std::vector<std::string>{});  // Empty!
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -623,6 +737,8 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
             auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher" + std::to_string(i));
             auto client = spawn<client_t>(resource, dispatcher->address(), "Client" + std::to_string(i));
 
+            actor_zeta::test::scheduler_test_t sched(1, 100);
+
             std::string collection;
             std::size_t expected_size{0};
             switch (i % 3) {
@@ -641,13 +757,18 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
                 std::string("test_db"),
                 collection);
 
-            (void)client->resume(1);
-            (void)dispatcher->resume(1);
-            (void)storage->resume(1);
-            (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-            (void)dispatcher->resume(1);
-            (void)send(client.get(), &client_t::poll);
-            (void)client->resume(1);
+            sched.enqueue(client.get());
+            sched.stop();
+            sched.enqueue(dispatcher.get());
+            sched.stop();
+            sched.enqueue(storage.get());
+            sched.stop();
+            send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+            sched.enqueue(dispatcher.get());
+            sched.stop();
+            send(client.get(), &client_t::poll).second.detach();
+            sched.enqueue(client.get());
+            sched.stop();
 
             results[i].available = future.is_ready();
             if (results[i].available) {
@@ -693,6 +814,8 @@ TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     // Test transform_with_lambda(int value, int factor)
     // result = value * factor + 100
     auto [needs_sched, future] = send(
@@ -700,7 +823,8 @@ TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
         &manager_dispatcher_t::transform_with_lambda,
         5, 10);  // value=5, factor=10
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -717,6 +841,8 @@ TEST_CASE("lambda-inside: lambda capturing this and state (compute_with_lambda_a
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "TestDispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     // Test compute_with_lambda_and_state(const std::string& prefix)
     // result = prefix + "_from_" + name_
     auto [needs_sched, future] = send(
@@ -724,7 +850,8 @@ TEST_CASE("lambda-inside: lambda capturing this and state (compute_with_lambda_a
         &manager_dispatcher_t::compute_with_lambda_and_state,
         std::string("query"));
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -741,6 +868,8 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("lambda-session");
 
     // Test async_transform_with_lambda - calls storage, then uses lambda to format
@@ -752,12 +881,15 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
         std::string("users"));
 
     // Dispatcher suspends on co_await, storage processes
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
 
     // Poll to resume dispatcher after storage returns
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -774,6 +906,8 @@ TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "OrderDispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("orders-session");
 
     // Test with 'orders' collection which has 250 items
@@ -783,10 +917,13 @@ TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
         session,
         std::string("orders"));
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -803,6 +940,8 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("coroutine-lambda-session");
 
     // Test execute_with_coroutine_lambda
@@ -816,12 +955,15 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
         3);  // multiplier
 
     // Dispatcher suspends on co_await (outer), then lambda suspends on co_await (inner)
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
 
     // Poll to resume lambda-coroutine, then outer coroutine
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -838,6 +980,8 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("orders-lambda-session");
 
     // orders collection has 250 items, multiplier = 2 -> result = 500
@@ -848,10 +992,13 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
         std::string("orders"),
         2);
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -871,14 +1018,19 @@ TEST_CASE("database: create_cursor_from_query - lambda-coroutine returns unique_
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("cursor-session");
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::create_cursor_from_query, session, std::string("users"));
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -895,16 +1047,21 @@ TEST_CASE("database: validate_and_execute - chained lambda-coroutines") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("validate-session");
     logical_plan_t plan("select", collection_full_name_t("test_db", "users"), "id > 0");
 
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::validate_and_execute, session, std::move(plan));
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -922,13 +1079,16 @@ TEST_CASE("database: validate_and_execute - validation failure") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("validate-fail-session");
     logical_plan_t plan("select", collection_full_name_t("", ""), "");  // Invalid plan
 
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::validate_and_execute, session, std::move(plan));
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -946,22 +1106,31 @@ TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("stats-session");
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::get_database_statistics, session);
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
     // Process 3 parallel storage requests
-    (void)storage->resume(1);
-    (void)storage->resume(1);
-    (void)storage->resume(1);
+    sched.enqueue(storage.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
     // Poll after each storage completes to resume lambda-coroutines
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -980,6 +1149,8 @@ TEST_CASE("database: process_batch_buffer - move-only argument") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("batch-session");
     auto batch = std::make_unique<std::vector<std::string>>();
     batch->push_back("item1");
@@ -989,7 +1160,8 @@ TEST_CASE("database: process_batch_buffer - move-only argument") {
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::process_batch_buffer, session, std::move(batch));
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1007,13 +1179,16 @@ TEST_CASE("database: process_batch_buffer - empty batch") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("empty-batch-session");
     auto batch = std::make_unique<std::vector<std::string>>();  // Empty
 
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::process_batch_buffer, session, std::move(batch));
 
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1030,24 +1205,29 @@ TEST_CASE("database: get_cached_value - promise direct manipulation") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("cache-session");
 
     // Test cached values for different collections
     auto [needs_sched1, future1] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("users"));
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
     REQUIRE(future1.is_ready());
     REQUIRE(std::move(future1).take_ready() == 100);
 
     auto [needs_sched2, future2] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("orders"));
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
     REQUIRE(future2.is_ready());
     REQUIRE(std::move(future2).take_ready() == 250);
 
     auto [needs_sched3, future3] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("products"));
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
     REQUIRE(future3.is_ready());
     REQUIRE(std::move(future3).take_ready() == 50);
 
@@ -1061,15 +1241,20 @@ TEST_CASE("database: execute_with_retry - success without retry") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("retry-session");
     // max_retries=0 -> no simulated error, direct success
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("users"), 0);
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1086,15 +1271,20 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("retry-session");
     // max_retries=1 -> first attempt fails, retry succeeds
     auto [needs_sched2, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("orders"), 1);
 
-    (void)dispatcher->resume(1);
-    (void)storage->resume(1);
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
+    sched.enqueue(storage.get());
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1106,9 +1296,8 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
 // =============================================================================
 // PATTERN 6: Two-actor row forwarding (client -> manager -> storage)
 //
-// Replaces the former streaming tests, whose only assertion was that a handle
-// had been constructed. The rows themselves are now checked, including the
-// manager's prefix, so the forwarding hop is actually covered.
+// The rows themselves are asserted, manager prefix included, so the forwarding
+// hop is actually covered rather than merely reaching a handle.
 // =============================================================================
 
 TEST_CASE("dispatcher-pattern: fetch_row_batch forwards prefixed rows") {
@@ -1119,6 +1308,8 @@ TEST_CASE("dispatcher-pattern: fetch_row_batch forwards prefixed rows") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-batch-001");
 
     auto [needs_sched, future] = send(
@@ -1127,10 +1318,13 @@ TEST_CASE("dispatcher-pattern: fetch_row_batch forwards prefixed rows") {
         session,
         std::string("users"));
 
-    (void)dispatcher->resume(1);   // starts the handler, suspends on the storage await
-    (void)storage->resume(1);      // completes the storage future (flag-only)
-    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    (void)dispatcher->resume(1);   // drains the continuation, prefixes, co_returns
+    sched.enqueue(dispatcher.get());   // starts the handler, suspends on the storage await
+    sched.stop();
+    sched.enqueue(storage.get());      // completes the storage future (flag-only)
+    sched.stop();
+    send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto rows = std::move(future).take_ready();
@@ -1150,6 +1344,8 @@ TEST_CASE("dispatcher-pattern: fetch_row_batch on an empty collection name") {
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
+    actor_zeta::test::scheduler_test_t sched(1, 100);
+
     session_id_t session("session-batch-002");
 
     auto [needs_sched, future] = send(
@@ -1159,7 +1355,8 @@ TEST_CASE("dispatcher-pattern: fetch_row_batch on an empty collection name") {
         std::string(""));
 
     // Rejected before any storage round trip, so one resume is enough.
-    (void)dispatcher->resume(1);
+    sched.enqueue(dispatcher.get());
+    sched.stop();
 
     REQUIRE(future.is_ready());
     auto rows = std::move(future).take_ready();

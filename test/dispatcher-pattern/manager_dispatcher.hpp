@@ -38,15 +38,8 @@ using namespace actor_zeta;
 /// Sends: requests to memory_storage_t
 /// Returns: results back to caller via unique_future
 ///
-/// OLD (session-based) pattern:
-///   - session_to_address_ map to track senders
-///   - size() saves sender, sends fire-and-forget to storage
-///   - size_finish() callback finds sender, sends response
-///
-/// NEW (promise/future) pattern:
-///   - No session_to_address_ needed!
-///   - size() returns unique_future<size_result_t>
-///   - Uses co_await to wait for storage response
+/// Callers are not tracked: a handler returns unique_future<T> and co_awaits the
+/// storage response, so there is no sender map and no *_finish() callback hop.
 class manager_dispatcher_t final : public basic_actor<manager_dispatcher_t> {
 public:
     explicit manager_dispatcher_t(
@@ -278,12 +271,13 @@ public:
         futures.reserve(collections.size());  // CRITICAL: reserve to avoid reallocation!
 
         for (const auto& coll : collections) {
-            auto [ns, f] = send(memory_storage_,
+            // Only the future is needed here: this actor has no scheduler handle,
+            // so it cannot act on the needs_sched half. Consume the pair in place.
+            auto sent = send(memory_storage_,
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", coll));
-            (void)ns;
-            futures.push_back(std::move(f));
+            futures.push_back(std::move(sent.second));
         }
 
         // C) Await all - collect results in order
@@ -605,9 +599,8 @@ public:
 
     /// @brief Fetch all rows of a collection in one batch, prefixed by this actor.
     ///
-    /// Replaces the former streaming create_row_stream: same two-actor
-    /// row-forwarding hop (client -> manager -> storage), but the rows come back
-    /// as one vector instead of a lazily pulled stream.
+    /// Two-actor row forwarding (client -> manager -> storage) with the rows
+    /// delivered as one vector.
     unique_future<std::vector<std::string>> fetch_row_batch(
             session_id_t session,
             std::string collection) {
@@ -758,7 +751,6 @@ public:
     /// @note With auto-resume in set_value()/set_ready(), coroutines resume automatically
     /// This function just removes completed futures from pending lists
     void poll_pending() {
-        // Clean up completed size futures
         for (auto it = pending_size_.begin(); it != pending_size_.end();) {
             if (it->is_ready()) {
                 g_log.log("[%::poll_pending] size coroutine completed", name_);
@@ -767,7 +759,6 @@ public:
                 ++it;
             }
         }
-        // Clean up completed execute futures
         for (auto it = pending_execute_.begin(); it != pending_execute_.end();) {
             if (it->is_ready()) {
                 g_log.log("[%::poll_pending] execute coroutine completed", name_);
@@ -776,7 +767,6 @@ public:
                 ++it;
             }
         }
-        // Clean up completed transaction futures
         for (auto it = pending_transaction_.begin(); it != pending_transaction_.end();) {
             if (it->is_ready()) {
                 g_log.log("[%::poll_pending] transaction coroutine completed", name_);
@@ -785,7 +775,6 @@ public:
                 ++it;
             }
         }
-        // Clean up completed aggregate futures
         for (auto it = pending_aggregate_.begin(); it != pending_aggregate_.end();) {
             if (it->is_ready()) {
                 g_log.log("[%::poll_pending] aggregate coroutine completed", name_);
@@ -794,7 +783,6 @@ public:
                 ++it;
             }
         }
-        // Clean up completed detail futures
         for (auto it = pending_detail_.begin(); it != pending_detail_.end();) {
             if (it->is_ready()) {
                 g_log.log("[%::poll_pending] detail coroutine completed", name_);
@@ -803,7 +791,6 @@ public:
                 ++it;
             }
         }
-        // Clean up completed transform futures
         for (auto it = pending_transform_.begin(); it != pending_transform_.end();) {
             if (it->is_ready()) {
                 g_log.log("[%::poll_pending] transform coroutine completed", name_);

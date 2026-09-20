@@ -3,6 +3,7 @@
 
 #include "classes.hpp"
 #include <actor-zeta.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 TEST_CASE("life-cycle") {
     std::unique_ptr<std::pmr::memory_resource> resource = std::unique_ptr<std::pmr::memory_resource>(std::pmr::get_default_resource());
@@ -11,8 +12,12 @@ TEST_CASE("life-cycle") {
         {
             REQUIRE(test_handlers::ptr_0_counter == 0);
             auto actor = actor_zeta::spawn<test_handlers>(resource.get());
+            actor_zeta::test::scheduler_test_t sched(1, 100);
             auto [needs_sched, fut] = actor_zeta::send(actor.get(), &test_handlers::ptr_0);
-            (void)actor->resume(10);
+            // The scheduler owns the resume verdict: run_once() re-queues the job while
+            // it keeps asking to be resumed.
+            sched.enqueue(actor.get());
+            sched.run();
             std::move(fut).take_ready();
             REQUIRE(test_handlers::ptr_0_counter == 1);
             REQUIRE(test_handlers::ptr_1_counter == 0);

@@ -11,14 +11,15 @@
 #include <memory>
 
 // =============================================================================
-// Test for verifying the race condition FIX between available() and final_suspend()
+// The race between "the future reads as ready" and final_suspend().
 //
-// With the NEW architecture:
-// - available() returns true only AFTER release_promise() in final_suspend
-// - Coroutine destroys ITSELF in final_suspend (self-destroying pattern)
-// - Future destructor only releases state, does NOT destroy coroutine handle
+// - is_ready() (the old available()) turns true only AFTER release_promise(),
+//   which final_suspend calls last
+// - the coroutine destroys ITSELF in final_suspend
+// - ~unique_future only releases the state; it never destroys a coroutine handle
 //
-// These tests verify that destroying a future after available()==true is SAFE.
+// So destroying a future once is_ready() is true is safe. That is what these
+// tests exercise.
 // =============================================================================
 
 namespace {
@@ -155,7 +156,7 @@ private:
 };
 
 // =============================================================================
-// Test 1: Basic chaining - verify available() is safe for destruction
+// Test 1: Basic chaining - a ready future is safe to destroy
 // =============================================================================
 TEST_CASE("available race chaining: basic chain is safe") {
     destruction_tracker::reset();
@@ -181,13 +182,12 @@ TEST_CASE("available race chaining: basic chain is safe") {
         // Schedule worker once (it will be scheduled again via message passing)
         scheduler->enqueue(worker.get());
 
-        // Wait for future to become available (file-local driver: re-enqueues both
-        // actors to handle cross-actor messaging; does not take_ready — see helper).
+        // Wait for the future to become ready (file-local driver: re-enqueues both
+        // actors to keep the cross-actor messaging moving; never takes — see helper).
         drive_until_ready(future, scheduler, dispatcher.get(), worker.get());
 
-        // Destroy future - this should be SAFE with new architecture
-        // because is_ready() == true means release_promise() was called
-        // which happens AFTER self.destroy() in final_suspend
+        // Safe to destroy: is_ready() == true means release_promise() ran, and
+        // that happens AFTER self.destroy() in final_suspend.
         { auto temp = std::move(future); }
     }
 
@@ -335,7 +335,8 @@ TEST_CASE("available race chaining: is_ready vs has_result") {
     REQUIRE_FALSE(state->is_ready());  // Promise not released!
 
     // After release_promise, is_ready becomes true
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
     // Cleanup

@@ -13,25 +13,19 @@
 #include <functional>
 
 // =============================================================================
-// Tests for CAS-based awaiter (Variant B+) as described in:
-//   docs/actor-zeta-race-comprehensive-fix.md §7.2
-//
-// These tests use the NEW API that will be implemented:
-// - await_ready() checks has_result() (not is_ready())
-// - await_suspend() uses CAS to set continuation_
-// - CAS failure means double-await (programmer error)
-// - After CAS success, re-check has_result() for late producer
-// - final_awaiter uses exchange to take continuation atomically
-//
-// IMPORTANT: These tests will NOT COMPILE until the document is implemented.
-// This is intentional - they serve as a specification for the new API.
+// The CAS-based awaiter protocol these tests pin:
+// - await_ready() checks has_result(), NOT is_ready()
+// - await_suspend() installs the continuation with a CAS; a failed CAS means a
+//   second awaiter, i.e. a double-await (programmer error)
+// - after a successful CAS, re-check has_result() to catch a late producer
+// - final_awaiter takes the continuation with an exchange, atomically
 // =============================================================================
 
 using namespace actor_zeta;
 using namespace actor_zeta::detail;
 
 // =============================================================================
-// TEST SECTION 1: shared_state::continuation_ CAS operations (§7.2)
+// TEST SECTION 1: shared_state::continuation_ CAS operations
 // =============================================================================
 
 TEST_CASE("CAS awaiter: initial continuation is nullptr") {
@@ -40,7 +34,8 @@ TEST_CASE("CAS awaiter: initial continuation is nullptr") {
 
     REQUIRE(state->continuation_.load() == nullptr);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -59,7 +54,8 @@ TEST_CASE("CAS awaiter: CAS sets continuation successfully") {
     REQUIRE(cas_success);
     REQUIRE(state->continuation_.load() == handle);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -85,7 +81,8 @@ TEST_CASE("CAS awaiter: second CAS fails (double-await detection)") {
     REQUIRE_FALSE(cas2);
     REQUIRE(expected2 == handle1);  // expected updated to current value
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -102,13 +99,13 @@ TEST_CASE("CAS awaiter: exchange takes continuation atomically") {
     REQUIRE(cont == handle);
     REQUIRE(state->continuation_.load() == nullptr);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
 // =============================================================================
-// TEST SECTION 2: await_ready behavior (§7.2)
-// await_ready checks has_result() for fast path
+// TEST SECTION 2: await_ready behavior — has_result() is the fast path
 // =============================================================================
 
 TEST_CASE("CAS awaiter: await_ready returns true if has_result") {
@@ -124,7 +121,8 @@ TEST_CASE("CAS awaiter: await_ready returns true if has_result") {
     // Now has_result is true — await_ready should return true
     REQUIRE(state->has_result());
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -141,12 +139,13 @@ TEST_CASE("CAS awaiter: await_ready uses has_result, not is_ready") {
     // await_ready should check has_result → returns true
     // This is the fast path for already-completed coroutines
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
 // =============================================================================
-// TEST SECTION 3: await_suspend flow (§7.2)
+// TEST SECTION 3: await_suspend flow
 // 1. CAS to set continuation
 // 2. Re-check has_result after CAS
 // 3. Return true (suspend) or false (resume immediately)
@@ -158,7 +157,8 @@ TEST_CASE("CAS awaiter: await_suspend - producer finished before CAS") {
 
     // Producer finishes first
     state->set_value(42);
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
 
     // Awaiter comes late
     std::coroutine_handle<> handle = std::noop_coroutine();
@@ -206,12 +206,13 @@ TEST_CASE("CAS awaiter: await_suspend - producer not finished yet") {
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
     REQUIRE(cont == handle);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
 // =============================================================================
-// TEST SECTION 4: final_awaiter flow (§6.2)
+// TEST SECTION 4: final_awaiter flow
 // 1. Take continuation via exchange
 // 2. Release promise (Last-One-Out)
 // 3. Self-destroy coroutine
@@ -230,7 +231,8 @@ TEST_CASE("CAS awaiter: final_awaiter takes continuation") {
     REQUIRE(cont == handle);
 
     // Then release promise
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
     // Then self.destroy() (simulated - we can't test actual destroy)
@@ -253,7 +255,8 @@ TEST_CASE("CAS awaiter: final_awaiter with no waiter") {
     REQUIRE(cont == nullptr);
 
     // Then release promise
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
     // Symmetric transfer to noop_coroutine
@@ -301,7 +304,8 @@ TEST_CASE("CAS awaiter: concurrent CAS - only one succeeds") {
         REQUIRE(success_count.load() == 1);
         REQUIRE(failure_count.load() == 3);
 
-        (void)state->release_promise();
+        const bool deallocated = state->release_promise();
+        REQUIRE_FALSE(deallocated);
         state->release_future();
     }
 }
@@ -314,17 +318,20 @@ TEST_CASE("CAS awaiter: concurrent producer-consumer") {
         auto* state = allocate_shared_state<int>(resource);
 
         std::atomic<bool> consumer_resumed{false};
+        // release_promise() reports whether THIS call deallocated the state. The
+        // peer thread here only reads -- it never releases the future -- so the
+        // answer is deterministically false. Latch it and assert after the join:
+        // a Catch2 macro fired from inside a thread is itself a data race.
+        std::atomic<bool> promise_deallocated{false};
 
-        std::thread producer([state, i]() {
+        std::thread producer([state, i, &promise_deallocated]() {
             state->set_value(int(i));
 
-            // Take continuation
-            auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
+            // Take the continuation. This test exercises the exchange only and
+            // deliberately does not resume it.
+            state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
 
-            (void)state->release_promise();
-
-            // Would resume cont here via symmetric transfer
-            (void)cont;
+            promise_deallocated.store(state->release_promise(), std::memory_order_relaxed);
         });
 
         std::thread consumer([state, &consumer_resumed]() {
@@ -349,6 +356,7 @@ TEST_CASE("CAS awaiter: concurrent producer-consumer") {
         consumer.join();
 
         REQUIRE(consumer_resumed.load());
+        REQUIRE_FALSE(promise_deallocated.load());
 
         state->release_future();
     }
@@ -366,15 +374,18 @@ TEST_CASE("CAS awaiter: memory ordering - value visible after exchange") {
         auto* state = allocate_shared_state<int>(resource);
 
         std::atomic<int> read_value{-1};
+        // Same shape as above: latch release_promise()'s answer, assert after the
+        // join -- a Catch2 macro fired from inside a thread is itself a data race.
+        std::atomic<bool> promise_deallocated{false};
 
-        std::thread producer([state, i]() {
+        std::thread producer([state, i, &promise_deallocated]() {
             // Write value BEFORE exchange
             state->set_value(int(i));
 
             // Exchange continuation (with acq_rel)
             state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
 
-            (void)state->release_promise();
+            promise_deallocated.store(state->release_promise(), std::memory_order_relaxed);
         });
 
         std::thread consumer([state, &read_value]() {
@@ -395,6 +406,7 @@ TEST_CASE("CAS awaiter: memory ordering - value visible after exchange") {
         consumer.join();
 
         REQUIRE(read_value.load() == i);
+        REQUIRE_FALSE(promise_deallocated.load());
 
         state->release_future();
     }
@@ -411,11 +423,11 @@ TEST_CASE("CAS awaiter: multiple set_value forbidden") {
     state->set_value(42);
     REQUIRE(state->has_result());
 
-    // Second set_value should be forbidden
-    // Implementation should assert or ignore
-    // (This test documents expected behavior)
+    // A second set_value is a contract violation; nothing in shared_state
+    // enforces it, so only the first write is exercised here.
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -427,9 +439,10 @@ TEST_CASE("CAS awaiter: error then value forbidden") {
     state->set_error(ec);
     REQUIRE(state->has_error());
 
-    // set_value after set_error should be forbidden
-    // (This test documents expected behavior)
+    // set_value after set_error is likewise a contract violation and is not
+    // exercised; error_set alone is what a consumer must see.
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }

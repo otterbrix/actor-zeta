@@ -2,6 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 // ============================================================================
 // Contract definition
@@ -186,6 +187,7 @@ TEST_CASE("implements - send and dispatch work correctly") {
 
     auto actor_a = actor_zeta::spawn<impl_a>(resource);
     auto actor_b = actor_zeta::spawn<impl_b>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     // Send to impl_a
     auto [needs_sched_a, future_a] = actor_zeta::send(
@@ -194,7 +196,10 @@ TEST_CASE("implements - send and dispatch work correctly") {
         42
     );
 
-    (void)actor_a->resume(10);
+    // The scheduler owns the resume verdict: run_once() re-queues the job while it
+    // keeps asking to be resumed.
+    sched.enqueue(actor_a.get());
+    sched.run();
     REQUIRE(actor_a->call_count() == 1);
     REQUIRE(actor_a->last_value() == 42);
 
@@ -205,14 +210,14 @@ TEST_CASE("implements - send and dispatch work correctly") {
         100
     );
 
-    (void)actor_b->resume(10);
+    sched.enqueue(actor_b.get());
+    sched.run();
     REQUIRE(actor_b->call_count() == 1);
     REQUIRE(actor_b->values().size() == 1);
     REQUIRE(actor_b->values()[0] == 100);
 }
 
 TEST_CASE("implements - methods list size is correct") {
-    // Check that methods list is correctly built
     static_assert(actor_zeta::type_traits::type_list_size_v<typename impl_a::dispatch_traits::methods> == 3);
     static_assert(actor_zeta::type_traits::type_list_size_v<typename impl_b::dispatch_traits::methods> == 3);
 

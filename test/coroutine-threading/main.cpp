@@ -13,14 +13,12 @@
 
 using namespace actor_zeta;
 
-// Helper to get thread id as string
 std::string thread_id_str() {
     std::ostringstream oss;
     oss << std::this_thread::get_id();
     return oss.str();
 }
 
-// Thread-safe logger
 class thread_logger {
 public:
     void log(const std::string& msg) {
@@ -223,21 +221,33 @@ private:
 
 namespace {
 
-    // The resume verdict is an obligation, not a status: `resume` means the actor
-    // must be put back in a run queue, and these tests drive by hand, so nothing
-    // else will do it.
+    // Drive `actor` until it stops asking to be rescheduled, or `cap` turns pass.
+    // Returns true when the actor went idle, false when the cap ran out with the
+    // `resume` obligation still outstanding.
     //
-    // A staged resume deliberately ignores it -- the NEXT line of the sequence is
-    // the discharge. The final resume of a sequence may not: if the actor still
-    // asks to be scheduled once the sequence is over, the test's "N resumes are
-    // enough" premise is false and the actor is being stranded.
+    // `resume_result::resume` is an obligation -- the caller owes the actor another
+    // turn -- and these tests deliberately have no scheduler to pay it: their
+    // assertions pin that the coroutine runs inline on the thread that called
+    // resume(), which a scheduler would move onto its own worker threads. So the
+    // verdict is the LOOP CONDITION here and is never dropped.
+    //
+    // The cap is load-bearing, and it is why the answer is returned rather than
+    // asserted: several staged sequences below deliberately leave an actor
+    // suspended on a producer they have not driven yet, and such an actor reports
+    // `resume` forever. "The cap was hit" and "the actor went idle" are different
+    // facts, and the loop alone cannot tell them apart.
     template<typename Actor>
-    void resume_step(Actor* actor, size_t max_throughput) {
-        (void) actor->resume(max_throughput);
+    bool drive(Actor* actor, size_t max_throughput, int cap = 8) {
+        for (int i = 0; i < cap; ++i) {
+            if (actor->resume(max_throughput).result != actor_zeta::scheduler::resume_result::resume) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    // False means the actor STILL demands re-scheduling after the sequence is
-    // over -- the test's "N resumes are enough" premise is broken and the actor
+    // False means the actor STILL demands re-scheduling after the staged sequence
+    // is over -- the test's "N resumes are enough" premise is broken and the actor
     // is being stranded.
     //
     // Deliberately free of Catch2 macros: several call sites below run on worker
@@ -284,15 +294,14 @@ TEST_CASE("single-thread: client-worker") {
 
     auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
 
-    // With new behavior_t API:
     // 1. Resume client - behavior() coroutine starts, dispatch() is called,
     //    process() sends message to worker, suspends on co_await
-    resume_step(client.get(), 1);
+    drive(client.get(), 1);
     g_log.log("[TEST] After client resume");
     REQUIRE(!future.is_ready());  // Still waiting for worker
 
     // 2. Resume worker - processes compute(), inner_future becomes ready
-    resume_step(worker.get(), 1);
+    drive(worker.get(), 1);
     g_log.log("[TEST] After worker resume");
 
     // 3. Resume client again - the awaiting coroutine resumes and completes
@@ -342,13 +351,12 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
         auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
-        // With new behavior_t API:
         // 1. Resume client - behavior coroutine starts, suspends on co_await
-        resume_step(client.get(), 1);
+        drive(client.get(), 1);
         g_log.log("[CLIENT_THREAD] After client resume");
 
         // 2. Resume worker - processes compute, future becomes ready
-        resume_step(worker.get(), 1);
+        drive(worker.get(), 1);
         g_log.log("[CLIENT_THREAD] After worker resume");
 
         // 3. Resume client again - the awaiting coroutine resumes and completes
@@ -365,7 +373,6 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
     });
 
     client_thread.join();
-    REQUIRE(client_left_idle);
     REQUIRE(client_left_idle);
 
     REQUIRE(done);
@@ -413,8 +420,8 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         g_log.log("[THREAD1] Started, thread=%", thread1_id);
 
         auto [needs_sched, future] = send(client1.get(), &client_actor::process, 10);
-        resume_step(client1.get(), 1);
-        resume_step(worker1.get(), 1);
+        drive(client1.get(), 1);
+        drive(worker1.get(), 1);
         client1_left_idle = resume_leaves_idle(client1.get(), 10);
 
         future1_available = future.is_ready();
@@ -429,8 +436,8 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         g_log.log("[THREAD2] Started, thread=%", thread2_id);
 
         auto [needs_sched, future] = send(client2.get(), &client_actor::process, 20);
-        resume_step(client2.get(), 1);
-        resume_step(worker2.get(), 1);
+        drive(client2.get(), 1);
+        drive(worker2.get(), 1);
         client2_left_idle = resume_leaves_idle(client2.get(), 10);
 
         future2_available = future.is_ready();
@@ -518,8 +525,8 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
         // Client resumes worker in CLIENT thread
-        resume_step(client.get(), 1);
-        resume_step(worker.get(), 1);
+        drive(client.get(), 1);
+        drive(worker.get(), 1);
         client_left_idle = resume_leaves_idle(client.get(), 10);
 
         future_available = future.is_ready();
@@ -576,8 +583,8 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
             auto local_client = spawn<client_actor>(resource, local_worker->address(), "Client" + std::to_string(i));
 
             auto [needs_sched, future] = send(local_client.get(), &client_actor::process, (i + 1) * 10);
-            resume_step(local_client.get(), 1);
-            resume_step(local_worker.get(), 1);
+            drive(local_client.get(), 1);
+            drive(local_worker.get(), 1);
             if (resume_leaves_idle(local_client.get(), 10)) {
                 ++left_idle_count;
             }

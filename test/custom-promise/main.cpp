@@ -3,6 +3,7 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/detail/promise_concepts.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 #include <vector>
 
 // ============================================================================
@@ -83,10 +84,10 @@ private:
 TEST_CASE("vector of futures - same type from different actors") {
     auto* resource = std::pmr::get_default_resource();
 
-    // Create multiple workers
     auto worker1 = actor_zeta::spawn<worker_actor>(resource, 2);
     auto worker2 = actor_zeta::spawn<worker_actor>(resource, 3);
     auto worker3 = actor_zeta::spawn<worker_actor>(resource, 5);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     // Collect futures in a vector - key requirement!
     std::vector<actor_zeta::unique_future<int>> futures;
@@ -117,12 +118,13 @@ TEST_CASE("vector of futures - same type from different actors") {
         futures.push_back(std::move(future));
     }
 
-    // Process messages
-    (void)worker1->resume(10);
-    (void)worker2->resume(10);
-    (void)worker3->resume(10);
+    // Process messages: the scheduler owns the resume verdict — run_once() re-queues
+    // each job while it keeps asking to be resumed.
+    sched.enqueue(worker1.get());
+    sched.enqueue(worker2.get());
+    sched.enqueue(worker3.get());
+    sched.run();
 
-    // Verify results
     REQUIRE(futures[0].is_ready());
     REQUIRE(futures[1].is_ready());
     REQUIRE(futures[2].is_ready());
@@ -168,7 +170,6 @@ public:
         : actor_zeta::basic_actor<old_style_actor>(ptr)
         , call_count_(0) {}
 
-    // Old-style coroutine method - still works!
     actor_zeta::unique_future<int> compute(int x) {
         ++call_count_;
         co_return x * 2;
@@ -204,27 +205,28 @@ private:
 TEST_CASE("backward compatibility - old actor code works") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<old_style_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Send to typed method
     auto [needs_sched1, future1] = actor_zeta::send(
             actor.get(),
             &old_style_actor::compute,
         21
     );
 
-    (void)actor->resume(10);
+    sched.enqueue(actor.get());
+    sched.run();
 
     REQUIRE(future1.is_ready());
     REQUIRE(std::move(future1).take_ready() == 42);
     REQUIRE(actor->call_count() == 1);
 
-    // Send to void method
     auto [needs_sched2, future2] = actor_zeta::send(
             actor.get(),
             &old_style_actor::do_work
     );
 
-    (void)actor->resume(10);
+    sched.enqueue(actor.get());
+    sched.run();
 
     REQUIRE(future2.is_ready());
     std::move(future2).take_ready();  // Should not crash
@@ -308,7 +310,6 @@ TEST_CASE("promise destruction without set_value - sets broken_pipe") {
         return f;
     }());
 
-    // Future should be in failed state with broken_pipe
     REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));

@@ -3,6 +3,7 @@
 
 #include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 // Good actor - uses void (fire-and-forget) and other types (request-response)
 class good_actor final : public actor_zeta::basic_actor<good_actor> {
@@ -60,16 +61,17 @@ TEST_CASE("void methods work (fire-and-forget)") {
     auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Send void method - fire-and-forget
     auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &good_actor::ping);
 
-    // Execute actor synchronously
-    (void)actor->resume(10);
+    // Execute actor through the scheduler: run_once() consumes the resume verdict
+    // and re-queues the job while it keeps asking to be resumed.
+    sched.enqueue(actor.get());
+    sched.run();
 
-    // Wait for completion
     std::move(future).take_ready();
 
     REQUIRE(actor->get_ping_count() == 1);
@@ -79,16 +81,15 @@ TEST_CASE("int methods work (request-response)") {
     auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Send int method - request-response
     auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &good_actor::calculate);
 
-    // Execute actor synchronously
-    (void)actor->resume(10);
+    sched.enqueue(actor.get());
+    sched.run();
 
-    // Wait for result
     int result = std::move(future).take_ready();
     REQUIRE(result == 42);
 }
@@ -97,16 +98,15 @@ TEST_CASE("enum methods work (request-response)") {
     auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Send enum method - request-response
     auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &good_actor::check_status);
 
-    // Execute actor synchronously
-    (void)actor->resume(10);
+    sched.enqueue(actor.get());
+    sched.run();
 
-    // Wait for result
     auto status = std::move(future).take_ready();
     REQUIRE(status == good_actor::status::ok);
 }
@@ -115,16 +115,15 @@ TEST_CASE("string methods work (request-response)") {
     auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Send string method - request-response
     auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &good_actor::get_name);
 
-    // Execute actor synchronously
-    (void)actor->resume(10);
+    sched.enqueue(actor.get());
+    sched.run();
 
-    // Wait for result
     std::string name = std::move(future).take_ready();
     REQUIRE(name == "good_actor");
 }
@@ -133,6 +132,7 @@ TEST_CASE("address_t works with all method types") {
     auto* resource =std::pmr::get_default_resource();
 
     auto actor = actor_zeta::spawn<good_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
     auto addr = actor->address();
 
     // void via address_t
@@ -140,7 +140,8 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::ping);
-        (void)actor->resume(10);
+        sched.enqueue(actor.get());
+        sched.run();
         std::move(future).take_ready();
     }
 
@@ -149,7 +150,8 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::calculate);
-        (void)actor->resume(10);
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(std::move(future).take_ready() == 42);
     }
 
@@ -158,7 +160,8 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::check_status);
-        (void)actor->resume(10);
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(std::move(future).take_ready() == good_actor::status::ok);
     }
 
@@ -167,7 +170,8 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::get_name);
-        (void)actor->resume(10);
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(std::move(future).take_ready() == "good_actor");
     }
 }
