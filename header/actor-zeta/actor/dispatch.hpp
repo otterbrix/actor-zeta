@@ -100,6 +100,12 @@ namespace actor_zeta {
         using value_type = typename type_traits::is_unique_future<result_type>::value_type;
 
         auto result_promise = msg->template get_result_promise<value_type>();
+        // get_result_promise() casts result_slot_ without checking it, so a message
+        // that arrived without one yields a promise over nullptr. make_message()
+        // always installs a slot and a restamping router carries it along, so this is
+        // an impossible state -- but caught here it names the message, whereas
+        // settle()'s own assert would fire later and point at the promise.
+        assert(result_promise.valid() && "dispatch(): message carries no result slot");
         msg->transfer_ownership();   // ~message won't run cleanup anymore
         auto method_future = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
 

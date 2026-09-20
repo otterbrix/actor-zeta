@@ -395,6 +395,14 @@ namespace actor_zeta { namespace actor {
             // Reached whenever something other than a send drives the actor: a bare
             // scheduler->enqueue(), or a manual resume() loop. The CAS fails harmlessly
             // when the inbox was not blocked, which is the ordinary case.
+            //
+            // The whole justification above is "we hold `running`". Without it nobody is
+            // committed to draining, and clearing the tag would hand the next sender
+            // `success` and needs_sched == false -- a stranded actor with a message in
+            // it. resume() acquires the bit before calling this, so failing here means
+            // somebody moved the call.
+            assert(is_running(state_.load(std::memory_order_acquire)) &&
+                   "resume_impl: un-parking without holding `running`");
             mailbox().try_unblock();
 
             // Q6 before the park() below, and the order is the point: a behavior
