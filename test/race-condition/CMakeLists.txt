@@ -134,7 +134,7 @@ add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
 # ASan/TSan makes this test slower; increase timeout
 set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 600)
 
-# available() Race with Coroutine Chaining - exact reproduction of otterbrix bug
+# available() Race with Coroutine Chaining - exact reproduction of downstream bug
 # Tests for race between available() and final_suspend() with co_await chains
 # See docs/actor-zeta-race-fix-proposal.md
 set(CURRENT_TEST_NAME tests_available_race_chaining)

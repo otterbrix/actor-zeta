@@ -335,7 +335,7 @@ TEST_CASE("available race: high concurrency stress") {
 }
 
 // =============================================================================
-// Test 4: poll_pending() pattern from otterbrix
+// Test 4: poll_pending() pattern from downstream
 // Simulates the exact pattern that triggers the bug in production
 // =============================================================================
 

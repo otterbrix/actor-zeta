@@ -289,25 +289,42 @@ namespace actor_zeta { namespace actor {
                 return finalize(scheduler::resume_result::done, 0, false);
             }
 
-            if (mailbox().blocked()) {
-                return finalize(scheduler::resume_result::awaiting, 0, false);
-            }
-
-            // Q6: behavior suspended on co_await — if its deepest awaited future is
-            // ready, take the continuation and unwind the chain via symmetric transfer
-            // in final_suspend; otherwise spin and keep the actor scheduled.
+            // Q6 FIRST — must run even with a blocked (parked) mailbox: awaited-future
+            // readiness is flag-based (release_promise sets promise_released); it does NOT
+            // unblock the inbox. If Q6 sat below the blocked-check, an actor parked by the
+            // step-1 publication race (mailbox blocked, its awaited future since gone ready)
+            // would never drain its continuation -> eternal no-op resume loop (lost wakeup).
+            // The inter-await null-window guard below prevents NEW parks; lifting Q6 here also
+            // RESCUES a behavior that is already parked when its future completes.
             if (current_behavior_.is_busy()) {
                 if (current_behavior_.is_awaited_ready()) {
                     auto cont = current_behavior_.take_awaited_continuation();
                     if (cont) {
                         cont.resume();
                     }
-                } else {
+                }
+                // Re-check (mirror of the in-loop guard): the await may not have been ready,
+                // or the coroutine re-suspended on its next co_await. Falling through into the
+                // blocked-return / try_block below would re-strand a still-live behavior.
+                if (current_behavior_.is_busy()) {
                     return finalize(scheduler::resume_result::resume, 0, true);
                 }
             }
 
+            if (mailbox().blocked()) {
+                return finalize(scheduler::resume_result::awaiting, 0, false);
+            }
+
             if (mailbox().empty()) {
+                // Inter-await null-window guard: a behavior suspended on co_await
+                // transiently clears its awaited chain (is_busy()==false) between
+                // consecutive awaits, yet the coroutine is still live. Parking here
+                // would lose the producer's flag-only wakeup. Keep the actor
+                // scheduled while the behavior is alive but not finished, exactly as
+                // the is_busy() spin above does once the next chain is published.
+                if (current_behavior_ && !current_behavior_.done()) {
+                    return finalize(scheduler::resume_result::resume, 0, true);
+                }
                 auto result = mailbox().try_block()
                                   ? scheduler::resume_result::awaiting
                                   : scheduler::resume_result::resume;
@@ -385,6 +402,12 @@ namespace actor_zeta { namespace actor {
                     if (mailbox().closed()) {
                         return finalize(scheduler::resume_result::done, handled, false);
                     }
+                    // Inter-await null-window guard (see resume_impl entry): keep a
+                    // live-but-unfinished behavior scheduled instead of parking it,
+                    // so the producer's flag-only future completion is not lost.
+                    if (current_behavior_ && !current_behavior_.done()) {
+                        return finalize(scheduler::resume_result::resume, handled, true);
+                    }
                     auto result = mailbox().try_block()
                                       ? scheduler::resume_result::awaiting
                                       : scheduler::resume_result::resume;
@@ -401,7 +424,11 @@ namespace actor_zeta { namespace actor {
                 return finalize(scheduler::resume_result::done, handled, false);
             }
 
-            if (current_behavior_.is_busy()) {
+            // Keep a behavior suspended on co_await scheduled. is_busy() covers the
+            // published-chain case; the additional alive-but-not-done check covers
+            // the inter-await null-window where the chain is transiently cleared.
+            if (current_behavior_.is_busy() ||
+                (current_behavior_ && !current_behavior_.done())) {
                 return finalize(scheduler::resume_result::resume, handled, true);
             }
 
