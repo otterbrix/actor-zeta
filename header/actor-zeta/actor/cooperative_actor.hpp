@@ -291,11 +291,10 @@ namespace actor_zeta { namespace actor {
 
             // Q6 FIRST — must run even with a blocked (parked) mailbox: awaited-future
             // readiness is flag-based (release_promise sets promise_released); it does NOT
-            // unblock the inbox. If Q6 sat below the blocked-check, an actor parked by the
-            // step-1 publication race (mailbox blocked, its awaited future since gone ready)
-            // would never drain its continuation -> eternal no-op resume loop (lost wakeup).
-            // The inter-await null-window guard below prevents NEW parks; lifting Q6 here also
-            // RESCUES a behavior that is already parked when its future completes.
+            // unblock the inbox. If Q6 sat below the blocked-check, an actor already parked
+            // with a since-completed future would never drain its continuation -> eternal
+            // no-op resume loop (lost wakeup). Lifting Q6 here rescues it; the re-check
+            // below stops a still-live behavior from being parked in the first place.
             if (current_behavior_.is_busy()) {
                 if (current_behavior_.is_awaited_ready()) {
                     auto cont = current_behavior_.take_awaited_continuation();
@@ -303,9 +302,11 @@ namespace actor_zeta { namespace actor {
                         cont.resume();
                     }
                 }
-                // Re-check (mirror of the in-loop guard): the await may not have been ready,
-                // or the coroutine re-suspended on its next co_await. Falling through into the
-                // blocked-return / try_block below would re-strand a still-live behavior.
+                // Re-check: the await may not have been ready, or the coroutine
+                // re-suspended on its next co_await inside cont.resume(). Falling through to
+                // the blocked-return / try_block below would re-strand a live behavior.
+                // This is the half of the fix that prevents the park; the hoist above is the
+                // half that recovers from one.
                 if (current_behavior_.is_busy()) {
                     return finalize(scheduler::resume_result::resume, 0, true);
                 }
@@ -316,24 +317,7 @@ namespace actor_zeta { namespace actor {
             }
 
             if (mailbox().empty()) {
-                // Inter-await null-window guard: a behavior suspended on co_await
-                // transiently clears its awaited chain (is_busy()==false) between
-                // consecutive awaits, yet the coroutine is still live. Parking here
-                // would lose the producer's flag-only wakeup. Keep the actor
-                // scheduled while the behavior is alive but not finished, exactly as
-                // the is_busy() spin above does once the next chain is published.
-                if (current_behavior_ && !current_behavior_.done()) {
-                    return finalize(scheduler::resume_result::resume, 0, true);
-                }
-                auto result = mailbox().try_block()
-                                  ? scheduler::resume_result::awaiting
-                                  : scheduler::resume_result::resume;
-                bool keep_scheduled = (result == scheduler::resume_result::resume) ||
-                                      (result == scheduler::resume_result::awaiting && check_race_window());
-                if (keep_scheduled && result == scheduler::resume_result::awaiting) {
-                    result = scheduler::resume_result::resume;
-                }
-                return finalize(result, 0, keep_scheduled);
+                return park(finalize, check_race_window, 0);
             }
 
             while (handled < max_throughput) {
@@ -402,21 +386,7 @@ namespace actor_zeta { namespace actor {
                     if (mailbox().closed()) {
                         return finalize(scheduler::resume_result::done, handled, false);
                     }
-                    // Inter-await null-window guard (see resume_impl entry): keep a
-                    // live-but-unfinished behavior scheduled instead of parking it,
-                    // so the producer's flag-only future completion is not lost.
-                    if (current_behavior_ && !current_behavior_.done()) {
-                        return finalize(scheduler::resume_result::resume, handled, true);
-                    }
-                    auto result = mailbox().try_block()
-                                      ? scheduler::resume_result::awaiting
-                                      : scheduler::resume_result::resume;
-                    bool keep_scheduled = (result == scheduler::resume_result::resume) ||
-                                          (result == scheduler::resume_result::awaiting && check_race_window());
-                    if (keep_scheduled && result == scheduler::resume_result::awaiting) {
-                        result = scheduler::resume_result::resume;
-                    }
-                    return finalize(result, handled, keep_scheduled);
+                    return park(finalize, check_race_window, handled);
                 }
             }
 
@@ -424,14 +394,30 @@ namespace actor_zeta { namespace actor {
                 return finalize(scheduler::resume_result::done, handled, false);
             }
 
-            // Keep a behavior suspended on co_await scheduled. is_busy() covers the
-            // published-chain case; the additional alive-but-not-done check covers
-            // the inter-await null-window where the chain is transiently cleared.
-            if (current_behavior_.is_busy() ||
-                (current_behavior_ && !current_behavior_.done())) {
+            // Keep a behavior suspended on co_await scheduled.
+            if (current_behavior_.is_busy()) {
                 return finalize(scheduler::resume_result::resume, handled, true);
             }
 
+            return park(finalize, check_race_window, handled);
+        }
+
+        // Park the actor on an empty inbox.
+        //
+        // NEVER returns (awaiting, keep_scheduled = true): ~resume_guard would set the
+        // `scheduled` bit with no job in any queue, and try_schedule_after_enqueue()
+        // refuses to schedule an actor whose bit is already set -- so needs_sched would
+        // read false forever and the actor would be stranded. When keep_scheduled is
+        // required the verdict is downgraded to `resume`, which puts a real job back in
+        // the queue.
+        //
+        // check_race_window() is only reached when try_block() succeeded, i.e. with the
+        // inbox blocked; its own `!mailbox().blocked() &&` short-circuit is what keeps
+        // the unconditional mailbox().empty() away from a blocked inbox.
+        template<typename Finalize, typename CheckRaceWindow>
+        scheduler::resume_info park(Finalize& finalize,
+                                    CheckRaceWindow& check_race_window,
+                                    size_t handled) noexcept {
             auto result = mailbox().try_block()
                               ? scheduler::resume_result::awaiting
                               : scheduler::resume_result::resume;
