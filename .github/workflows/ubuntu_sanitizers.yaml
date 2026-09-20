@@ -1,6 +1,6 @@
 name: Ubuntu Sanitizers CI
 
-# Three configurations the main matrix does not cover, each of which catches a class
+# Four configurations the main matrix does not cover, each of which catches a class
 # of defect an ordinary build is blind to:
 #
 #   asan       -- use-after-free and bad-free: a unique_future handing out a freed
@@ -8,6 +8,11 @@ name: Ubuntu Sanitizers CI
 #                 allocator.
 #   tsan       -- data races, including Catch2 assertion macros called from worker
 #                 threads, which are a race in Catch2 v2 itself.
+#   ubsan      -- undefined behaviour that neither of the above sees. Added after
+#                 exponential_backoff() was found shifting by 32 on every run of the
+#                 shutdown-sender-race test: asan and tsan were green throughout.
+#                 -fno-sanitize-recover=all so a report fails the job rather than
+#                 being printed and walked past.
 #   exceptions -- EXCEPTIONS_DISABLE=OFF. The whole exception_ptr capture/rethrow path
 #                 in unique_future exists ONLY in this mode (with -fno-exceptions the
 #                 compiler emits no catch wrapper for a coroutine body at all), and it
@@ -35,6 +40,10 @@ jobs:
           - name: tsan
             cxx_flags: "-fsanitize=thread -fno-omit-frame-pointer"
             link_flags: "-fsanitize=thread"
+            exceptions_disable: "ON"
+          - name: ubsan
+            cxx_flags: "-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+            link_flags: "-fsanitize=undefined"
             exceptions_disable: "ON"
           - name: exceptions
             cxx_flags: ""
@@ -116,4 +125,5 @@ jobs:
           # stacks for a lock-order inversion.
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1
           TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --output-on-failure
