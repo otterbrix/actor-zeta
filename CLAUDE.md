@@ -68,6 +68,39 @@ examples/
 5. `auto [needs_sched, future] = send(actor.get(), &MyActor::method, args...)`
 6. `if (needs_sched) scheduler->enqueue(actor.get())`
 
+### Who May Schedule (CRITICAL)
+
+**`address_t` is for sending, nothing else. Only the owner launches actors.**
+
+An `address_t` carries `enqueue_impl` and no resume entry point, by design: a peer
+needs to post a message, not to run the recipient. Scheduling belongs to whoever
+owns the actors -- the supervisor that spawned them, or the code that drives them
+in a test. A `cooperative_actor` never holds a scheduler.
+
+So an actor that sends to a peer cannot discharge the `needs_sched` it gets back.
+It must not drop it either: a dropped obligation leaves the target with the
+`scheduled` bit set and no job anywhere, and every later `send()` to it then
+reports `needs_sched == false` -- the actor is unreachable for good, with no
+assert and no diagnostic. Record it and let the owner claim it:
+
+```cpp
+// In the actor: an address, so record.
+auto [needs_sched, f] = send(peer_address_, &Peer::method, x);
+if (needs_sched) { peer_owed_.fetch_add(1, std::memory_order_release); }
+int v = co_await std::move(f);
+
+std::size_t take_peer_obligations() {
+    return peer_owed_.exchange(0, std::memory_order_acq_rel);
+}
+
+// In the owner: claim and schedule.
+if (actor->take_peer_obligations() > 0) { scheduler->enqueue(peer); }
+```
+
+A supervisor (`actor_mixin`) that spawned its children does hold the scheduler and
+discharges directly -- see `examples/supervisor/`, `examples/balancer/`,
+`examples/delegation/`.
+
 ### Actor Shutdown (CRITICAL)
 
 The scheduler holds raw `job_ptr`s to actors and has no destructor: `scheduler_t`
@@ -231,9 +264,10 @@ for (int i = 0; i < 100 && !f.is_ready(); ++i) {
 }
 int r = f.failed() ? -1 : std::move(f).take_ready();
 
-// Inside an actor coroutine
-auto [needs_sched, f2] = send(other.get(), &Other::process, x);
-if (needs_sched) scheduler->enqueue(other.get());
+// Inside an actor coroutine: it holds an address, not a scheduler, so it records
+// the obligation and its owner claims it (see "Who May Schedule").
+auto [needs_sched, f2] = send(other_address_, &Other::process, x);
+if (needs_sched) { other_owed_.fetch_add(1, std::memory_order_release); }
 int v = co_await std::move(f2);
 
 // Fire-and-forget
@@ -264,6 +298,8 @@ unique_future<void> process(std::unique_ptr<Data>&& data);  // compile error, se
 | `.get()` / `.wait()` / `.available()` | do not exist; `co_await`, pump, or poll, then `take_ready()` |
 | `take_ready()` after `is_ready()` alone | check `failed()` first; a valueless extraction aborts in every build |
 | ignoring `resume()`'s verdict | `[[nodiscard]]`; requeue on `resume`, drop on `awaiting`, no `(void)` cast |
+| an actor holding a `scheduler*` | only a supervisor owns one; others record the obligation |
+| dropping `needs_sched` | strands the target for good; record it for the owner |
 
 ## Recent Changes
 

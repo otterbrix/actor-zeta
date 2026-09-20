@@ -14,9 +14,9 @@
 #include <vector>
 
 // Guard for the lost wakeup in cooperative_actor::resume_impl. A behavior that
-// re-suspends on a fresh await from inside the Q6 drain is kept off the park path by
+// re-suspends on a fresh await from inside the entry-path drain is kept off the park path by
 // two lines: the is_busy() re-check after cont.resume() (else try_block() parks a
-// PENDING await -- verdict `awaiting`, job dropped) and Q6 sitting ABOVE the
+// PENDING await -- verdict `awaiting`, job dropped) and that drain sitting ABOVE the
 // blocked-check (completion is flag-only and a bare enqueue does not unblock the
 // inbox, so a parked actor's ready continuation would never drain). Pinned by hand with
 // resume(1), no threads or clocks, on the VERDICT of the drain step; plus a [stress]
@@ -78,9 +78,8 @@ namespace {
             , first_send_needs_sched_(-1)
             , second_send_needs_sched_(-1) {}
 
-        // Nothing inside the library consumes needs_sched, and a handler holds an
-        // address_t and no scheduler -- so it records the obligation here and the
-        // driver discharges it.
+        // The library never consumes needs_sched, and a handler holds an address_t, not a
+        // scheduler: the obligation is recorded here and the driver discharges it.
         unique_future<int> chain(int x) {
             auto [needs_sched_first, first_future] = send(producer_, &producer_actor::produce, x);
             first_send_needs_sched_.store(needs_sched_first ? 1 : 0, std::memory_order_release);
@@ -332,8 +331,8 @@ TEST_CASE("scheduler_test_t::stop() terminates against a pending await") {
 
 // Soak through the real scheduler: the only coverage under contention. Tagged [stress]
 // (`ctest -LE stress` excludes it). Pass/fail is decided by PROGRESS, not elapsed time:
-// only kStallPolls polls with no progress fail; the absolute cap exists solely so a hang
-// cannot wedge CI. The producer is enqueued on a RECORDED obligation, never a blind timer.
+// only kStallPolls polls with no progress fail; kHangGuard exists solely so a hang cannot
+// wedge CI. The producer is enqueued on a RECORDED obligation, never a blind timer.
 TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stress]") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -352,15 +351,15 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
     std::atomic<int> submitted{0};
     std::atomic<bool> stop_pump{false};
 
-    // A coroutine holds an address_t, not a scheduler: this thread discharges its obligations.
+    // Discharges the consumer's recorded obligations.
     std::thread producer_pump([&]() {
         while (!stop_pump.load(std::memory_order_acquire)) {
             if (consumer->take_producer_obligations() > 0) {
                 scheduler->enqueue(producer.get());
             } else {
-                // Safety net for an obligation recorded just after the counter was claimed.
+                // Nothing owed: back off. A blind enqueue here would make the recorded-obligation
+                // mechanism untestable; the header promises the producer is never woken by a timer.
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
-                scheduler->enqueue(producer.get());
             }
         }
     });
@@ -386,7 +385,6 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
 
     REQUIRE(submitted.load() == kTotalRequests);
 
-    // kStallPolls of zero progress is a stall; kHangGuard only keeps CI from wedging.
     constexpr int kStallPolls = 400;
     constexpr auto kPollInterval = std::chrono::milliseconds(5);
     constexpr auto kHangGuard = std::chrono::minutes(3);

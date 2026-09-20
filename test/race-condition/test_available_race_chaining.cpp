@@ -17,15 +17,26 @@
 // release() to reclaim, so consumer and producer never race for the frame.
 
 namespace {
-// Drive a cross-actor future to ready without taking it. The dispatcher ignores
-// the needs_sched its own send() reports, so both actors are re-enqueued here.
-template<typename Fut, typename Sched, typename A1, typename A2>
-inline void drive_until_ready(Fut& fut, Sched& sched, A1* a1, A2* a2) {
+constexpr auto kChainTimeout = std::chrono::seconds(10);
+
+// Poll a cross-actor future to ready without taking it, discharging the
+// obligations the dispatcher recorded: the test owns the actors, so scheduling
+// them is its job. No blind enqueues -- a strand here means an obligation was
+// dropped, and that is exactly what these tests must catch.
+template<typename Fut, typename Dispatcher, typename Worker, typename Sched>
+[[nodiscard]] inline bool drive_until_ready(Fut& fut, Dispatcher* dispatcher,
+                                            Worker* worker, Sched* sched) {
+    const auto start = std::chrono::steady_clock::now();
     while (!fut.is_ready()) {
-        sched->enqueue(a1);
-        sched->enqueue(a2);
+        if (dispatcher->take_worker_obligations() > 0) {
+            sched->enqueue(worker);
+        }
+        if (std::chrono::steady_clock::now() - start > kChainTimeout) {
+            return false;
+        }
         std::this_thread::yield();
     }
+    return true;
 }
 } // namespace
 
@@ -104,14 +115,23 @@ public:
         , completed_(0)
         , worker_address_(actor_zeta::address_t::empty_address()) {}
 
+    // An address_t is all a peer needs to send; launching actors belongs to the
+    // owner. The obligation send() reports is recorded, not dropped.
     void set_worker(const actor_zeta::address_t& addr) {
         worker_address_ = addr;
+    }
+
+    std::size_t take_worker_obligations() {
+        return worker_owed_.exchange(0, std::memory_order_acq_rel);
     }
 
     actor_zeta::unique_future<int> process(int value) {
         destruction_tracker tracker(value + 1000);
 
-        auto [_, future] = actor_zeta::send(worker_address_, &worker_actor::execute, value);
+        auto [needs_sched, future] = actor_zeta::send(worker_address_, &worker_actor::execute, value);
+        if (needs_sched) {
+            worker_owed_.fetch_add(1, std::memory_order_release);
+        }
 
         int result = co_await std::move(future);
 
@@ -132,6 +152,7 @@ public:
 
 private:
     std::atomic<int> completed_;
+    std::atomic<std::size_t> worker_owed_{0};
     actor_zeta::address_t worker_address_;
 };
 
@@ -156,9 +177,7 @@ TEST_CASE("available race chaining: basic chain is safe") {
             scheduler->enqueue(dispatcher.get());
         }
 
-        scheduler->enqueue(worker.get());
-
-        drive_until_ready(future, scheduler, dispatcher.get(), worker.get());
+        REQUIRE(drive_until_ready(future, dispatcher.get(), worker.get(), scheduler.get()));
 
         // Destroyed untaken, the instant is_ready() read true.
         { auto temp = std::move(future); }
@@ -200,15 +219,21 @@ TEST_CASE("available race chaining: poll_pending pattern") {
             if (needs_sched) {
                 scheduler->enqueue(dispatcher.get());
             }
-            scheduler->enqueue(worker.get());
 
             pending.push_back(std::move(future));
         }
 
         // Erase (destroy) each future as soon as it reads ready.
+        const auto batch_start = std::chrono::steady_clock::now();
+        bool batch_timed_out = false;
         while (!pending.empty()) {
-            scheduler->enqueue(dispatcher.get());
-            scheduler->enqueue(worker.get());
+            if (dispatcher->take_worker_obligations() > 0) {
+                scheduler->enqueue(worker.get());
+            }
+            if (std::chrono::steady_clock::now() - batch_start > kChainTimeout) {
+                batch_timed_out = true;
+                break;
+            }
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->is_ready()) {
                     it = pending.erase(it);
@@ -218,6 +243,7 @@ TEST_CASE("available race chaining: poll_pending pattern") {
             }
             std::this_thread::yield();
         }
+        REQUIRE_FALSE(batch_timed_out);
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -245,6 +271,9 @@ TEST_CASE("available race chaining: concurrent senders") {
     constexpr int NUM_THREADS = 4;
     std::vector<std::thread> threads;
 
+    // Catch2 v2 assertion macros are not thread-safe; workers record, main asserts.
+    std::atomic<int> stranded{0};
+
     for (int t = 0; t < NUM_THREADS; ++t) {
         threads.emplace_back([&, t]() {
             for (int i = 0; i < OPERATIONS_PER_THREAD; ++i) {
@@ -255,9 +284,10 @@ TEST_CASE("available race chaining: concurrent senders") {
                 if (needs_sched) {
                     scheduler->enqueue(dispatcher.get());
                 }
-                scheduler->enqueue(worker.get());
 
-                drive_until_ready(future, scheduler, dispatcher.get(), worker.get());
+                if (!drive_until_ready(future, dispatcher.get(), worker.get(), scheduler.get())) {
+                    stranded.fetch_add(1, std::memory_order_relaxed);
+                }
 
                 { auto temp = std::move(future); }
             }
@@ -267,6 +297,8 @@ TEST_CASE("available race chaining: concurrent senders") {
     for (auto& t : threads) {
         t.join();
     }
+
+    REQUIRE(stranded.load() == 0);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     scheduler->stop();

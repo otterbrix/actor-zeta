@@ -9,6 +9,7 @@
 #include "common_types.hpp"
 #include "test_logger.hpp"
 
+#include <atomic>
 #include <unordered_map>
 #include <string>
 #include <algorithm>
@@ -27,6 +28,11 @@ public:
         collections_["test_db.products"] = 50;
     }
 
+    /// Messages actually handled, across size() and execute_plan(). Lets a test
+    /// assert the round trips really happened instead of pumping the actor stage
+    /// by stage -- right numbers with fewer trips no longer pass.
+    std::size_t served() const noexcept { return served_.load(std::memory_order_acquire); }
+
     unique_future<std::size_t> size(
             session_id_t session,
             collection_full_name_t name) {
@@ -34,6 +40,8 @@ public:
         auto tid = thread_id_str();
         g_log.log("[%::size] thread=% session=% db=% coll=%",
                   name_, tid, session.data(), name.database, name.collection);
+
+        served_.fetch_add(1, std::memory_order_release);
 
         std::string key = name.database + "." + name.collection;
         auto it = collections_.find(key);
@@ -50,6 +58,7 @@ public:
     unique_future<cursor_t_ptr> execute_plan(
             session_id_t session,
             logical_plan_t plan) {
+        served_.fetch_add(1, std::memory_order_release);
 
         auto tid = thread_id_str();
         g_log.log("[%::execute_plan] thread=% session=% plan=%",
@@ -105,6 +114,7 @@ public:
     ~memory_storage_t() = default;
 
 private:
+    std::atomic<std::size_t> served_{0};
     std::string name_;
     std::unordered_map<std::string, std::size_t> collections_;
 };

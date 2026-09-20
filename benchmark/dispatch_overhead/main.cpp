@@ -222,7 +222,7 @@ static void BM_FullCycle_1Arg(benchmark::State& state) {
     same_thread_scheduler sched(1);
 
     // Probe, outside the measured region: one drive after one send makes the future
-    // ready. take_ready() only ASSERTS readiness, and benchmarks build with NDEBUG, so
+    // ready. take_ready() aborts on a valueless future in every build, so
     // an unchecked violation would read unset storage and report a plausible wrong
     // number. The timed loop still gates on is_ready()/failed(): one predictable
     // branch is cheaper than a fabricated timing.

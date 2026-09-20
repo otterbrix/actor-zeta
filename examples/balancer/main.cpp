@@ -93,9 +93,9 @@ private:
 // while a scheduler worker drives the child; this side only polls for the answer.
 template<typename T>
 T await_child(actor_zeta::unique_future<T>& future) {
-    // is_ready() is only the promise_released bit -- a promise that dies without a value
-    // sets it too -- and take_ready() merely asserts, which Release builds drop. Hence
-    // failed(). The bound turns a future that never completes into a visible error.
+    // is_ready() is only promise_released, which a promise dying without a value also sets.
+    // Gate on failed(): extracting without one aborts in every build, Release included.
+    // The bound turns a future that never completes into a visible error.
     constexpr int kAwaitCap = 10'000'000;
     for (int i = 0; i < kAwaitCap && !future.is_ready(); ++i) {
         std::this_thread::yield();

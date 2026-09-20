@@ -200,8 +200,8 @@ namespace actor_zeta { namespace actor {
             return {needs_sched, result};
         }
 
-        // The verdict is an obligation: on `resume` the caller must re-enqueue this actor.
-        // Nothing else will -- a completing future is flag-only, and send() only says needs_sched when blocked.
+        // The verdict is an obligation: on `resume` the caller must re-enqueue this actor; nobody
+        // else will (future completion is flag-only; send() says needs_sched only when blocked).
         [[nodiscard]] scheduler::resume_info resume(size_t max_throughput) noexcept {
             assert(max_throughput > 0 && "max_throughput must be greater than 0");
 
@@ -337,10 +337,10 @@ namespace actor_zeta { namespace actor {
                    "resume_impl: un-parking without holding `running`");
             mailbox().try_unblock();
 
-            // Drain a suspended behavior BEFORE the park() below; the order is the point. A
-            // behavior on a co_await must report `resume`, never `awaiting` -- awaiting pairs
-            // with keep_scheduled = false, so nothing would ever wake it. Readiness is flag-only
-            // (release_promise() touches neither mailbox nor scheduler): the mailbox cannot speak for it.
+            // Drain a suspended behavior BEFORE park() below; the order is the point. A behavior on
+            // a co_await must report `resume`, never `awaiting` (awaiting pairs with keep_scheduled
+            // = false: nothing would ever wake it). Readiness is flag-only -- release_promise()
+            // touches neither mailbox nor scheduler -- so the mailbox cannot speak for it.
             if (current_behavior_.is_busy()) {
                 if (current_behavior_.is_awaited_ready()) {
                     auto cont = current_behavior_.take_awaited_continuation();
@@ -442,11 +442,11 @@ namespace actor_zeta { namespace actor {
             return park(finalize, check_race_window, handled);
         }
 
-        // Park on an empty inbox. NEVER returns (awaiting, keep_scheduled = true):
-        // ~resume_guard would set `scheduled` with no job in any queue, and
-        // leave_and_maybe_schedule() never claims a set bit -- needs_sched false forever;
-        // the verdict becomes `resume` instead. check_race_window() runs only after
-        // try_block() succeeded; its `!blocked() &&` keeps empty() away from a blocked inbox.
+        // Park on an empty inbox. NEVER returns (awaiting, keep_scheduled = true): ~resume_guard
+        // would set `scheduled` with no job in any queue, and leave_and_maybe_schedule() never
+        // claims a set bit -- needs_sched false forever; the verdict becomes `resume` instead.
+        // check_race_window() runs only after try_block() succeeded; its `!blocked() &&` keeps
+        // empty() away from a blocked inbox.
         template<typename Finalize, typename CheckRaceWindow>
         scheduler::resume_info park(Finalize& finalize,
                                     CheckRaceWindow& check_race_window,

@@ -78,7 +78,8 @@ int main(int argc, char** argv) {
         p.set_value(tracked{}); // control: same path with a real value, so a broken harness cannot pass
     }
 
-    std::printf("is_ready=%d failed=%d\n", (int) future.is_ready(), (int) future.failed());
+    std::printf("is_ready=%d failed=%d\n",
+                static_cast<int>(future.is_ready()), static_cast<int>(future.failed()));
     if (future.is_ready() != true) {
         std::printf("HARNESS BROKEN: a released promise must report ready\n");
         return 2;

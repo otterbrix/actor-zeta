@@ -13,6 +13,7 @@
 #include "test_logger.hpp"
 
 #include <vector>
+#include <atomic>
 #include <unordered_map>
 #include <string>
 
@@ -22,6 +23,7 @@ using namespace actor_zeta;
 
 class manager_dispatcher_t final : public basic_actor<manager_dispatcher_t> {
 public:
+    /// Holds an address_t: all a peer needs to send. Launching actors is the supervisor's job.
     explicit manager_dispatcher_t(
             std::pmr::memory_resource* mr,
             address_t memory_storage,
@@ -31,25 +33,35 @@ public:
         , name_(name) {
     }
 
-    /// No-op message: gives the actor a turn so a suspended handler can drain a
-    /// ready await.
-    unique_future<void> poll() {
-        g_log.log("[%::poll] called", name_);
-        co_return;
+    /// send() hands back an obligation this actor cannot discharge -- it has an
+    /// address, not a scheduler. Dropping it would strand storage for good, so it
+    /// is recorded here and the supervisor driving this test claims it below.
+    void owe_storage(bool needs_sched) {
+        if (needs_sched) {
+            storage_owed_.fetch_add(1, std::memory_order_release);
+        }
     }
 
-    unique_future<void> close_cursor(session_id_t session) {
+    /// Claimed once by the owner, which then enqueues storage.
+    std::size_t take_storage_obligations() {
+        return storage_owed_.exchange(0, std::memory_order_acq_rel);
+    }
+
+    /// Returns whether a cursor was actually removed, so a test can tell the work
+    /// from a handler that merely ran to completion.
+    unique_future<bool> close_cursor(session_id_t session) {
         auto tid = thread_id_str();
         g_log.log("[%::close_cursor] thread=% session=%", name_, tid, session.data());
 
         auto it = result_storage_.find(session);
-        if (it != result_storage_.end()) {
-            g_log.log("[%::close_cursor] Removing cursor from storage", name_);
-            result_storage_.erase(it);
-        } else {
+        if (it == result_storage_.end()) {
             g_log.log("[%::close_cursor] Cursor not found in storage", name_);
+            co_return false;
         }
-        co_return;
+
+        g_log.log("[%::close_cursor] Removing cursor from storage", name_);
+        result_storage_.erase(it);
+        co_return true;
     }
 
     unique_future<size_result_t> size(
@@ -72,6 +84,7 @@ public:
             &memory_storage_t::size,
             session,
             collection_full_name_t{database_name, collection});
+        owe_storage(sent_result.first);
         auto result = co_await std::move(sent_result.second);
 
         g_log.log("[%::size] Got result from storage: %", name_, result);
@@ -102,6 +115,7 @@ public:
             &memory_storage_t::execute_plan,
             session,
             std::move(plan));
+        owe_storage(sent_cursor.first);
         auto cursor = co_await std::move(sent_cursor.second);
 
         g_log.log("[%::execute_plan] Got cursor with % rows, error=%",
@@ -133,6 +147,7 @@ public:
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection1)));
+        owe_storage(sent_cursor1.first);
         auto cursor1 = co_await std::move(sent_cursor1.second);
 
         if (!cursor1) {
@@ -154,6 +169,7 @@ public:
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection2)));
+        owe_storage(sent_cursor2.first);
         auto cursor2 = co_await std::move(sent_cursor2.second);
 
         if (!cursor2) {
@@ -193,12 +209,12 @@ public:
         futures.reserve(collections.size());
 
         for (const auto& coll : collections) {
-            // Only the future is needed here: this actor has no scheduler handle,
-            // so it cannot act on the needs_sched half. Consume the pair in place.
+
             auto sent = send(memory_storage_,
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", coll));
+            owe_storage(sent.first);
             futures.push_back(std::move(sent.second));
         }
 
@@ -240,6 +256,7 @@ public:
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", "users"));
+            owe_storage(sent_extra_size.first);
             auto extra_size = co_await std::move(sent_extra_size.second);
 
             detail = "large_dataset:total=" + std::to_string(total) +
@@ -298,6 +315,7 @@ public:
             &memory_storage_t::size,
             session,
             collection_full_name_t("test_db", collection));
+        owe_storage(sent_size.first);
         auto size = co_await std::move(sent_size.second);
 
         std::string result = format_result(size, collection);
@@ -329,6 +347,7 @@ public:
                 &memory_storage_t::size,
                 session_copy,
                 collection_full_name_t("test_db", collection_copy));
+            owe_storage(sent_size.first);
             auto size = co_await std::move(sent_size.second);
 
             g_log.log("[%::coroutine_lambda] Got size=%, applying multiplier=%",
@@ -354,6 +373,7 @@ public:
                 (std::pmr::memory_resource*) -> unique_future<cursor_t_ptr> {
             auto sent_size = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            owe_storage(sent_size.first);
             auto size = co_await std::move(sent_size.second);
             auto cursor = std::make_unique<cursor_t>();
             for (std::size_t i = 0; i < std::min(size, std::size_t(10)); ++i)
@@ -382,6 +402,7 @@ public:
             }
             auto sent_cursor = send(memory_storage_,
                 &memory_storage_t::execute_plan, s, std::move(p));
+            owe_storage(sent_cursor.first);
             auto cursor = co_await std::move(sent_cursor.second);
             co_return std::move(cursor);
         };
@@ -394,6 +415,7 @@ public:
                 -> unique_future<std::size_t> {
             auto sent_result = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            owe_storage(sent_result.first);
             auto result = co_await std::move(sent_result.second);
             co_return result;
         };
@@ -461,6 +483,7 @@ public:
                 co_return size_result_t::error("connection_timeout");
             auto sent_size = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            owe_storage(sent_size.first);
             auto size = co_await std::move(sent_size.second);
             co_return size_result_t(size);
         };
@@ -497,6 +520,7 @@ public:
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection)));
+        owe_storage(sent_cursor.first);
         auto cursor = co_await std::move(sent_cursor.second);
 
         if (cursor->has_error) {
@@ -515,7 +539,6 @@ public:
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &manager_dispatcher_t::poll,
         &manager_dispatcher_t::size,
         &manager_dispatcher_t::execute_plan,
         &manager_dispatcher_t::close_cursor,
@@ -526,14 +549,14 @@ public:
         &manager_dispatcher_t::compute_with_lambda_and_state,
         &manager_dispatcher_t::async_transform_with_lambda,
         &manager_dispatcher_t::execute_with_coroutine_lambda,
-    
+
         &manager_dispatcher_t::create_cursor_from_query,
         &manager_dispatcher_t::validate_and_execute,
         &manager_dispatcher_t::get_database_statistics,
         &manager_dispatcher_t::process_batch_buffer,
         &manager_dispatcher_t::get_cached_value,
         &manager_dispatcher_t::execute_with_retry,
-    
+
         &manager_dispatcher_t::fetch_row_batch
     >;
 
@@ -542,9 +565,6 @@ public:
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
         switch (msg->command()) {
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::poll>:
-                co_await poll();
-                break;
             case msg_id<manager_dispatcher_t, &manager_dispatcher_t::size>:
                 co_await dispatch(this, &manager_dispatcher_t::size, msg);
                 break;
@@ -602,79 +622,10 @@ public:
         }
     }
 
-    bool has_pending() const {
-        return !pending_size_.empty() ||
-               !pending_execute_.empty() ||
-               !pending_transaction_.empty() ||
-               !pending_aggregate_.empty() ||
-               !pending_detail_.empty();
-    }
-
-    void poll_pending() {
-        for (auto it = pending_size_.begin(); it != pending_size_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] size coroutine completed", name_);
-                it = pending_size_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        for (auto it = pending_execute_.begin(); it != pending_execute_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] execute coroutine completed", name_);
-                it = pending_execute_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        for (auto it = pending_transaction_.begin(); it != pending_transaction_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] transaction coroutine completed", name_);
-                it = pending_transaction_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        for (auto it = pending_aggregate_.begin(); it != pending_aggregate_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] aggregate coroutine completed", name_);
-                it = pending_aggregate_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        for (auto it = pending_detail_.begin(); it != pending_detail_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] detail coroutine completed", name_);
-                it = pending_detail_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        for (auto it = pending_transform_.begin(); it != pending_transform_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] transform coroutine completed", name_);
-                it = pending_transform_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    const std::string& name() const { return name_; }
-
-    ~manager_dispatcher_t() = default;
-
 private:
     address_t memory_storage_;
+    std::atomic<std::size_t> storage_owed_{0};
     std::string name_;
-
-    std::vector<unique_future<size_result_t>> pending_size_;
-    std::vector<unique_future<cursor_t_ptr>> pending_execute_;
-    std::vector<unique_future<transaction_result_t>> pending_transaction_;
-    std::vector<unique_future<aggregate_result_t>> pending_aggregate_;
-    std::vector<unique_future<std::string>> pending_detail_;
-    std::vector<unique_future<int>> pending_transform_;
 
     std::unordered_map<session_id_t, cursor_t*, session_id_hash> result_storage_;
 };

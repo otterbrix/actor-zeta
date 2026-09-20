@@ -181,8 +181,9 @@ TEST_CASE("self-destroy: concurrent is_ready polling stress") {
                 std::this_thread::yield();
             }
 
-            REQUIRE(state->has_result());
-            consumer_saw_ready.store(true, std::memory_order_release);
+            // Latched, not asserted here: a Catch2 macro inside a thread is itself
+            // a race -- the very thing the comment above already says.
+            consumer_saw_ready.store(state->has_result(), std::memory_order_release);
         });
 
         producer.join();

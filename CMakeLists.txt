@@ -22,6 +22,9 @@ option(ENABLE_TESTS_MEASUREMENTS    "ENABLE TESTS MEASUREMENTS" OFF)
 option(ALLOW_BENCHMARK              "ALLOW BENCHMARK"           OFF)
 option(RTTI_DISABLE                 "RTTI DISABLE"              ON)
 option(EXCEPTIONS_DISABLE           "EXCEPTIONS DISABLE"        ON)
+# OFF by default so a local build is not blocked by a new compiler's new warning;
+# CI turns it ON, which is the only place the whole matrix is seen at once.
+option(WARNINGS_AS_ERRORS           "WARNINGS AS ERRORS"        OFF)
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (default Debug)" FORCE)
@@ -62,6 +65,7 @@ message(STATUS "ENABLE_TESTS_MEASUREMENTS = ${ENABLE_TESTS_MEASUREMENTS}")
 message(STATUS "ALLOW_BENCHMARK = ${ALLOW_BENCHMARK}")
 message(STATUS "RTTI_DISABLE = ${RTTI_DISABLE}")
 message(STATUS "EXCEPTIONS_DISABLE = ${EXCEPTIONS_DISABLE}")
+message(STATUS "WARNINGS_AS_ERRORS = ${WARNINGS_AS_ERRORS}")
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/
@@ -97,6 +101,10 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
             -Werror=init-self
     )
 
+    if (WARNINGS_AS_ERRORS)
+        add_compile_options(-Werror)
+    endif()
+
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
         add_compile_options(
                 -Wlogical-op
@@ -112,7 +120,10 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
     endif()
 
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    add_compile_options(/W4 /WX)
+    add_compile_options(/W4)
+    if (WARNINGS_AS_ERRORS)
+        add_compile_options(/WX)
+    endif()
 endif()
 
 file(GLOB ${PROJECT_NAME}_HEADERS

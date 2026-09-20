@@ -7,6 +7,8 @@
 #include <actor-zeta/config.hpp>
 #include <test/tooltestsuites/scheduler_test.hpp>
 
+#include <atomic>
+
 TEST_CASE("promise_type in unique_future<T>") {
     SECTION("promise_type exists for unique_future<int>") {
         using promise_type = actor_zeta::unique_future<int>::promise_type;
@@ -367,6 +369,81 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 // against -- a coroutine frame that is never destroyed, taking its promise_type and
 // locals with it -- is invisible without a sanitizer, so run this target under ASan
 // or valgrind to actually detect it.
+
+// An actor cannot await a message it posted to itself. While a behavior is
+// suspended on a co_await, resume_impl() returns before it ever reaches the
+// mailbox loop, so the message that would settle the future is never
+// dispatched and the verdict stays `resume` forever.
+class self_await_actor final : public actor_zeta::basic_actor<self_await_actor> {
+public:
+    explicit self_await_actor(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<self_await_actor>(res) {
+    }
+
+    actor_zeta::unique_future<int> inner() {
+        inner_ran_.store(true, std::memory_order_release);
+        co_return 7;
+    }
+
+    actor_zeta::unique_future<int> outer() {
+        // Sent to ourselves: the mailbox is not blocked (we are running), so this
+        // reports needs_sched == false and there is nothing to enqueue.
+        auto [needs_sched, f] = actor_zeta::send(this, &self_await_actor::inner);
+        actor_zeta::detail::ignore_unused(needs_sched);
+        co_return co_await std::move(f);
+    }
+
+    bool inner_ran() const noexcept { return inner_ran_.load(std::memory_order_acquire); }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &self_await_actor::inner,
+        &self_await_actor::outer
+    >;
+
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::msg_id<self_await_actor, &self_await_actor::inner>:
+                co_await dispatch(this, &self_await_actor::inner, msg);
+                break;
+            case actor_zeta::msg_id<self_await_actor, &self_await_actor::outer>:
+                co_await dispatch(this, &self_await_actor::outer, msg);
+                break;
+        }
+    }
+
+private:
+    std::atomic<bool> inner_ran_{false};
+};
+
+TEST_CASE("Recursive coroutines are NOT SUPPORTED") {
+    auto* resource = std::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<self_await_actor>(resource);
+
+    auto [needs_sched, future] = actor_zeta::send(actor.get(), &self_await_actor::outer);
+    REQUIRE(needs_sched);
+
+    // Bounded on purpose: the verdict never stops being `resume`, so an
+    // unbounded pump would spin for good rather than fail.
+    constexpr int kPumpCap = 64;
+    int pumped = 0;
+    for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
+        auto info = actor->resume(1);
+        REQUIRE(info.result == actor_zeta::scheduler::resume_result::resume);
+        ++pumped;
+    }
+
+    // The self-addressed message is still in the mailbox, undispatched.
+    REQUIRE(pumped == kPumpCap);
+    REQUIRE_FALSE(actor->inner_ran());
+    REQUIRE_FALSE(future.is_ready());
+
+    // Leaks ~650 bytes by construction: outer() stays suspended on a co_await that
+    // can never settle, so ~behavior_t releases the future without release() being
+    // able to reclaim the frame (it only destroys a done() handle). The abandoned
+    // frame and inner's shared_state are the leak. The same shape is why CI runs
+    // with detect_leaks=0; macOS ASan does not report leaks at all.
+    future.detach();
+}
 
 TEST_CASE("coroutine cleanup does not crash") {
     auto* resource = std::pmr::get_default_resource();

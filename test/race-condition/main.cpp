@@ -203,34 +203,15 @@ TEST_CASE("Memory leak detection - orphaned messages") {
     auto start_time = std::chrono::steady_clock::now();
     constexpr auto timeout = std::chrono::seconds(10);
 
-    std::size_t last_count = 0;
-    int stall_iterations = 0;
-    constexpr int MAX_STALL = 10;
-
-    // If the actor stalls with work left (no progress for ~1ms), re-enqueue it
-    // rather than wait out the timeout.
+    // No rescue enqueue: all 1000 senders above discharged their own needs_sched,
+    // so a stall here is a real strand and must reach the REQUIRE below.
     while (actor->processed_count() < NUM_ORPHANED) {
         auto elapsed = std::chrono::steady_clock::now() - start_time;
         if (elapsed > timeout) {
             break;
         }
 
-        std::size_t current_count = actor->processed_count();
-
-        if (current_count == last_count) {
-            ++stall_iterations;
-
-            if (stall_iterations >= MAX_STALL) {
-                scheduler->enqueue(actor.get());
-                stall_iterations = 0;
-            }
-        } else {
-            last_count = current_count;
-            stall_iterations = 0;
-        }
-
         std::this_thread::yield();
-
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 

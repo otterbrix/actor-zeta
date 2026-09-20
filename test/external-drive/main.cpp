@@ -142,7 +142,7 @@ TEST_CASE("external drive: coroutine_handle() exposes the awaited chain of a met
     REQUIRE(verdict != scheduler::resume_result::resume);
 
     REQUIRE(awaited_is_ready(fut) == true);
-    REQUIRE(resume_awaited(fut) == true); // the Q6 drain, from a non-actor thread
+    REQUIRE(resume_awaited(fut) == true); // the entry-path drain, from a non-actor thread
 
     REQUIRE(fut.is_ready());
     REQUIRE(std::move(fut).take_ready() == 52); // 21 * 2 + 10

@@ -167,8 +167,7 @@ TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out
 
         state->set_value(42);
         const bool deallocated = state->release_promise();
-        // The future already released, so THIS call is the Last-One-Out that
-        // deallocates -- as the deallocation_count check below confirms.
+        // The future already released, so THIS call is the Last-One-Out (deallocation_count confirms).
         REQUIRE(deallocated);
         REQUIRE(deallocation_count.load() == 1);  // Last one out deallocates
     }
@@ -267,11 +266,8 @@ TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]")
     tracking_resource resource(std::pmr::get_default_resource(), &deallocation_count);
     resource.role_ = &dealloc_role;
 
-    // release_promise() reports whether THIS call deallocated the state. The two
-    // releases genuinely race, so no per-iteration OUTCOME is assertable -- but
-    // the ATTRIBUTION is: whichever side the resource saw deallocate must be the
-    // side whose self-report said so. A release_promise() hard-coded to
-    // `return true` fails this; a `<=` comparison on a counter does not.
+    // Attribution check (why: race-condition/test_shared_state.cpp); a `return true`
+    // release_promise() fails it, a `<=` comparison on a counter would not.
     int promise_won = 0;
     int attribution_mismatches = 0;
 
@@ -513,9 +509,8 @@ TEST_CASE("SETTLED-OUTCOME: holds_value distinguishes the four outcomes",
         REQUIRE(state->holds_value());
 
         REQUIRE(state->take_value() == 7);
-        // The value bit is NOT cleared -- flags are monotonic. What changes is that
-        // `consumed` is now set, which is how a second extraction becomes detectable
-        // instead of reading moved-from storage.
+        // The value bit is NOT cleared (flags are monotonic); `consumed` is now set, which is
+        // how a second extraction becomes detectable instead of reading moved-from storage.
         REQUIRE(state->has_result());
         REQUIRE_FALSE(state->has_error());
         REQUIRE_FALSE(state->holds_value());

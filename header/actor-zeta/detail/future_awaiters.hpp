@@ -42,7 +42,7 @@ namespace actor_zeta {
                 return detail::noop_coroutine();
             } else {
                 assert(false && "double co_await on unique_future is undefined behavior");
-                return h;  // resume ourselves
+                return h;
             }
         }
 
@@ -100,7 +100,7 @@ namespace actor_zeta {
 
             // Exists only to reject `co_await send(...)`, which can never complete; the message says why.
             template<typename U>
-            auto await_transform(std::pair<bool, unique_future<U>>&& p) noexcept {
+            auto await_transform(std::pair<bool, unique_future<U>>&&) noexcept {
                 static_assert(sizeof(U) == 0,
                               "co_await send(...) never completes: the needs_sched half "
                               "of send()'s result is only delivered after the await, and "

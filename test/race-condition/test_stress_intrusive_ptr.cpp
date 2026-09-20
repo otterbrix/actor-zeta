@@ -42,30 +42,22 @@ private:
     mutable std::atomic<int> value_;
 };
 
-// Polls the future, re-enqueueing the actor every ~1ms in case it went idle with
-// the message still queued.
+// Polls the future. No rescue enqueue: every caller already discharged the
+// needs_sched its own send() reported, and a rescue would hide a real strand.
 template<typename T, typename Actor>
 T smart_get(typename Actor::template unique_future<T>&& future,
             Actor* actor,
             actor_zeta::scheduler::sharing_scheduler* scheduler) {
+    actor_zeta::detail::ignore_unused(actor, scheduler);
+
     constexpr auto timeout = std::chrono::seconds(10);
     auto start_time = std::chrono::steady_clock::now();
-
-    int stall_iterations = 0;
-    constexpr int MAX_STALL = 10;
 
     while (!future.is_ready()) {
         auto elapsed = std::chrono::steady_clock::now() - start_time;
         if (elapsed > timeout) {
             // on timeout take_ready() asserts -- that is the failure mode
             break;
-        }
-
-        ++stall_iterations;
-
-        if (stall_iterations >= MAX_STALL) {
-            scheduler->enqueue(actor);
-            stall_iterations = 0;
         }
 
         std::this_thread::yield();

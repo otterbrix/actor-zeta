@@ -94,7 +94,7 @@ namespace {
             return false;
         }
         // promise_released is NOT a gate: a promise dying without a value sets it too, and
-        // await_resume()'s assert is gone under NDEBUG. Require the value bit; never drain an error.
+        // await_resume() refuses a valueless extraction by aborting. Require the value bit; never drain an error.
         const auto bits = flags->load(std::memory_order_acquire);
         return (bits & detail::state_flags::value_set) != 0
             && (bits & detail::state_flags::error_set) == 0;
@@ -181,7 +181,7 @@ int main() {
         const bool drained = awaited_is_ready(future) && drain_awaited(future); // the gate is not decoration
         std::cout << "  drained: " << drained
                   << ", future ready: " << future.is_ready() << "\n";
-        // take_ready() only ASSERTS readiness, and examples ship Release: gate on failed().
+        // take_ready() aborts on a valueless future in every build: gate on failed().
         if (drained && future.is_ready() && !future.failed()) {
             std::cout << "  result = " << std::move(future).take_ready() << "\n";
         } else {

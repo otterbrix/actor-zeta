@@ -242,7 +242,7 @@ int main() {
         check(what == "inner said no", "send(): the original exception crossed actors");
     }
 
-    // A throw from behavior(): no caller to hand it to, so the only question is whether the actor survives.
+    // A throw from behavior(): the only question is whether the actor survives.
     {
         auto rude = spawn<rude_actor>(resource);
         auto sent = send(rude.get(), &rude_actor::ping);
@@ -288,7 +288,7 @@ int main() {
         check(what == "threw after resuming", "late throw: the exception from the resumed body");
     }
 
-    // void awaited by void: the owning_awaiter::await_resume branch with nothing to return.
+    // void awaited by void (see void_inner above).
     {
         auto actor3 = spawn<late_thrower>(resource);
         auto sent = send(actor3.get(), &late_thrower::void_outer);

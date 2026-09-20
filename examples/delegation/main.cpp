@@ -16,8 +16,8 @@
 #include <actor-zeta/actor/dispatch.hpp>
 
 // Bounded spin on a future completed elsewhere. is_ready() is only the promise_released
-// bit (set by a promise dying without a value too) and take_ready() merely asserts, which
-// Release drops -- hence failed(). The bound turns a stuck producer into a visible error.
+// bit (set by a promise dying without a value too) and extracting without one aborts in
+// every build -- hence failed(). The bound turns a stuck producer into a visible error.
 template<typename T>
 T await_from_scheduler(actor_zeta::unique_future<T>& future) {
     constexpr int kSpinCap = 10'000'000;

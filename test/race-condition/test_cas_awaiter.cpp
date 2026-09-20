@@ -287,8 +287,9 @@ TEST_CASE("CAS awaiter: concurrent producer-consumer") {
                 std::this_thread::yield();
             }
 
-            REQUIRE(state->has_result());
-            consumer_resumed.store(true, std::memory_order_release);
+            // Latched, not asserted here: a Catch2 macro inside a thread is itself
+            // a race -- the very thing the comment above already says.
+            consumer_resumed.store(state->has_result(), std::memory_order_release);
         });
 
         producer.join();

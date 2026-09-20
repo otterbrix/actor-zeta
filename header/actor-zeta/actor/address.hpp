@@ -54,8 +54,6 @@ namespace actor_zeta::actor {
                       mailbox::message_ptr(msg_raw));
               }) {}
 
-        explicit address_t(std::pmr::memory_resource*, void* );
-
         static auto empty_address() -> address_t;
 
         void* get() const noexcept;

@@ -15,6 +15,7 @@ jobs:
       matrix:
         cxx_standard: [20]
         build_type: ["Release", "Debug"]
+        exceptions_disable: ["ON", "OFF"]
         configuration: [
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"11"},
           {"UBUNTU_VERSION":"22.04", "TOOLCHAIN_VERSION":"12"},
@@ -59,6 +60,7 @@ jobs:
           CXX: g++-${{matrix.configuration.TOOLCHAIN_VERSION}}
           BUILD_TYPE: ${{matrix.build_type}}
           CXX_STANDARD: ${{matrix.cxx_standard}}
+          EXCEPTIONS_DISABLE: ${{matrix.exceptions_disable}}
         run: |
           conan profile detect --force
           conan install . --output-folder=build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
@@ -86,8 +88,9 @@ jobs:
             -DALLOW_TESTS=ON \
             -DENABLE_TESTS_MEASUREMENTS=ON \
             -DALLOW_BENCHMARK=ON \
-            -DEXCEPTIONS_DISABLE=ON \
+            -DEXCEPTIONS_DISABLE=${EXCEPTIONS_DISABLE} \
             -DRTTI_DISABLE=ON \
+            -DWARNINGS_AS_ERRORS=ON \
             -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_PATH}
 
       - name: Build
