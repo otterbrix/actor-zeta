@@ -35,9 +35,16 @@ namespace actor_zeta { namespace test {
             return num_workers_;
         }
 
+        /// Messages handled by the most recent run_once(). `stop()` uses it to tell
+        /// progress from a job that keeps returning `resume` without doing anything.
+        inline size_t last_messages_processed() const {
+            return last_messages_processed_;
+        }
+
     private:
         size_t max_throughput_;
         size_t num_workers_;
+        size_t last_messages_processed_{0};
     };
 
 }} // namespace actor_zeta::test

@@ -4,6 +4,7 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -384,6 +385,43 @@ TEST_CASE("needs_sched contract: fresh actor and parked actor both report the ob
     // otherwise a sender honouring the contract would strand the message.
     REQUIRE(needs_sched_fresh == true);
     REQUIRE(needs_sched_parked == true);
+}
+
+// ===========================================================================
+// scheduler_test_t must terminate against a legitimately spinning actor.
+//
+// A behavior suspended on a pending co_await returns `resume` with zero
+// messages handled, for as long as the await stays pending. "queue non-empty"
+// is therefore not a termination condition, and re-queueing such a job at the
+// FRONT lets it monopolise the deque. Both used to be true, so stop() looped
+// forever the moment anything in the queue was waiting on a future.
+// ===========================================================================
+TEST_CASE("scheduler_test_t::stop() terminates against a pending await") {
+    auto* resource = std::pmr::get_default_resource();
+    auto producer = spawn<producer_actor>(resource);
+    auto consumer = spawn<soak_consumer>(resource, producer->address());
+
+    // Declared last so it is destroyed first: its deque holds raw job pointers.
+    test::scheduler_test_t sched(/*workers*/ 1, /*max_throughput*/ 1);
+
+    auto [needs_sched, future] = send(consumer.get(), &soak_consumer::consume, 21);
+    future.detach();
+    if (needs_sched) {
+        sched.enqueue(consumer.get());
+    }
+
+    // Drive the consumer to its co_await. The producer is deliberately never
+    // scheduled, so the awaited future stays pending forever and the consumer
+    // keeps reporting `resume` with nothing handled.
+    for (int i = 0; i < 4; ++i) {
+        sched.run_once();
+    }
+    REQUIRE(consumer->completed_count() == 0);
+
+    // The assertion IS termination: if this returns, stop() no longer hangs.
+    sched.stop();
+
+    REQUIRE(consumer->completed_count() == 0);
 }
 
 // ===========================================================================
