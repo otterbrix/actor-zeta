@@ -68,6 +68,23 @@ namespace {
         }
     };
 
+    // Throws from behavior() itself, past dispatch(). Nothing downstream can catch
+    // this: behavior_t is the root of the chain and its future is read by nobody.
+    class rude_actor final : public basic_actor<rude_actor> {
+    public:
+        explicit rude_actor(std::pmr::memory_resource* ptr)
+            : basic_actor<rude_actor>(ptr) {}
+
+        unique_future<void> ping() { co_return; }
+
+        using dispatch_traits = actor_zeta::dispatch_traits<&rude_actor::ping>;
+
+        behavior_t behavior(mailbox::message*) {
+            throw std::runtime_error("behavior said no");
+            co_return;
+        }
+    };
+
 } // namespace
 
 int main() {
@@ -196,6 +213,24 @@ int main() {
         }
         check(rethrown, "send(): extraction rethrows");
         check(what == "inner said no", "send(): the original exception crossed actors");
+    }
+
+    // A throw from behavior() itself. There is no caller to hand it to -- behavior_t
+    // is the chain root and its future is read by nobody -- so the only question is
+    // whether the actor survives to handle the next message.
+    {
+        auto rude = spawn<rude_actor>(resource);
+        auto sent = send(rude.get(), &rude_actor::ping);
+        sent.second.detach();
+
+        const auto verdict = rude->resume(4);
+        check(verdict.messages_processed == 1, "behavior() throw: the message was taken");
+
+        // Still usable afterwards.
+        auto again = send(rude.get(), &rude_actor::ping);
+        again.second.detach();
+        const auto second = rude->resume(4);
+        check(second.messages_processed == 1, "behavior() throw: the actor survives it");
     }
 
     // The success path must be untouched by any of this.

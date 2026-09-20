@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cassert>
+#include <cstdio>
+#include <exception>
 #include <memory_resource>
 #include <utility>
 
@@ -57,9 +59,50 @@ namespace actor_zeta {
 
             void return_void() noexcept {}
 
+            // Reachable only from behavior() itself, past dispatch(): dispatch catches
+            // and hands the exception to the caller's promise, so a method's throw
+            // never gets here.
+            //
+            // Discarded, because there is nowhere to put it. behavior_t is the root of
+            // the await chain -- it has no shared_state and its future is read by
+            // nobody -- so unlike unique_future<T>'s promise there is no state to
+            // capture into and no consumer to rethrow at. The alternatives were to kill
+            // the process over a user-code bug, which is what this used to do, or to
+            // invent a channel. It is at least reported before it goes.
+            //
+            // The coroutine then proceeds to final_suspend and parks, so done() is true
+            // and the actor goes on to the next message.
             void unhandled_exception() noexcept {
-                assert(false && "unhandled_exception() should never be called (-fno-exceptions)");
+#ifdef __cpp_exceptions
+                // Loud, because the exception is about to disappear. Rethrow into a
+                // local handler purely to read what() -- this is the last place the
+                // exception exists, and a failure that vanishes without a trace is
+                // worse than one that stops the process, which is what this used to do.
+                try {
+                    throw;
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr,
+                                 "actor-zeta: an exception escaped behavior() and was "
+                                 "discarded: %s\n"
+                                 "  behavior() is the root of the await chain -- its result "
+                                 "is read by nobody, so there is\n"
+                                 "  nowhere to deliver this. Put the work in a dispatched "
+                                 "method instead: a throw there\n"
+                                 "  reaches the caller's future.\n",
+                                 e.what());
+                } catch (...) {
+                    std::fprintf(stderr,
+                                 "actor-zeta: a non-std::exception escaped behavior() and "
+                                 "was discarded.\n"
+                                 "  Put the work in a dispatched method instead: a throw "
+                                 "there reaches the caller's future.\n");
+                }
+#else
+                // No catch wrapper is emitted without exceptions, so reaching this is
+                // a compiler or configuration fault rather than anything user code did.
+                assert(false && "unhandled_exception() with -fno-exceptions");
                 std::terminate();
+#endif
             }
 
             // await_transform overloads for the actor-zeta awaitables (unique_future<T>&&,
