@@ -128,7 +128,11 @@ int main() {
     {
         auto producer = spawn<producer_actor>(resource);
 
-        auto [needs_sched, future] = send(producer.get(), &producer_actor::produce, 21);
+        // Not a structured binding: the poller lambda below captures the future, and
+        // capturing a structured binding is ill-formed -- clang rejects it.
+        auto sent = send(producer.get(), &producer_actor::produce, 21);
+        const bool needs_sched = sent.first;
+        auto& future = sent.second;
         std::cout << "  send() reported needs_sched=" << std::boolalpha << needs_sched << "\n";
 
         // promise<T>-backed: no producing coroutine, so route 2 does not apply.

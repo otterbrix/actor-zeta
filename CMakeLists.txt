@@ -110,6 +110,14 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
                 -Wlogical-op
                 -Wduplicated-cond
                 -Wduplicated-branches
+
+                # A coroutine frame is allocated by promise_type::operator new(size, args...)
+                # and freed by operator delete(void*, size_t): [dcl.fct.def.coroutine] has no
+                # "placement delete with the same arguments" form, so that pairing is the one
+                # the standard prescribes. GCC applies the ordinary new/delete matching rules
+                # to the frame and reports every coroutine in the tree. Only with exceptions
+                # enabled, where the unwind path makes the deallocation visible to it.
+                -Wno-mismatched-new-delete
         )
     endif()
 
