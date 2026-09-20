@@ -122,8 +122,20 @@ namespace actor_zeta { namespace actor {
         } else if (attempt < kYieldPhaseEnd) {
             std::this_thread::yield();
         } else {
-            int computed = 1 << (attempt - kYieldPhaseEnd);
-            auto sleep_us = computed < kMaxSleepMicroseconds ? computed : kMaxSleepMicroseconds;
+            // Cap the EXPONENT, not just the result. The sleep already saturates at
+            // attempt 20 (1 << 10 = 1024 > kMaxSleepMicroseconds), and shifting past
+            // that is not merely pointless: at attempt 41 `1 << 31` is INT_MIN, which
+            // compares below the cap and yields a negative duration that does not sleep
+            // at all, and from attempt 42 the exponent reaches 32 -- undefined
+            // behaviour on a 32-bit int.
+            //
+            // Reachable, not theoretical: wait_for_activity_to_drain() spins here for
+            // as long as a resume or an in-flight sender takes, so anything over ~22ms
+            // gets there.
+            constexpr int kMaxShift = 10;
+            const int exponent = attempt - kYieldPhaseEnd;
+            const int computed = exponent >= kMaxShift ? kMaxSleepMicroseconds : (1 << exponent);
+            const auto sleep_us = computed < kMaxSleepMicroseconds ? computed : kMaxSleepMicroseconds;
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
         }
     }
