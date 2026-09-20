@@ -21,6 +21,12 @@ namespace actor_zeta { namespace mailbox {
 
     class message final : public actor_zeta::detail::singly_linked<message> {
     public:
+        // How a message MUST be freed: it lives inside a PMR block behind a BlockHdr,
+        // so `delete p` would hand the global allocator a pointer that is not the
+        // allocation base. Declaring it here makes the queues refuse, at compile time,
+        // to be instantiated with std::default_delete.
+        using deleter_type = message_deleter;
+
         message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;

@@ -27,9 +27,9 @@ namespace actor_zeta { namespace mailbox {
     private:
         size_t cached() const noexcept;
         bool fetch_more();
-        actor_zeta::detail::linked_list<message> urgent_queue_;
-        actor_zeta::detail::linked_list<message> normal_queue_;
-        alignas(CACHE_LINE_SIZE) actor_zeta::detail::lifo_inbox<message> inbox_;
+        actor_zeta::detail::linked_list<message, message_deleter> urgent_queue_;
+        actor_zeta::detail::linked_list<message, message_deleter> normal_queue_;
+        alignas(CACHE_LINE_SIZE) actor_zeta::detail::lifo_inbox<message, message_deleter> inbox_;
     };
 
     template<class T>

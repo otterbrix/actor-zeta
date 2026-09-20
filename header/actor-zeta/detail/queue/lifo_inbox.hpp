@@ -3,20 +3,28 @@
 #include <atomic>
 #include <cassert>
 #include <memory>
+#include <type_traits>
 
 #include <actor-zeta/detail/queue/enqueue_result.hpp>
+#include <actor-zeta/detail/queue/declared_deleter.hpp>
 
 namespace actor_zeta { namespace detail {
 
-    template<class T>
+
+    template<class T, class Deleter = std::default_delete<T>>
     class lifo_inbox {
+        static_assert(!declared_deleter<T>::present ||
+                          std::is_same_v<Deleter, typename declared_deleter<T>::type>,
+                      "T declares its own deleter_type -- instantiate this queue with it, "
+                      "or leftover elements are freed with the wrong allocator");
+
     public:
         using value_type = T;
         using pointer = value_type*;
         using node_type = typename value_type::node_type;
         using node_pointer = node_type*;
-        using unique_pointer = std::unique_ptr<value_type>;
-        using deleter_type = typename unique_pointer::deleter_type;
+        using deleter_type = Deleter;
+        using unique_pointer = std::unique_ptr<value_type, deleter_type>;
 
         static pointer promote(node_pointer ptr) noexcept {
             return static_cast<pointer>(ptr);
@@ -99,7 +107,6 @@ namespace actor_zeta { namespace detail {
         }
 
         template<class F>
-        /// TODO: old void close(F& func) noexcept(noexcept(func(std::declval<pointer>()))) {
         void close(F&& func) noexcept(noexcept(func(std::declval<pointer>()))) {
             node_pointer ptr = take_head(stack_closed_tag());
             while (ptr != nullptr) {

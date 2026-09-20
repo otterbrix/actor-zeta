@@ -2,13 +2,21 @@
 
 #include <cassert>
 #include <memory>
+#include <type_traits>
+
 
 #include "forward_iterator.hpp"
+#include <actor-zeta/detail/queue/declared_deleter.hpp>
 
 namespace actor_zeta { namespace detail {
 
-    template<class T>
+    template<class T, class Deleter = std::default_delete<T>>
     class linked_list {
+        static_assert(!declared_deleter<T>::present ||
+                          std::is_same_v<Deleter, typename declared_deleter<T>::type>,
+                      "T declares its own deleter_type -- instantiate this queue with it, "
+                      "or leftover elements are freed with the wrong allocator");
+
     public:
         using value_type = T;
         using node_type = typename value_type::node_type;
@@ -17,7 +25,8 @@ namespace actor_zeta { namespace detail {
         using const_pointer = const value_type*;
         using reference = value_type&;
         using const_reference = const value_type&;
-        using unique_pointer = std::unique_ptr<T>;
+        using deleter_type = Deleter;
+        using unique_pointer = std::unique_ptr<T, deleter_type>;
         using iterator = forward_iterator<value_type>;
         using const_iterator = forward_iterator<const value_type>;
         static pointer promote(node_pointer ptr) noexcept {
