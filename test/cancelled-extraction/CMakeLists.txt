@@ -25,9 +25,9 @@ set_target_properties(${CURRENT_TEST_NAME}
 add_test(NAME cancelled_extraction_control COMMAND ${CURRENT_TEST_NAME})
 
 # The defect: extracting from a future with an error and no value must NOT complete
-# normally. Plain pass/fail -- the harness traps the refusal itself (see main.cpp),
-# so exit 0 means "the library refused" and non-zero means "it handed back a value
-# that does not exist". No WILL_FAIL, no output matching: ctest treats a signal as a
-# crash regardless of either, and the test should not depend on how the refusal is
-# spelled beyond "it does not return".
+# normally. main.cpp traps the refusal itself, so exit 0 means "refused" and non-zero
+# means "handed back a value that does not exist" -- no WILL_FAIL, since ctest treats
+# a signal as a crash regardless.
 add_test(NAME cancelled_extraction_refuses COMMAND ${CURRENT_TEST_NAME} cancelled)
+
+add_test(NAME cancelled_extraction_refuses_void COMMAND ${CURRENT_TEST_NAME} void)

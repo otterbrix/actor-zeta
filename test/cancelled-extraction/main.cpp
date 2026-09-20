@@ -1,26 +1,9 @@
 /// @file
-/// Extracting from a future that carries an error and no value.
-///
-/// result_storage keeps the value in `union storage_t { char dummy_; T value_; }`
-/// with a separate `bool has_value_`. take() and get() assert has_value_ and then
-/// read storage_.value_ regardless -- so once NDEBUG removes the assert, a state
-/// with an error and no value move-constructs a T out of bytes that never held one
-/// and then runs ~T() on them. That is undefined behaviour, and it is silent.
-///
-/// The state is ordinary, not exotic: send() to an actor whose mailbox is closing
-/// returns queue_closed, ~message runs cleanup_fn_, which does
-/// set_error(operation_canceled) + release_promise(). is_ready() then reports true
-/// -- it is the promise_released bit -- while no value was ever written.
-///
-/// Built with -DNDEBUG on purpose: with asserts live the process stops at the
-/// assert and the defect is invisible. NDEBUG is what ships.
-///
-/// The negative case traps the refusal: a SIGABRT handler reports it and exits 0,
-/// so "refused" is a pass and "returned a value that does not exist" is a failure,
-/// under ordinary ctest pass/fail. The harness does not care HOW the refusal is
-/// spelled beyond the fact that it does not return. The positive case runs the same
-/// code path on a future that DOES hold a value, so a regression in the harness
-/// itself cannot be mistaken for the defect being fixed.
+/// Extracting from a future with an error and no value must be refused: the value
+/// lives in a union next to `has_value_`, so an assert-only refusal would, under
+/// NDEBUG, move-construct a T from bytes that never held one. Built with -DNDEBUG on
+/// purpose, since that is what ships; pins refuse_valueless_extraction(). A SIGABRT
+/// handler exits 0, so "refused" passes and a returned value fails under plain ctest.
 
 #include <csignal>
 #include <cstdio>
@@ -33,8 +16,6 @@ using namespace actor_zeta;
 
 namespace {
 
-    // Move-construction and destruction are observable, so the test can say whether
-    // the union was touched at all.
     struct tracked {
         char payload[16];
         static int moves;
@@ -52,19 +33,34 @@ namespace {
     int tracked::moves = 0;
     int tracked::dtors = 0;
 
-    // The refusal is an abort(). Catch it so the outcome reaches ctest as an exit
-    // code instead of a crash. Only write() and _exit() run here -- both are
-    // async-signal-safe.
     extern "C" void on_refusal(int) {
         static const char msg[] = "REFUSED: the library declined to extract\n";
         ssize_t written = ::write(STDOUT_FILENO, msg, sizeof(msg) - 1);
         (void) written;
-        ::_exit(0);
+        ::_exit(0); // only write() and _exit() here: both async-signal-safe
     }
 
 } // namespace
 
+// unique_future<void> has no value to read, so the union UB the T case is about
+// cannot happen -- but "extraction refuses on a valueless future" must still hold,
+// or a failed void operation reports success under NDEBUG.
+int run_void_case() {
+    auto* resource = std::pmr::get_default_resource();
+    promise<void> p(resource);
+    auto future = p.get_future();
+    p.error(std::make_error_code(std::errc::operation_canceled));
+
+    std::signal(SIGABRT, on_refusal);
+    std::move(future).take_ready();
+    std::printf("EXTRACTED FROM A VALUELESS unique_future<void>: take_ready() returned\n");
+    return 1;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && std::strcmp(argv[1], "void") == 0) {
+        return run_void_case();
+    }
     auto* resource = std::pmr::get_default_resource();
     const bool cancelled_case = (argc > 1);
 
@@ -79,7 +75,7 @@ int main(int argc, char** argv) {
         // Exactly what ~message's cleanup_fn_ does for a send to a closed mailbox.
         p.error(std::make_error_code(std::errc::operation_canceled));
     } else {
-        p.set_value(tracked{});
+        p.set_value(tracked{}); // control: same path with a real value, so a broken harness cannot pass
     }
 
     std::printf("is_ready=%d failed=%d\n", (int) future.is_ready(), (int) future.failed());

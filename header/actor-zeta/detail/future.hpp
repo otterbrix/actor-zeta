@@ -19,7 +19,7 @@ namespace actor_zeta {
     template<typename T>
     class unique_future;
 
-    // This is the user-facing promise for explicit promise/future pairs
+    // The user-facing promise for explicit promise/future pairs.
     template<typename T>
     class promise final {
     private:
@@ -36,7 +36,7 @@ namespace actor_zeta {
             assert(res && "promise constructed with null resource");
         }
 
-        // Constructor from existing shared_state (view, for message.get_result_promise)
+        // Non-owning view onto an existing state (message::get_result_promise).
         explicit promise(state_type* state) noexcept
             : state_(state) {}
 
@@ -51,7 +51,6 @@ namespace actor_zeta {
             return *this;
         }
 
-        // Destructor - sets broken_pipe if not set_value'd
         ~promise() noexcept {
             release_if_needed();
         }
@@ -62,13 +61,10 @@ namespace actor_zeta {
             requires(!std::is_void_v<T> && std::is_constructible_v<T, U&&>)
         void set_value(U&& value) noexcept {
             assert(state_ && "set_value() on moved-from promise");
-            // Straight into emplace(): shared_state::set_value forwards, so there is no
-            // longer a materialised T to move out of.
             state_->set_value(std::forward<U>(value));
             settle();
         }
 
-        // Set value (void) — same protocol as the non-void overload above.
         void set_value() noexcept
             requires(std::is_void_v<T>)
         {
@@ -77,8 +73,7 @@ namespace actor_zeta {
             settle();
         }
 
-        // Also the cancellation channel:
-        // p.error(std::make_error_code(std::errc::operation_canceled))
+        // Also the cancellation channel: error(make_error_code(errc::operation_canceled)).
         void error(std::error_code ec) noexcept {
             assert(state_ && "error() on moved-from promise");
             state_->set_error(ec);
@@ -86,20 +81,9 @@ namespace actor_zeta {
         }
 
 #ifdef __cpp_exceptions
-        // The exception channel, symmetric to error() above.
-        //
-        // Public because filling a promise by hand is a supported pattern -- a router
-        // takes msg->get_result_promise<T>() and completes it itself (see
-        // examples/delegation and examples/balancer). Such a router that catches
-        // something needs a way to pass it on; error() would flatten it to a code.
-        //
-        // set_exception() also stamps errc::interrupted, so a consumer that only polls
-        // failed()/error() still sees a real failure and can tell it apart from
-        // "released without an outcome" (state_not_recoverable).
-        //
-        // Guarded, because shared_state::set_exception exists only in an -fexceptions
-        // build: with -fno-exceptions the compiler emits no catch wrapper for a
-        // coroutine body, so nothing could ever be captured to pass here.
+        // Public: a router filling msg->get_result_promise<T>() by hand must pass a caught
+        // exception on, not flatten it to a code. Also stamps errc::interrupted so failed()/
+        // error() pollers see a real failure. Guarded: with -fno-exceptions nothing reaches here.
         void exception(std::exception_ptr ep) noexcept {
             assert(state_ && "exception() on moved-from promise");
             assert(ep && "exception() with a null exception_ptr");
@@ -119,34 +103,21 @@ namespace actor_zeta {
     private:
         void release_if_needed() noexcept {
             if (state_) {
-                // A promise that dies without an outcome still has to produce one, and
-                // broken_pipe says more than the state_not_recoverable that
-                // release_promise()'s totality repair would otherwise stamp.
+                // Dying without an outcome still produces one; broken_pipe says more than state_not_recoverable.
                 state_->set_error(std::make_error_code(std::errc::broken_pipe));
                 settle();
             }
         }
 
-        // The producer's exit, written once instead of four times. Every public way to
-        // finish a promise -- set_value, set_value(), error, and dying with no outcome
-        // -- writes its result and then lands here.
-        //
-        // Thread safety (Q6): the continuation is NOT taken or resumed here. The
-        // consumer resumes it from its own actor's resume_impl(), on its own thread.
-        //
-        // promise_finalizing has to be published BEFORE release_promise(), or a
-        // concurrent release_future() can deallocate the state out from under the rest
-        // of this function.
+        // The producer's exit. The continuation is NOT taken or resumed here -- the
+        // consumer's own resume_impl() does that, on its own thread. promise_finalizing
+        // BEFORE release_promise(), or a concurrent release_future() deallocates under us.
         void settle() noexcept {
             assert(state_ && "settle() without a state");
 
             state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
 
-            // release_promise() returning true means it deallocated, so the second call
-            // must not happen -- the short-circuit is the whole logic. Its own answer
-            // then says whether the future side got there first and deallocated instead.
-            // Either way the promise is finished with the state, which is also true when
-            // nobody deallocated, so the value only ever steers the second call.
+            // true means release_promise() deallocated -- no second call.
             if (!state_->release_promise()) {
                 [[maybe_unused]] const bool state_still_alive = state_->try_complete_finalize();
             }
@@ -160,7 +131,7 @@ namespace actor_zeta {
     template<typename T>
     class unique_future final {
     public:
-        // Forward declaration for promise_type (must be public for coroutine)
+        // Must be public: coroutine_traits looks it up.
         struct promise_type;
 
     private:
@@ -175,12 +146,10 @@ namespace actor_zeta {
             : state_(nullptr)
             , handle_{} {}
 
-        // Constructor for caller's future (from promise.get_future())
         explicit unique_future(state_type* s) noexcept
             : state_(s)
             , handle_{} {}
 
-        // Constructor for method's future (from promise_type.get_return_object())
         unique_future(detail::coroutine_handle<promise_type> h, state_type* s) noexcept
             : state_(s)
             , handle_(h) {}
@@ -198,46 +167,35 @@ namespace actor_zeta {
             return *this;
         }
 
-        // Destructor - Last-One-Out
         ~unique_future() noexcept {
             release();
         }
 
-        // === Non-blocking value extraction (post-pump) ===
-
-        // Extract the value of an already-ready future without blocking:
-        // asserts readiness instead of waiting for it.
-        [[nodiscard]] T take_ready() && requires(!std::is_void_v<T>) {
-            // Rethrow BEFORE the readiness assert: a captured exception sets error_set,
-            // so the assert would trip on it first and hide the real cause.
-            if (state_) {
-                state_->rethrow_if_exception();
+        // Asserts readiness instead of waiting for it.
+        // Here rather than in result_storage, so the refusal covers every T:
+        // result_storage<void> has no value to guard, and a failed void operation
+        // would otherwise report success once NDEBUG removes the assert.
+        void check_extractable() const {
+            assert(state_ && "take_ready() on a moved-from future");
+            state_->rethrow_if_exception();   // before has_error(): a captured exception sets it
+            if (!state_->has_result() || state_->has_error()) {
+                detail::refuse_valueless_extraction("take_ready()");
             }
-            assert(state_ && state_->has_result() && !state_->has_error()
-                   && "take_ready() on a future that is not ready or completed with error");
+        }
+
+        [[nodiscard]] T take_ready() && requires(!std::is_void_v<T>) {
+            check_extractable();
             T r = state_->take_value();
             release();
             return r;
         }
-
         void take_ready() && requires(std::is_void_v<T>) {
-            if (state_) {
-                state_->rethrow_if_exception();
-            }
-            assert(state_ && state_->has_result() && !state_->has_error()
-                   && "take_ready() on a future that is not ready or completed with error");
-            // Marks the result consumed, same as the T overload. It used to skip this --
-            // shared_state<void> was a separate specialization and simply had no
-            // take_value() -- so a consumed unique_future<void> kept reporting
-            // holds_value() == true. Harmless only because nothing in the library reads
-            // holds_value(); it is I3's predicate and it should mean the same thing for
-            // every T.
-            state_->take_value();
+            check_extractable();
+            state_->take_value();   // marks consumed, so holds_value() means one thing for every T
             release();
         }
 
-        // Poll. Reports promise_released, which a promise dying without a value also sets,
-        // so this is NOT a value gate: check failed() before take_ready().
+        // Poll. promise_released, which a valueless death also sets: NOT a value gate, check failed() first.
         [[nodiscard]] bool is_ready() const noexcept {
             return state_ && state_->is_ready();
         }
@@ -246,8 +204,7 @@ namespace actor_zeta {
             return state_ != nullptr;
         }
 
-        // failed()/error() are the cancellation-observation channel:
-        // cancellation is produced via promise<T>::error(operation_canceled).
+        // failed()/error() observe cancellation, produced by promise<T>::error(operation_canceled).
         [[nodiscard]] bool failed() const noexcept {
             return state_ && state_->has_error();
         }
@@ -256,40 +213,20 @@ namespace actor_zeta {
             return state_ ? state_->get_error() : std::error_code{};
         }
 
-        // Detach (fire-and-forget)
         void detach() noexcept {
             release();
         }
 
-        // Internal access (for message class)
         [[nodiscard]] state_type* internal_state() const noexcept {
             return state_;
         }
 
-        // Access to the producing coroutine's handle.
-        //
-        // Used internally by propagate_awaited_state(), and RELIED ON BY DOWNSTREAM:
-        // external drivers hand-roll the Q6
-        // drain with it (read promise().awaited_flags_ / awaited_continuation_, then
-        // resume the continuation) to drive a future from a non-actor thread.
-        //
-        // LIFETIME. The frame is owned by this future: a finished producer parks at
-        // final_suspend and release() reclaims it, so a handle handed out here can no
-        // longer be destroyed under the caller. When the producer instead self-destroyed
-        // on the path where this future was still alive and still caching handle_,
-        // `handle.done()` was a use-after-free. See final_awaiter::await_suspend.
-        //
-        // The handle is still withheld once the state reports ready, for a different
-        // reason: a parked coroutine is AT its final suspend point, and resuming one
-        // there is undefined behaviour ([coroutine.handle.resumption]). A finished
-        // producer has nothing left to drive — and withholding it keeps a reintroduced
-        // self-destroy from silently becoming a use-after-free again.
-        //
-        // An empty return is therefore normal, not an error: either a promise<T>-backed
-        // future (no producing coroutine at all) or a producer that has already finished.
-        //
-        // Serialization is still the caller's: this is the one way to resume an actor's
-        // frame outside the `running`-bit critical section.
+        // The producing coroutine's handle, for propagate_awaited_state() and for external
+        // drivers that hand-roll the drain (examples/external-drive). The frame is OWNED by
+        // this future -- a finished producer parks at final_suspend and release() reclaims it --
+        // so the handle cannot be destroyed under the caller. Withheld once the state is ready:
+        // resuming a coroutine at its final suspend point is undefined ([coroutine.handle.resumption]).
+        // Empty is also normal for a promise<T>-backed future. Serialization is the caller's.
         [[nodiscard]] detail::coroutine_handle<promise_type> coroutine_handle() const noexcept {
             if (!state_ || state_->is_ready()) {
                 return {};
@@ -299,18 +236,9 @@ namespace actor_zeta {
 
     private:
         void release() noexcept {
-            // Reclaim the producing frame BEFORE releasing the state.
-            //
-            // done() means the coroutine is parked at final_suspend -- finished, and
-            // nobody else will touch the frame, so it is ours. A frame that is still
-            // mid-body is NOT ours: releasing the state below sets future_released,
-            // and the producer's own final_awaiter (steps 3/4) destroys it on the way
-            // out. Exactly one of the two paths runs, which is what keeps this free of
-            // both leaks and double frees.
-            //
-            // Order matters. Doing this after release_future() would race the producer
-            // to the same frame, and would read done() out of memory the producer may
-            // already have freed.
+            // Reclaim the frame BEFORE releasing the state: done() means parked at final_suspend
+            // and ours; mid-body it is the producer's, whose final_awaiter (steps 3/4) destroys it
+            // on seeing future_released. After release_future(), done() could read freed memory.
             if (handle_ && handle_.done()) {
                 handle_.destroy();
             }
@@ -323,8 +251,6 @@ namespace actor_zeta {
         }
 
         // CRTP base: PromiseDerived is the final promise type.
-        // Inherits the shared awaiter machinery (await_transform overloads + lock-free CAS +
-        // awaited-chain propagation) from detail::future_awaiter_mixin (future_awaiters.hpp).
         template<typename PromiseDerived>
         struct promise_type_base : detail::future_awaiter_mixin<PromiseDerived> {
             using value_type = T;
@@ -332,7 +258,6 @@ namespace actor_zeta {
             std::pmr::memory_resource* resource_ = nullptr;
             state_type* state_ = nullptr;
 
-            // Creates OWN state, returns future with handle + state
             unique_future<T> get_return_object() {
                 assert(resource_ != nullptr &&
                        "Coroutine must be actor member function with resource() method");
@@ -347,15 +272,12 @@ namespace actor_zeta {
                 return unique_future<T>{handle, state_};
             }
 
-            // suspend_never - immediate start (dispatch does co_await)
+            // Immediate start; dispatch() co_awaits the result.
             detail::suspend_never initial_suspend() noexcept { return {}; }
 
-            // final_suspend - symmetric transfer for method coroutines.
-            // DIFFERENT from promise::set_value(), which never resumes: method coroutines
-            // (unique_future<T>) run in the same actor context, so symmetric transfer is
-            // safe and is what makes coroutine chaining work. Cross-actor futures (from
-            // send()) complete flag-only via promise::set_value(); their consumer is picked
-            // up by cooperative_actor's Q6 block instead.
+            // Symmetric transfer, UNLIKE promise::set_value(), which never resumes: a method
+            // coroutine runs in its awaiter's actor context, so resuming here is safe and is
+            // what makes chaining work. send() futures complete flag-only; the drain picks them up.
             auto final_suspend() noexcept {
                 struct final_awaiter {
                     state_type* state_;
@@ -364,44 +286,30 @@ namespace actor_zeta {
 
                     detail::coroutine_handle<> await_suspend(
                         detail::coroutine_handle<PromiseDerived> self) noexcept {
-                        // 1. Take continuation FIRST (atomic exchange)
+                        // 1. Take the continuation FIRST.
                         auto cont = state_->continuation_.exchange(nullptr,
                                                                     std::memory_order_acq_rel);
 
-                        // 2. Set promise_finalizing flag BEFORE release_promise.
-                        //    This prevents release_future() from deallocating while we're
-                        //    still deciding whether to resume the continuation.
+                        // 2. Finalizing BEFORE release_promise, or release_future() may deallocate mid-decision.
                         state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
                                                 std::memory_order_release);
 
-                        // 3. Release promise. Returns true if future was already released
-                        //    at the time of the atomic fetch_or.
+                        // 3. true: the future was already released, the state is gone, the frame is ours.
                         bool cancelled = state_->release_promise();
 
                         if (cancelled) {
-                            // Future was released before we set promise_released.
-                            // State was deallocated by release_promise.
                             self.destroy();
                             return detail::noop_coroutine();
                         }
 
-                        // 4. Try to complete finalize phase. Uses CAS to atomically
-                        //    clear finalizing and check if future was released.
-                        //    Returns false if future was released (state deallocated).
+                        // 4. Clear finalizing; false means future_released raced in and the state is gone.
                         if (!state_->try_complete_finalize()) {
                             self.destroy();
                             return detail::noop_coroutine();
                         }
 
-                        // 5. Consumer is still alive. Do NOT destroy the frame here: the
-                        //    consumer's unique_future is still holding this very handle, and
-                        //    destroying under it is how coroutine_handle() came to return
-                        //    freed memory. Park at final_suspend instead and let the owner
-                        //    reclaim the frame in release() -- the same shape behavior_t has
-                        //    always used (behavior_t.hpp final_suspend + ~behavior_t).
-                        //
-                        //    Steps 3 and 4 above still destroy, and must: there the future is
-                        //    already gone, so nobody would ever reclaim the frame.
+                        // 5. Consumer alive: do NOT destroy -- its unique_future holds this handle
+                        //    and reclaims it in release(). Steps 3/4 must, since nobody else would.
                         return cont ? cont : detail::noop_coroutine();
                     }
 
@@ -410,23 +318,15 @@ namespace actor_zeta {
                 return final_awaiter{this->state_};
             }
 
-            // await_transform overloads (unique_future<U>&&, pair<bool, unique_future<U>>&&)
-            // are inherited from detail::future_awaiter_mixin<PromiseDerived>.
-
             void unhandled_exception() noexcept {
 #ifdef __cpp_exceptions
-                // Reachable ONLY in an -fexceptions build. Returning from here is not
-                // undefined -- it is SPECIFIED to mean "handled, carry on to
-                // final_suspend", i.e. the exception is swallowed and the coroutine
-                // reports normal completion. Capture it instead; take_ready() and
-                // await_resume() rethrow it where the value would have been produced.
+                // Returning from here means "handled" -- the exception would be swallowed.
+                // Capture it; take_ready() and await_resume() rethrow where the value would be.
                 if (this->state_) {
                     this->state_->set_exception(std::current_exception());
                 }
 #else
-                // With -fno-exceptions the compiler emits no catch wrapper for a
-                // coroutine body, so nothing can reach this. Kept because the promise
-                // concept requires the member to exist.
+                // Unreachable without a catch wrapper; the promise concept requires the member.
                 std::terminate();
 #endif
             }
@@ -467,8 +367,7 @@ namespace actor_zeta {
                 return res;
             }
 
-            // The SAME predicate the runtime path above uses, lifted so a static_assert
-            // and extract_resource_impl() can never disagree about a type.
+            // The runtime path's predicate, lifted so the static_assert can never disagree with it.
             template<typename U>
             static constexpr bool supplies_resource() noexcept {
                 using decayed = std::decay_t<U>;
@@ -497,10 +396,8 @@ namespace actor_zeta {
                 return nullptr;
             }
 
-            // Zero arguments means there is nothing that could carry a memory resource.
-            // That is a property of the coroutine's SIGNATURE, so it is decided here
-            // rather than aborted at run time. Dependent on a defaulted parameter so it
-            // only fires when this overload is actually selected.
+            // Zero arguments: nothing can carry a resource, a property of the SIGNATURE.
+            // Dependent on a defaulted parameter so it fires only when this overload is selected.
             template<typename Dependent = PromiseDerived>
             [[noreturn]] static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
                 static_assert(sizeof(Dependent) == 0,
@@ -512,9 +409,7 @@ namespace actor_zeta {
 
             template<typename First, typename... Rest>
             RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
-                // Whether ANY argument can supply a resource is a property of the types,
-                // so decide it here. The pointer merely being null at run time is not,
-                // which is what the assert below still covers.
+                // Type-level: can ANY argument supply a resource? A null at run time is the assert's job.
                 static_assert((supplies_resource<First>() || ... || supplies_resource<Rest>()),
                               "no argument of this coroutine can supply a memory resource -- "
                               "make it an actor member function (so `this` is in the pack) or "
@@ -558,7 +453,6 @@ namespace actor_zeta {
         using promise_type_selected = std::conditional_t<is_void_type, promise_type_void<PromiseDerived>, promise_type_non_void<PromiseDerived>>;
 
     public:
-        // promise_type uses CRTP to pass itself to the base
         struct promise_type : promise_type_selected<promise_type> {
             using promise_type_selected<promise_type>::promise_type_selected;
 
@@ -622,7 +516,6 @@ namespace actor_zeta {
         return unique_future<T>(state_);
     }
 
-    // Factory functions
     template<typename T>
     [[nodiscard]] unique_future<T> make_error(std::pmr::memory_resource* res, std::error_code ec) {
         promise<T> p(res);
