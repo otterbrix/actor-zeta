@@ -90,12 +90,14 @@ public:
     actor_zeta::unique_future<int> execute(int value) {
         destruction_tracker tracker(value);
 
-        volatile int sum = 0;
+        // Plain int, not volatile: a compound assignment to a volatile object is
+        // deprecated in C++20. The value is co_returned, so the loop still stands.
+        int sum = 0;
         for (int i = 0; i < 100; ++i) {
             sum += tracker.id();
         }
 
-        co_return static_cast<int>(sum);
+        co_return sum;
     }
 
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {

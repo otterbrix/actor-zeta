@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <actor-zeta/detail/memory.hpp>
 #include <memory_resource>
 

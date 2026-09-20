@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <cassert>
 #include <concepts>
 #include <cstdint>
