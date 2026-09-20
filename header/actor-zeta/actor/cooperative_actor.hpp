@@ -294,11 +294,30 @@ namespace actor_zeta { namespace actor {
                 return finalize(scheduler::resume_result::done, 0, false);
             }
 
-            // Q6 FIRST — must run even with a blocked (parked) mailbox: awaited-future
-            // readiness is flag-based (release_promise sets promise_released); it does NOT
-            // unblock the inbox. If Q6 sat below the blocked-check, an actor already parked
-            // with a since-completed future would never drain its continuation -> eternal
-            // no-op resume loop (lost wakeup). Lifting Q6 here rescues such an actor.
+            // Un-park on the way in -- the symmetric half of park()'s try_block().
+            //
+            // blocked() means "no job exists and the next producer owes the scheduling".
+            // Neither half is true here: we hold `running`, so a message arriving now is
+            // drained by this instance, and one landing after the drain is picked up by
+            // scheduled_while_running. Left blocked, a concurrent send() takes the
+            // unblocked_reader branch and is handed needs_sched for an actor that is
+            // already running -- a second job node that try_acquire_running must absorb.
+            //
+            // Reached whenever something other than a send drives the actor: a bare
+            // scheduler->enqueue(), or a manual resume() loop. The CAS fails harmlessly
+            // when the inbox was not blocked, which is the ordinary case.
+            mailbox().try_unblock();
+
+            // Q6 before the park() below, and the order is the point: a behavior
+            // suspended on a co_await must report `resume`, never `awaiting`. Awaiting
+            // pairs with keep_scheduled = false, so ~resume_guard would leave no job in
+            // any queue and nothing would ever wake it. Readiness here is flag-based --
+            // release_promise() touches neither the mailbox nor the scheduler -- so the
+            // mailbox cannot speak for the behavior.
+            //
+            // The re-check after cont.resume() is the load-bearing half: the awaited
+            // future may not have been ready, or the coroutine may have re-suspended on
+            // its next co_await inside the resume.
             if (current_behavior_.is_busy()) {
                 if (current_behavior_.is_awaited_ready()) {
                     auto cont = current_behavior_.take_awaited_continuation();
