@@ -16,13 +16,6 @@
 
 namespace actor_zeta {
 
-    namespace detail {
-        template<typename T>
-        concept has_resource_method = requires(T* ptr) {
-            { ptr->resource() } -> std::convertible_to<std::pmr::memory_resource*>;
-        };
-    } // namespace detail
-
     template<typename T>
     class unique_future;
 

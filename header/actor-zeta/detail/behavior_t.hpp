@@ -17,13 +17,6 @@ namespace actor_zeta {
     template<typename T>
     class unique_future;
 
-    namespace detail {
-        template<typename T>
-        concept has_resource_method_behavior = requires(T* ptr) {
-            { ptr->resource() } -> std::convertible_to<std::pmr::memory_resource*>;
-        };
-    } // namespace detail
-
     /// @brief Coroutine type for behavior() method
     /// Framework stores ONE coroutine per actor.
     /// behavior() returns coroutine, framework does: current_behavior_ = self()->behavior(msg)
@@ -103,7 +96,7 @@ namespace actor_zeta {
         private:
             template<typename U>
             static std::pmr::memory_resource* try_get_resource(U* ptr) noexcept {
-                if constexpr (detail::has_resource_method_behavior<U>) {
+                if constexpr (detail::has_resource_method<U>) {
                     return ptr->resource();
                 } else {
                     return nullptr;

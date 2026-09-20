@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cassert>
 #include <concepts>
 #include <cstdint>
 
+#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/detail/forwards.hpp>
