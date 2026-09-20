@@ -85,6 +85,29 @@ namespace actor_zeta {
             settle();
         }
 
+#ifdef __cpp_exceptions
+        // The exception channel, symmetric to error() above.
+        //
+        // Public because filling a promise by hand is a supported pattern -- a router
+        // takes msg->get_result_promise<T>() and completes it itself (see
+        // examples/delegation and examples/balancer). Such a router that catches
+        // something needs a way to pass it on; error() would flatten it to a code.
+        //
+        // set_exception() also stamps errc::interrupted, so a consumer that only polls
+        // failed()/error() still sees a real failure and can tell it apart from
+        // "released without an outcome" (state_not_recoverable).
+        //
+        // Guarded, because shared_state::set_exception exists only in an -fexceptions
+        // build: with -fno-exceptions the compiler emits no catch wrapper for a
+        // coroutine body, so nothing could ever be captured to pass here.
+        void exception(std::exception_ptr ep) noexcept {
+            assert(state_ && "exception() on moved-from promise");
+            assert(ep && "exception() with a null exception_ptr");
+            state_->set_exception(ep);
+            settle();
+        }
+#endif
+
         [[nodiscard]] bool valid() const noexcept {
             return state_ != nullptr;
         }

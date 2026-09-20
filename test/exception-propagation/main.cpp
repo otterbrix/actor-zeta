@@ -114,6 +114,55 @@ int main() {
         check(what == "inner said no", "co_await chain: the original exception survives");
     }
 
+    // Filling a promise by hand is a supported pattern: a router takes
+    // msg->get_result_promise<T>() and completes it itself. One that catches
+    // something needs a channel that is not error(), which would flatten it to a code.
+    {
+        promise<int> p(resource);
+        auto future = p.get_future();
+        try {
+            throw std::runtime_error("router caught this");
+        } catch (...) {
+            p.exception(std::current_exception());
+        }
+
+        check(future.is_ready(), "promise::exception(): the future completes");
+        check(future.failed(), "promise::exception(): and is reported as failed");
+        check(future.error() == std::make_error_code(std::errc::interrupted),
+              "promise::exception(): with the interrupted code, not the totality repair");
+
+        bool rethrown = false;
+        std::string what;
+        try {
+            const int value = std::move(future).take_ready();
+            std::printf("     take_ready() returned %d instead of rethrowing\n", value);
+        } catch (const std::runtime_error& e) {
+            rethrown = true;
+            what = e.what();
+        }
+        check(rethrown, "promise::exception(): extraction rethrows");
+        check(what == "router caught this", "promise::exception(): the original exception");
+    }
+
+    // The same for void, where there is no value for the exception to stand in for.
+    {
+        promise<void> p(resource);
+        auto future = p.get_future();
+        try {
+            throw std::runtime_error("void router caught this");
+        } catch (...) {
+            p.exception(std::current_exception());
+        }
+
+        bool rethrown = false;
+        try {
+            std::move(future).take_ready();
+        } catch (const std::runtime_error&) {
+            rethrown = true;
+        }
+        check(rethrown, "promise<void>::exception(): extraction rethrows");
+    }
+
     // The success path must be untouched by any of this.
     {
         auto future = actor->outer(21);
