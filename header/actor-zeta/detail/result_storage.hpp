@@ -1,12 +1,29 @@
 #pragma once
 
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory_resource>
 #include <type_traits>
 #include <utility>
 
 namespace actor_zeta { namespace detail {
+
+    // Asking a valueless storage for its value has no correct answer: T take() cannot
+    // return "nothing", and the union member was never made active, so reading it is
+    // undefined behaviour -- silently, in Release. Refuse instead, unconditionally and
+    // in every build. An assert would not do: it is exactly NDEBUG that turns this into
+    // UB, and NDEBUG is what ships.
+    [[noreturn]] inline void refuse_valueless_extraction(const char* where) noexcept {
+        std::fprintf(stderr,
+                     "actor-zeta: %s on a future that holds no value.\n"
+                     "  A promise can be released without ever producing one (a send() to a\n"
+                     "  closing mailbox cancels it), and is_ready() reports the released bit,\n"
+                     "  not the presence of a value. Gate on failed() before extracting.\n",
+                     where);
+        std::abort();
+    }
 
     template<typename T>
     inline constexpr bool is_trivially_move_constructible_and_destructible_v =
@@ -113,7 +130,9 @@ namespace actor_zeta { namespace detail {
 
         [[nodiscard]] T take() noexcept {
             assert(!was_moved_from_ && "take() on moved-from storage!");
-            assert(has_value_ && "take() from empty storage!");
+            if (!has_value_) {
+                refuse_valueless_extraction("take()");
+            }
 
             has_value_ = false;
 
@@ -128,13 +147,17 @@ namespace actor_zeta { namespace detail {
 
         [[nodiscard]] T& get() noexcept {
             assert(!was_moved_from_ && "get() on moved-from storage!");
-            assert(has_value_ && "get() from empty storage!");
+            if (!has_value_) {
+                refuse_valueless_extraction("get()");
+            }
             return storage_.value_;
         }
 
         [[nodiscard]] const T& get() const noexcept {
             assert(!was_moved_from_ && "get() on moved-from storage!");
-            assert(has_value_ && "get() from empty storage!");
+            if (!has_value_) {
+                refuse_valueless_extraction("get()");
+            }
             return storage_.value_;
         }
 

@@ -226,6 +226,12 @@ namespace actor_zeta {
         }
 
         /// @brief Q8: Check if awaited future is ready (promise_released)
+    ///
+    /// Gates on promise_released alone, and deliberately so: I1 guarantees the
+    /// released bit implies SOME result bit, but it may be error_set only. Such a
+    /// state must still drain -- narrowing this to value_set would park the actor
+    /// on a settled future forever. The refusal belongs at the extraction point
+    /// (owning_awaiter::await_resume), not here.
         [[nodiscard]] bool is_awaited_ready() const noexcept {
             if (!handle_ || handle_.done()) {
                 return false;

@@ -15,6 +15,7 @@
 #include <utility>
 
 #include <actor-zeta/detail/coroutine.hpp>
+#include <actor-zeta/detail/result_storage.hpp>
 #include <actor-zeta/detail/state_flags.hpp>
 
 namespace actor_zeta {
@@ -124,7 +125,13 @@ namespace actor_zeta {
                         // unhandled_exception() and is captured into its state -- which is
                         // how a failure propagates up a chain of awaits.
                         state->rethrow_if_exception();
-                        assert(!state->has_error() && "future completed with error");
+                        // No exception to rethrow and still an error: there is no value
+                        // here and co_await has no channel to report that. Refuse rather
+                        // than extract -- see refuse_valueless_extraction(). Cancellation
+                        // is observed by polling failed(), not by awaiting.
+                        if (state->has_error()) {
+                            refuse_valueless_extraction("co_await");
+                        }
                         if constexpr (std::is_void_v<U>) {
                             state->take_value();
                         } else {
@@ -161,7 +168,13 @@ namespace actor_zeta {
                         auto* state = owned_.internal_state();
                         // Rethrow first -- see the awaiter above.
                         state->rethrow_if_exception();
-                        assert(!state->has_error() && "future completed with error");
+                        // No exception to rethrow and still an error: there is no value
+                        // here and co_await has no channel to report that. Refuse rather
+                        // than extract -- see refuse_valueless_extraction(). Cancellation
+                        // is observed by polling failed(), not by awaiting.
+                        if (state->has_error()) {
+                            refuse_valueless_extraction("co_await");
+                        }
                         if constexpr (std::is_void_v<U>) {
                             state->take_value();
                             return needs_sched_;
