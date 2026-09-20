@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <cassert>
 
 #include <chrono>
@@ -88,6 +89,26 @@ private:
 
 
 
+// The balancer's behavior() runs on the caller's thread -- collection_t is an
+// actor_mixin, so enqueue_impl dispatches inline -- while a scheduler worker drives the
+// child that does the work and re-enqueues it; this side only polls for the answer.
+template<typename T>
+T await_child(actor_zeta::unique_future<T>& future) {
+    // is_ready() is the promise_released bit, which a promise dying without a value sets
+    // too, and take_ready() only ASSERTS has_result() -- an assert that is gone in the
+    // Release builds examples ship as. Hence failed(). The bound turns a future that
+    // never completes into a visible error instead of a silent hang.
+    constexpr int kAwaitCap = 10'000'000;
+    for (int i = 0; i < kAwaitCap && !future.is_ready(); ++i) {
+        std::this_thread::yield();
+    }
+    if (!future.is_ready() || future.failed()) {
+        std::cerr << "await_child: future did not complete with a value\n";
+        std::abort();
+    }
+    return std::move(future).take_ready();
+}
+
 class collection_t final : public actor_zeta::actor::actor_mixin<collection_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
@@ -98,9 +119,10 @@ public:
         return {false, actor_zeta::detail::enqueue_result::success};
     }
 
-    collection_t(std::pmr::memory_resource* resource, actor_zeta::sharing_scheduler*)
+    collection_t(std::pmr::memory_resource* resource, actor_zeta::sharing_scheduler* scheduler)
         : actor_zeta::actor::actor_mixin<collection_t>()
-        , resource_(resource) {
+        , resource_(resource)
+        , scheduler_(scheduler) {
         ++count_collection;
     }
 
@@ -151,7 +173,11 @@ public:
                     &collection_part_t::insert,
                     actor_zeta::detail::get<0, insert_args>(args),
                     actor_zeta::detail::get<1, insert_args>(args));
-                actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -159,7 +185,11 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::remove,
                     actor_zeta::detail::get<0, remove_args>(args));
-                actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -168,7 +198,11 @@ public:
                     &collection_part_t::update,
                     actor_zeta::detail::get<0, update_args>(args),
                     actor_zeta::detail::get<1, update_args>(args));
-                actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -176,7 +210,11 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::find,
                     actor_zeta::detail::get<0, find_args>(args));
-                auto result = actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                auto result = await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<std::string>().set_value(std::move(result));
                 break;
             }
@@ -185,6 +223,7 @@ public:
 
 private:
     std::pmr::memory_resource* resource_;
+    actor_zeta::sharing_scheduler* scheduler_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
 };
@@ -199,6 +238,10 @@ int main() {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
+    // The workers have to be running before the first message is forwarded: the child
+    // actors are driven only by the scheduler now, so nothing would resume them.
+    // scheduler->stop() below still runs before `collection` (and its children) die.
+    scheduler->start();
     auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());
 
     std::cerr << "=== Creating 3 collection_part actors ===" << std::endl;
@@ -217,8 +260,6 @@ int main() {
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
     { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::remove, std::string("key3")); std::move(f).take_ready(); }
-
-    scheduler->start();
 
     std::this_thread::sleep_for(sleep_time);
 

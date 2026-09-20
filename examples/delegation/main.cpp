@@ -3,6 +3,8 @@
 // cooperative-actor workers. The caller's future is filled by the worker through
 // the message's type-erased result_slot; the router itself never waits.
 
+#include <cassert>
+#include <cstdlib>
 #include <atomic>
 #include <cstddef>
 #include <iostream>
@@ -13,6 +15,27 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
+
+// Wait for a future completed elsewhere -- by a scheduler's worker threads, or inline
+// by a synchronous actor_mixin. Nothing is pumped here: this is a bounded spin.
+//
+// is_ready() is NOT a value gate: it is the promise_released bit, which a promise that
+// dies without a value sets too, and take_ready() only ASSERTS that a value is present
+// -- an assert that is gone in the Release builds examples ship as. Hence failed(). The
+// bound turns a producer that never completes into a visible error, not a silent hang.
+template<typename T>
+T await_from_scheduler(actor_zeta::unique_future<T>& future) {
+    constexpr int kSpinCap = 10'000'000;
+    for (int i = 0; i < kSpinCap && !future.is_ready(); ++i) {
+        std::this_thread::yield();
+    }
+    if (!future.is_ready() || future.failed()) {
+        std::cerr << "await_from_scheduler: future did not complete with a value\n";
+        std::abort();
+    }
+    return std::move(future).take_ready();
+}
+
 
 using namespace actor_zeta;
 
@@ -87,14 +110,16 @@ int main() {
     std::vector<unique_future<int>> futs;
     futs.reserve(N);
     for (int i = 0; i < N; ++i) {
-        auto [needs_sched, f] = send(router.get(), &router_t::compute, i);
-        (void) needs_sched;
-        futs.push_back(std::move(f));
+        auto sent = send(router.get(), &router_t::compute, i);
+        // The router is a synchronous actor_mixin: it restamps the message and hands it
+        // to a worker inside send(), so the caller has nothing to schedule.
+        assert(!sent.first);
+        futs.push_back(std::move(sent.second));
     }
 
     int sum = 0;
     for (auto& f : futs) {
-        sum += run_until_complete(f, [] { std::this_thread::yield(); });
+        sum += await_from_scheduler(f);
     }
 
     int expected = 0;

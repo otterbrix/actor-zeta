@@ -121,13 +121,20 @@ public:
         client_ = c;
     }
 
-    /// @brief Runs one resume cycle for all actors
-    void run_once() {
-        // The `resume` verdict is discharged by the caller: run_until_complete()
-        // invokes run_once() again until the future is ready, which is exactly the
-        // re-scheduling the verdict asks for. Hence (void) rather than a drop.
-        if (client_) (void) client_->resume(1);
-        if (worker_) (void) worker_->resume(1);
+    /// @brief Runs one resume cycle for all actors.
+    ///
+    /// Returns true while at least one actor still asks to be rescheduled. The
+    /// verdict is not dropped: it IS this function's result, and the caller's
+    /// loop is what discharges the obligation by coming round again.
+    bool run_once() {
+        bool wants_more = false;
+        if (client_) {
+            wants_more |= client_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
+        }
+        if (worker_) {
+            wants_more |= worker_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
+        }
+        return wants_more;
     }
 
 private:
@@ -146,9 +153,14 @@ TEST_CASE("worker only") {
 
     auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
 
-    // Producer is pumped on this thread via the supervisor: drive the future to
-    // completion by pumping the supervisor until it is ready, then take the value.
-    int result = run_until_complete(future, [&] { supervisor.run_once(); });
+    // Drive the supervisor until the future is ready. Bounded so a mis-wired
+    // pump fails the assertion below instead of hanging.
+    constexpr int kPumpCap = 64;
+    for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
+        supervisor.run_once();
+    }
+    REQUIRE(future.is_ready());
+    int result = std::move(future).take_ready();
 
     REQUIRE(result == 42);
 }
@@ -163,17 +175,25 @@ TEST_CASE("client-worker coroutine with supervisor") {
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get(), client.get());
 
-    // Send message to client
     auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
 
-    // Producer is pumped on this thread via the supervisor.
-    int result = run_until_complete(future, [&] { supervisor.run_once(); });
+    // Drive the supervisor until the future is ready. Bounded so a mis-wired
+    // pump fails the assertion below instead of hanging.
+    constexpr int kPumpCap = 64;
+    for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
+        supervisor.run_once();
+    }
+    REQUIRE(future.is_ready());
+    int result = std::move(future).take_ready();
 
     REQUIRE(result == 52);  // 21 * 2 + 10 = 52
 
-    // Verify via get_result()
     auto [needs_sched2, result_future] = send(client.get(), &client_actor::get_result);
-    int verified = run_until_complete(result_future, [&] { supervisor.run_once(); });
+    for (int i = 0; i < kPumpCap && !result_future.is_ready(); ++i) {
+        supervisor.run_once();
+    }
+    REQUIRE(result_future.is_ready());
+    int verified = std::move(result_future).take_ready();
 
     REQUIRE(verified == 52);
 }

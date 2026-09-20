@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -6,6 +7,27 @@
 #include <vector>
 
 #include <actor-zeta.hpp>
+
+// Wait for a future completed elsewhere -- by a scheduler's worker threads, or inline
+// by a synchronous actor_mixin. Nothing is pumped here: this is a bounded spin.
+//
+// is_ready() is NOT a value gate: it is the promise_released bit, which a promise that
+// dies without a value sets too, and take_ready() only ASSERTS that a value is present
+// -- an assert that is gone in the Release builds examples ship as. Hence failed(). The
+// bound turns a producer that never completes into a visible error, not a silent hang.
+template<typename T>
+T await_from_scheduler(actor_zeta::unique_future<T>& future) {
+    constexpr int kSpinCap = 10'000'000;
+    for (int i = 0; i < kSpinCap && !future.is_ready(); ++i) {
+        std::this_thread::yield();
+    }
+    if (!future.is_ready() || future.failed()) {
+        std::cerr << "await_from_scheduler: future did not complete with a value\n";
+        std::abort();
+    }
+    return std::move(future).take_ready();
+}
+
 
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
@@ -153,15 +175,12 @@ int main() {
     std::cerr << "=== Supervisor Example: Manual Scheduling ===" << std::endl;
     std::cerr << std::endl;
 
-    // Top-level result collection without task<>/sync_wait. The supervisor (an
-    // actor_mixin) processes each request synchronously, so every returned future is
-    // ready as soon as send() returns. We use a non-blocking consumer poll for each:
-    // while(!f.is_ready()) yield; then take_ready(). The real scheduler keeps running
-    // while we drive, and is stopped before the actor is destroyed.
+    // The supervisor is an actor_mixin and processes each request synchronously, so every
+    // returned future is ready as soon as send() returns. The real scheduler keeps
+    // running while we collect, and is stopped before the actor is destroyed.
     auto await_request = [](auto future_pair) {
         auto& future = future_pair.second;
-        // Real scheduler produces cross-thread; drive with a yield pump and discard.
-        (void) actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
+        return await_from_scheduler(future);
     };
 
     std::cerr << "--- Creating Workers ---" << std::endl;

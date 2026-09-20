@@ -6,22 +6,71 @@
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <thread>
 #include <vector>
 #include <memory>
+
+namespace {
+
+    // Wait for a future that the scheduler's worker threads complete. There is nothing
+    // for this thread to pump -- the producer runs elsewhere -- so this is a bounded
+    // spin, not a driver.
+    //
+    // Returns nothing when the future never became ready within the bound, or completed
+    // with an error. That is what makes it usable from BOTH contexts in this file:
+    // several call sites run inside consumer threads, where a Catch2 macro would be a
+    // data race (Catch2 v2 builds an ostringstream), so they fold the failure into the
+    // counters the post-join assertions check instead.
+    //
+    // is_ready() alone would not do: it is the promise_released bit, which a promise
+    // dying without a value sets too, and take_ready() only ASSERTS that a value is
+    // there -- an assert that does not exist under NDEBUG.
+    template<typename T>
+    std::optional<T> await_from_scheduler(actor_zeta::unique_future<T>& future) {
+        constexpr int kSpinCap = 10'000'000;
+        for (int i = 0; i < kSpinCap && !future.is_ready(); ++i) {
+            std::this_thread::yield();
+        }
+        if (!future.is_ready() || future.failed()) {
+            return std::nullopt;
+        }
+        return std::move(future).take_ready();
+    }
+
+    // Drive `actor` until it stops asking to be rescheduled, or `cap` turns pass.
+    // Returns false when the cap ran out with the `resume` obligation STILL
+    // outstanding -- a legitimate outcome here: several sequences below deliberately
+    // leave an actor suspended on a producer they have not driven yet, and such an
+    // actor reports `resume` forever.
+    //
+    // The verdict is the LOOP CONDITION, so it is never silently dropped, and it is
+    // returned rather than asserted: the call sites inside producer threads cannot
+    // use a Catch2 macro (v2 builds a std::ostringstream -- a data race). This file
+    // resumes by hand rather than attaching a scheduler because the route it guards
+    // (PR #182) is precisely "an actor resumed from a foreign thread".
+    template<typename Actor>
+    bool drive(Actor* actor, size_t max_throughput, int cap = 8) {
+        for (int i = 0; i < cap; ++i) {
+            if (actor->resume(max_throughput).result != actor_zeta::scheduler::resume_result::resume) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+} // namespace
 
 // Cross-thread stress tests: future lives on the consumer (main/test) thread;
 // the actor (producer) runs on another thread (a sharing_scheduler worker or
 // a manually-spawned std::thread).
 
-// Simple worker actor for testing
 class cross_thread_worker final : public actor_zeta::basic_actor<cross_thread_worker> {
 public:
     explicit cross_thread_worker(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<cross_thread_worker>(resource)
         , processed_{0} {}
 
-    // Simple computation
     actor_zeta::unique_future<int> compute(int value) {
         ++processed_;
         co_return value * 2;
@@ -70,12 +119,12 @@ TEST_CASE("cross-thread: basic polling pattern") {
         auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                        &cross_thread_worker::compute, i);
 
-        // Producer thread (PR #182 resume-crosses-threads path is preserved).
-        // It signals completion via a test-owned flag so the consumer waits
-        // without busy-spinning (producer is test-controlled and can notify).
+        // The producer resumes the actor from another thread, and signals
+        // completion through a test-owned flag so the consumer waits without
+        // busy-spinning (the producer is test-controlled and can notify).
         std::atomic<bool> done{false};
         std::thread producer([&]() {
-            (void)actor->resume(1);
+            drive(actor.get(), 1);
             done.store(true, std::memory_order_release);
             done.notify_all();
         });
@@ -113,7 +162,7 @@ TEST_CASE("cross-thread: concurrent start polling") {
             while (!start.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }
-            (void)actor->resume(1);
+            drive(actor.get(), 1);
             done.store(true, std::memory_order_release);
             done.notify_all();
         });
@@ -160,10 +209,10 @@ TEST_CASE("cross-thread: polling with scheduler") {
             scheduler->enqueue(actor.get());
         }
 
-        // Producer is the scheduler's worker threads; drive on this thread via
-        // run_until_complete with a yield pump (nothing to pump locally).
-        int result = actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
-        REQUIRE(result == i * 2);
+        // The scheduler's workers are the producer; this thread only waits.
+        auto result = await_from_scheduler(future);
+        REQUIRE(result.has_value());
+        REQUIRE(*result == i * 2);
     }
 
     scheduler->stop();
@@ -194,11 +243,10 @@ TEST_CASE("cross-thread: slow computation stress") {
         }
 
         consumers.emplace_back([fut = std::move(future), i, &completed, &correct_results]() mutable {
-            // Consumer kept on its own thread; the scheduler worker threads
-            // produce, so drive via run_until_complete with a yield pump.
-            int result = actor_zeta::run_until_complete(fut, [] { std::this_thread::yield(); });
+            // Consumer kept on its own thread; the scheduler's workers produce.
+            auto result = await_from_scheduler(fut);
             // Don't use REQUIRE in threads - Catch2 is not thread-safe
-            if (result == i * 2) {
+            if (result && *result == i * 2) {
                 correct_results.fetch_add(1, std::memory_order_relaxed);
             }
             completed.fetch_add(1, std::memory_order_relaxed);
@@ -252,7 +300,9 @@ TEST_CASE("cross-thread: batch processing") {
         std::vector<int> results;
         results.reserve(BATCH_SIZE);
         for (auto& f : futures) {
-            results.push_back(actor_zeta::run_until_complete(f, [] { std::this_thread::yield(); }));
+            auto value = await_from_scheduler(f);
+            REQUIRE(value.has_value());
+            results.push_back(*value);
         }
         for (size_t i = 0; i < static_cast<size_t>(BATCH_SIZE); ++i) {
             int expected = (batch * BATCH_SIZE + static_cast<int>(i)) * 2;
@@ -295,12 +345,11 @@ TEST_CASE("cross-thread: multiple actors") {
                     scheduler->enqueue(actors[a].get());
                 }
 
-                // Consumer kept on its own thread; the scheduler worker threads
-                // produce, so drive via run_until_complete with a yield pump.
-                int result = actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
+                // Consumer kept on its own thread; the scheduler's workers produce.
+                auto result = await_from_scheduler(future);
                 int expected = (static_cast<int>(a) * ITERATIONS_PER_ACTOR + i) * 2;
                 // Don't use REQUIRE in threads - Catch2 is not thread-safe
-                if (result == expected) {
+                if (result && *result == expected) {
                     correct_results.fetch_add(1, std::memory_order_relaxed);
                 }
 
@@ -372,8 +421,7 @@ TEST_CASE("cross-thread: immediate available") {
                                        &cross_thread_worker::compute, i);
 
         // Process immediately in same thread
-        (void)actor->resume(1);
-
+        drive(actor.get(), 1);
         // Should be ready immediately
         REQUIRE(future.is_ready());
 
@@ -415,11 +463,11 @@ TEST_CASE("cross-thread: high contention") {
                 }
 
                 // Consumer kept on its own thread (high-contention path); the
-                // scheduler worker threads produce, so drive via run_until_complete.
-                int result = actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
+                // scheduler's workers produce.
+                auto result = await_from_scheduler(future);
                 int expected = (t * ITERATIONS_PER_THREAD + i) * 2;
                 // Don't use REQUIRE in threads - Catch2 is not thread-safe
-                if (result == expected) {
+                if (result && *result == expected) {
                     correct_results.fetch_add(1, std::memory_order_relaxed);
                 }
                 total_completed.fetch_add(1, std::memory_order_relaxed);
@@ -455,15 +503,15 @@ TEST_CASE("cross-thread: memory ordering") {
         std::atomic<bool> producer_done{false};
 
         std::thread producer([&]() {
-            (void)actor->resume(1);
+            drive(actor.get(), 1);
             producer_done.store(true, std::memory_order_release);
             producer_done.notify_all();
         });
 
         std::thread consumer([&]() {
-            // Consumer kept on its own thread (producer resumes the actor on a
-            // separate thread - PR #182 path). Block (no spin) on the producer's
-            // completion flag (release/acquire), then take.
+            // Consumer kept on its own thread; the producer resumes the actor on a
+            // separate thread. Block (no spin) on the producer's completion flag
+            // (release/acquire), then take.
             producer_done.wait(false, std::memory_order_acquire);
             int v = std::move(future).take_ready();
             read_value.store(v, std::memory_order_relaxed);
