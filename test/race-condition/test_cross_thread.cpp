@@ -64,12 +64,14 @@ public:
 
     // Slower, to widen the window.
     actor_zeta::unique_future<int> compute_slow(int value) {
-        volatile int sum = 0;
+        // Plain int, not volatile: a compound assignment to a volatile object is
+        // deprecated in C++20. The value is co_returned, so the loop still stands.
+        int sum = 0;
         for (int i = 0; i < 100; ++i) {
             sum += value;
         }
         ++processed_;
-        co_return static_cast<int>(sum / 100) * 2;
+        co_return (sum / 100) * 2;
     }
 
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
