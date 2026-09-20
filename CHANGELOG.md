@@ -39,7 +39,7 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 - **Blocking `unique_future` API**: `.get()`, `.wait()`, `.available()`, `.cancel()`,
   `.is_cancelled()` are gone, along with the yield/exponential-backoff spin that
   used to live inside `get()`. Bring the future to ready via `co_await` /
-  `run_until_complete` / an external producer; extract the value with the
+  an external producer; extract the value with the
   non-blocking `take_ready()`. Cancellation is observed via `failed()` / `error()`
   (the producer sets `std::errc::operation_canceled` through `promise<T>::error`).
 - **Default `enqueue_impl` on `actor_mixin`**: each Derived must now define its
@@ -51,15 +51,25 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   `shared_state<T>::deallocate_from_finalizer()` (both specializations; zero callers).
 - Backward-compat shim `mailbox/message_result.hpp` (and its `#include` in
   `mailbox.hpp`).
+- **`co_await` on a `unique_future<T>` from a NON-actor coroutine**: the nested
+  `unique_future<T>::awaiter`, the member `operator co_await()` and the free
+  `operator co_await(unique_future<T>&&)` are gone. Inside an actor coroutine
+  nothing changes — `co_await std::move(fut)` still works, served by
+  `future_awaiter_mixin::await_transform`. What is gone is awaiting a future from
+  a coroutine that is not an actor method, because that resumed an actor's frame
+  on a foreign thread with no `running`-bit serialization. Drive such a future
+  from outside instead: a bounded poll on `is_ready()` + `failed()` +
+  `take_ready()`. See `examples/external-drive/`.
+- **`behavior_t::resume()`** — dead code, zero callers. An actor's behavior is
+  resumed by `cooperative_actor::resume_impl`, never directly.
+- **`shared_state<T>::take_continuation()`** (both specializations) — dead code.
+  The continuation is claimed with an explicit
+  `continuation_.exchange(nullptr, acq_rel)` at each of the three sites that
+  need it, which is what made the removed helper redundant.
 
 ### Added
 - **`take_ready()`** on `unique_future<T>`: non-blocking value extraction; asserts
   the future is ready.
-- **`run_until_complete(f, pump)`** in `<actor-zeta/detail/run_loop.hpp>`: the
-  canonical top-level driver. `pump` is invoked repeatedly until `is_ready()`,
-  then the value is taken via `take_ready()`. Typical pumps:
-  `[&]{ actor->resume(n); }` (same-thread), `[]{ std::this_thread::yield(); }`
-  (cross-thread, scheduler worker is producer).
 - **`message::set_command(message_id)`**: enables non-blocking router/delegation
   patterns — the router restamps the command and forwards the same message_ptr
   to a worker's `enqueue_impl`; the caller's future is filled by the worker via
@@ -81,8 +91,10 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   `resume_result::resume` returned by `resume()` — the caller must put the actor
   back in a run queue. That contract was always true (`work_sharing` and every
   real driver honour it); the park merely masked violations. Manual drivers that
-  discard the verdict now fail to compile; write `(void)` where the next step of
-  a hand-staged sequence is the discharge.
+  discard the verdict now fail to compile. Do NOT reach for a `(void)` cast to
+  silence it — `(void)` is banned project-wide. Consume the verdict for real:
+  hand it to a scheduler, loop on it, or assert it. See the migration guide
+  below.
 - **`send()` API**: Removed sender address parameter. Now: `send(actor, &Method, args...)` returns `std::pair<bool, unique_future<T>>`
 - **`make_message()` API**: Removed sender address parameter
 - **`enqueue_impl()` return type**: Changed to `std::pair<bool, enqueue_result>` (bool first)
@@ -96,8 +108,8 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 ### Fixed
 - Cross-thread race condition in `unique_future` (PR #182): the lock-free CAS
   handshake between producer and consumer continuation now lives in a single
-  `future_awaiter_mixin` consumed by all three promise types (unique_future,
-  behavior_t, task), eliminating the previously duplicated copies.
+  `future_awaiter_mixin`, consumed by both promise types (`unique_future` and
+  `behavior_t`) instead of being duplicated in each.
 - Clang-14 compatibility: Structured bindings cannot be captured in lambdas
 
 ## [2025-01] - Major Refactoring
@@ -143,6 +155,46 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 
 ## Migration Guides
 
+### `resume()` is `[[nodiscard]]` (Unreleased)
+
+Hand-written drivers that call `resume()` and ignore the result stop compiling.
+On a project built with `-Wall -Werror` this is a hard error, not a warning.
+
+```cpp
+// Before
+actor->resume(1);
+
+// After -- drive through the TEST scheduler, which consumes the verdict for you.
+// NOTE: `sched` here is actor_zeta::test::scheduler_test_t. Its stop() drains
+// until a full sweep makes no progress and may be called repeatedly. The
+// production scheduler::sharing_scheduler is NOT interchangeable here: its
+// stop() tears the worker pool down -- every later enqueue() is a no-op, and a
+// second stop() joins non-joinable threads. With a real scheduler you call
+// start() once, enqueue as work arrives, and stop() exactly once at shutdown.
+actor_zeta::test::scheduler_test_t sched(1, 100);
+if (needs_sched) {
+    sched.enqueue(actor.get());
+}
+sched.stop();
+
+// After -- staying with a hand driver: the verdict is an obligation, so act on it
+while (actor->resume(1).result == actor_zeta::scheduler::resume_result::resume) {
+    // `resume` means "put me back in a run queue"; a hand driver pays that by
+    // going round again. Bound the loop: an actor suspended on a co_await whose
+    // producer is never driven reports `resume` forever.
+}
+```
+
+Prefer `scheduler_test_t` for deterministic tests: `run_once()` already consumes
+the verdict and re-queues the job. Use `stop()` rather than `run()` to drain —
+`run()`'s only exit is an empty queue, and an actor parked on a pending
+cross-actor await keeps the queue non-empty indefinitely.
+
+Note `run()` and `stop()` differ in what they wait for, so a step driven by
+`stop()` drains to quiescence where a single `resume(1)` advanced one message.
+Assertions of the form "not ready yet" between steps may need rethinking; value
+assertions are unaffected.
+
 ### `generator<T>` removal (Unreleased)
 
 ```cpp
@@ -181,8 +233,10 @@ any more, by design — see the constraints listed under **Removed** above.
 while (!f.available()) std::this_thread::yield();
 int r = std::move(f).get();
 
-// After — top-level driver:
-int r = actor_zeta::run_until_complete(f, []{ std::this_thread::yield(); });
+// After — poll from outside a coroutine. is_ready() is the promise_released bit,
+// which a promise dying without a value sets too, so gate on failed() as well:
+while (!f.is_ready()) { std::this_thread::yield(); }
+int r = f.failed() ? fallback(f.error()) : std::move(f).take_ready();
 
 // After — inside a coroutine:
 int r = co_await std::move(f);

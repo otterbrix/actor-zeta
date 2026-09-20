@@ -150,8 +150,8 @@ namespace actor_zeta { namespace actor {
         // The verdict is an obligation, not a status: `resume` means the caller must
         // put this actor back in a run queue. Nothing else will -- a future completing
         // is flag-only, so it neither pushes to the mailbox nor re-enqueues the actor,
-        // and send() only reports needs_sched when the inbox was blocked. Dropping the
-        // verdict strands the actor. Write (void) if you really mean to ignore it.
+        // and send() only reports needs_sched when the inbox was blocked. A driver
+        // that drops it strands the actor.
         [[nodiscard]] scheduler::resume_info resume(size_t max_throughput) noexcept {
             assert(max_throughput > 0 && "max_throughput must be greater than 0");
 
@@ -298,8 +298,7 @@ namespace actor_zeta { namespace actor {
             // readiness is flag-based (release_promise sets promise_released); it does NOT
             // unblock the inbox. If Q6 sat below the blocked-check, an actor already parked
             // with a since-completed future would never drain its continuation -> eternal
-            // no-op resume loop (lost wakeup). Lifting Q6 here rescues it; the re-check
-            // below stops a still-live behavior from being parked in the first place.
+            // no-op resume loop (lost wakeup). Lifting Q6 here rescues such an actor.
             if (current_behavior_.is_busy()) {
                 if (current_behavior_.is_awaited_ready()) {
                     auto cont = current_behavior_.take_awaited_continuation();
@@ -310,8 +309,8 @@ namespace actor_zeta { namespace actor {
                 // Re-check: the await may not have been ready, or the coroutine
                 // re-suspended on its next co_await inside cont.resume(). Falling through to
                 // the blocked-return / try_block below would re-strand a live behavior.
-                // This is the half of the fix that prevents the park; the hoist above is the
-                // half that recovers from one.
+                // The hoist above recovers an already-parked behavior; this re-check is what
+                // keeps a live one from being parked in the first place.
                 if (current_behavior_.is_busy()) {
                     return finalize(scheduler::resume_result::resume, 0, true);
                 }

@@ -2,22 +2,11 @@
 
 // Shared awaiter machinery for actor-zeta coroutine promise types.
 //
-// The lock-free CAS-based continuation handshake (the `continuation_` compare/exchange
-// that was fixed for a cross-thread race in PR #182) used to be DUPLICATED across
+// The lock-free `continuation_` compare/exchange is race-prone code that both
 // `unique_future::promise_type_base` (future.hpp) and `behavior_t::promise_type`
-// (behavior_t.hpp). Adding `task::promise_type` would have created a THIRD copy of
-// race-prone lock-free code. This header is the single source of truth: all three promise
-// types consume `future_awaiter_mixin<Derived>` (a CRTP mixin) so any future fix to the
-// awaiter lands exactly once.
-//
-// This file is a PURE refactor of the previously-duplicated code: the await behavior is
-// byte-for-byte identical. The only unification is that `behavior_t`'s awaiters used to
-// clear their awaited-chain via four raw `std::atomic<...>**` double-pointers, whereas the
-// unique_future awaiters called `promise_->clear_awaited_chain()`. Because `behavior_t` is
-// always the chain root, the manual 4-pointer clear is functionally identical to a 1-level
-// `clear_awaited_chain()` (clear own awaited_* then propagate nullptr to the immediate
-// parent, which for the root is the same pointers). All awaiters now use the
-// `promise_->clear_awaited_chain()` form.
+// (behavior_t.hpp) need. This header is the single source of truth: every promise type
+// consumes `future_awaiter_mixin<Derived>` (a CRTP mixin), so a fix to the awaiter lands
+// exactly once instead of once per copy.
 
 #include <atomic>
 #include <cassert>
@@ -35,12 +24,9 @@ namespace actor_zeta {
     class unique_future;
 
     namespace detail {
-        // --- Shared lock-free CAS suspend (PR #182 fix lives here, once) ---
+        // --- Shared lock-free CAS suspend ---
         // Returns the coroutine to resume next (symmetric transfer), or noop_coroutine() if
-        // the producer will resume us later.
-        //
-        // StateT is shared_state<U>. The behavior is byte-for-byte identical to the previous
-        // duplicated copies in future.hpp / behavior_t.hpp.
+        // the producer will resume us later. StateT is shared_state<U>.
         template<typename StateT>
         inline detail::coroutine_handle<>
         future_await_suspend_cas(StateT* state, detail::coroutine_handle<> h) noexcept {
@@ -60,10 +46,16 @@ namespace actor_zeta {
                         // We took it - resume ourselves.
                         return cont;
                     }
-                    // Producer already took it - they will resume us.
+                    // The producer took our handle. It resumes us only for a
+                    // method-coroutine state, via promise_type_base::final_awaiter.
+                    // For a promise<T>-backed state (everything send() returns)
+                    // completion is flag-only and NOBODY resumes: the consumer's own
+                    // driver picks it up in cooperative_actor's Q6 block.
                     return detail::noop_coroutine();
                 }
-                // Result not ready - wait, producer will resume us.
+                // Result not ready. Same split as above -- for a promise<T>-backed
+                // state we are woken by our own driver polling is_awaited_ready(),
+                // not by the producer.
                 return detail::noop_coroutine();
             } else {
                 // CAS failed - someone already set continuation.
@@ -80,8 +72,7 @@ namespace actor_zeta {
         //     (used by the actor scheduler's spinning/resume mechanism),
         //   * propagate_awaited_state() / update_propagated_outer() / clear_awaited_chain(),
         //   * await_transform(unique_future<U>&&),
-        //   * await_transform(std::pair<bool, unique_future<U>>&&) (incl. void),
-        //   * the constrained generic passthrough await_transform (foreign awaitables).
+        //   * await_transform(std::pair<bool, unique_future<U>>&&) (incl. void).
         template<typename Derived>
         struct future_awaiter_mixin {
             // Track deepest awaited future for spinning mechanism (propagated through chain).
@@ -128,10 +119,10 @@ namespace actor_zeta {
                         promise_->clear_awaited_chain();
 
                         auto* state = owned_.internal_state();
-                        // Rethrow at the co_await point, so the exception surfaces where the
-                        // value would have. It then reaches THIS coroutine's own
-                        // unhandled_exception() and is captured into its state -- which is how
-                        // a failure propagates up a chain of awaits.
+                        // Rethrow at the co_await point, so the exception surfaces where
+                        // the value would have. It then reaches THIS coroutine's own
+                        // unhandled_exception() and is captured into its state -- which is
+                        // how a failure propagates up a chain of awaits.
                         state->rethrow_if_exception();
                         assert(!state->has_error() && "future completed with error");
                         if constexpr (std::is_void_v<U>) {
@@ -168,10 +159,7 @@ namespace actor_zeta {
                         promise_->clear_awaited_chain();
 
                         auto* state = owned_.internal_state();
-                        // Rethrow at the co_await point, so the exception surfaces where the
-                        // value would have. It then reaches THIS coroutine's own
-                        // unhandled_exception() and is captured into its state -- which is how
-                        // a failure propagates up a chain of awaits.
+                        // Rethrow first -- see the awaiter above.
                         state->rethrow_if_exception();
                         assert(!state->has_error() && "future completed with error");
                         if constexpr (std::is_void_v<U>) {
@@ -264,12 +252,17 @@ namespace actor_zeta {
 
         // NOTE: there is intentionally NO generic foreign-awaitable passthrough await_transform.
         // An actor IS a coroutine (behavior_t); actor coroutines (and the unique_future method
-        // coroutines they co_await) only ever co_await actor-zeta awaitables (unique_future /
-        // pair), driven by the sharing_scheduler. They never co_await a foreign
-        // (e.g. Asio) awaitable — that would resume the actor off its scheduler thread. External
-        // event loops integrate the OTHER way: a foreign coroutine co_awaits OUR unique_future
-        // via unique_future::operator co_await (+ a bridge on the foreign side). So all promise
-        // types consume the single future_awaiter_mixin above, with only the specific overloads.
+        // coroutines they co_await) only ever co_await actor-zeta awaitables, driven by the
+        // sharing_scheduler. A foreign (e.g. Asio) awaitable would resume the actor off its
+        // scheduler thread.
+        //
+        // External event loops integrate by POLLING instead: is_ready(), then failed(), then
+        // take_ready() -- see examples/external-drive/. The failed() step is not optional:
+        // is_ready() is the promise_released bit, which a promise dying without a value also
+        // sets, and take_ready() only ASSERTS the value is present. unique_future also has no
+        // operator co_await: a foreign consumer suspended on a promise<T>-backed future would
+        // hang forever, because its completion is flag-only and no cooperative_actor drives
+        // that consumer.
 
     } // namespace detail
 } // namespace actor_zeta

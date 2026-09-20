@@ -30,7 +30,7 @@ namespace actor_zeta {
     struct behavior_t {
         // promise_type inherits the shared awaiter machinery (await_transform overloads +
         // lock-free CAS + awaited-chain propagation) from detail::future_awaiter_mixin
-        // (future_awaiters.hpp) — the same single source of truth as unique_future and task.
+        // (future_awaiters.hpp), the same one unique_future uses.
         // behavior_t is always the chain ROOT (no outer promise).
         struct promise_type : detail::future_awaiter_mixin<promise_type> {
             std::pmr::memory_resource* resource_ = nullptr;
@@ -42,8 +42,9 @@ namespace actor_zeta {
             // immediate start (no initial suspend)
             detail::suspend_never initial_suspend() noexcept { return {}; }
 
-            // Q7: Always stay suspended at final_suspend, ~behavior_t() will destroy
-            // No more detached_ logic - with (no cont.resume()), destroy is always safe
+            // Q7: always stay suspended at final_suspend; ~behavior_t() destroys the frame.
+            // Safe unconditionally because the producer never calls cont.resume() (Q6), so
+            // the frame is never running on another thread.
             auto final_suspend() noexcept {
                 struct final_awaiter {
                     bool await_ready() const noexcept { return false; }
@@ -65,10 +66,9 @@ namespace actor_zeta {
             // await_transform overloads for the actor-zeta awaitables (unique_future<T>&&,
             // pair<bool, unique_future<T>>&&) are inherited from
             // detail::future_awaiter_mixin<promise_type>. There is NO generic foreign-awaitable
-            // passthrough anywhere: an actor IS a coroutine and only co_awaits actor-zeta
-            // awaitables, driven by the sharing_scheduler. A foreign (e.g. Asio) awaiter would
-            // resume the coroutine off its scheduler thread (UAF / threading hazard). External
-            // loops integrate the other way — a foreign coroutine co_awaits OUR unique_future.
+            // passthrough anywhere: a foreign (e.g. Asio) awaiter would resume the coroutine
+            // off its scheduler thread (UAF / threading hazard). External loops integrate by
+            // polling our unique_future instead — see the note in future_awaiters.hpp.
 
             // === PMR allocation (same pattern as unique_future) ===
 
@@ -99,10 +99,6 @@ namespace actor_zeta {
             static void operator delete(void* ptr) noexcept {
                 detail::deallocate_coro_frame_unsized(ptr);
             }
-
-            // propagate_awaited_state() / update_propagated_outer() / clear_awaited_chain()
-            // and the awaited-chain fields (awaited_flags_, awaited_continuation_, ...) are
-            // inherited from detail::future_awaiter_mixin<promise_type>.
 
         private:
             template<typename U>
@@ -165,25 +161,22 @@ namespace actor_zeta {
             }
 
             // Zero arguments means there is nothing that could carry a memory resource.
-            // That is a property of the coroutine's SIGNATURE, so it is decided here
-            // rather than aborted at run time. Dependent on a defaulted parameter so it
-            // only fires when this overload is actually selected.
+            // A property of the coroutine's SIGNATURE, so it is decided at compile time.
             template<typename Dependent = promise_type>
             [[noreturn]] static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
                 static_assert(sizeof(Dependent) == 0,
-                              "behavior() must be an actor member function defined inline (GCC does not pass 'this' for out-of-line methods)");
+                              "behavior() must be an actor member function defined inline "
+                              "(GCC does not pass 'this' for out-of-line methods)");
                 std::abort();
             }
 
             template<typename First, typename... Rest>
             RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
-                // Whether ANY argument can supply a resource is a property of the types, so
-                // decide it here. The pointer merely being null at run time is not, which is
-                // what the assert below still covers.
+                // Whether ANY argument can supply a resource is a property of the types.
+                // The pointer merely being null at run time is not -- that stays an assert.
                 static_assert((supplies_resource<First>() || ... || supplies_resource<Rest>()),
-                              "no argument of this coroutine can supply a memory resource -- "
-                              "make it an actor member function (so `this` is in the pack) or "
-                              "pass a std::pmr::memory_resource*");
+                              "no argument of behavior() can supply a memory resource -- "
+                              "it must be an actor member function so `this` is in the pack");
                 auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
                 assert(res != nullptr && "resource() returned null");
                 if (!res) {
@@ -204,19 +197,19 @@ namespace actor_zeta {
         behavior_t(behavior_t&& o) noexcept
             : handle_(std::exchange(o.handle_, {})) {}
 
-        // Q7: Always destroy - with Q6 (no cont.resume()), destroy is always safe
-        // because coroutine is either done or suspended (never running on another thread)
+        // Q7: always destroy. Safe because the producer never calls cont.resume() (Q6), so
+        // the coroutine is either done or suspended, never running on another thread.
         behavior_t& operator=(behavior_t&& o) noexcept {
             if (this != &o) {
                 if (handle_) {
-                    handle_.destroy();  // Always safe - no race with cont.resume()
+                    handle_.destroy();
                 }
                 handle_ = std::exchange(o.handle_, {});
             }
             return *this;
         }
 
-        // Q7: Always destroy - safe because producer doesn't call cont.resume()
+        // Q7: always destroy — see operator=.
         ~behavior_t() {
             if (handle_) {
                 handle_.destroy();
@@ -268,9 +261,7 @@ namespace actor_zeta {
     // NOTE: The await_transform overloads for unique_future<T>&& and
     // std::pair<bool, unique_future<T>>&& are inherited from
     // detail::future_awaiter_mixin<promise_type> (future_awaiters.hpp). They are templates
-    // instantiated at the co_await site, so the previous out-of-line/deferred definition
-    // (which existed only because behavior_t.hpp lacks the full unique_future definition) is
-    // no longer needed: template instantiation already defers the unique_future requirement
-    // to the point of use.
+    // instantiated at the co_await site, which is what lets this header get away with only
+    // a forward declaration of unique_future — no out-of-line definition is needed here.
 
 } // namespace actor_zeta

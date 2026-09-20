@@ -42,7 +42,6 @@ cd build && ctest --output-on-failure
 header/
 ├── actor-zeta.hpp              # Main API
 ├── actor-zeta/
-│   ├── core.hpp                # Core types
 │   ├── spawn.hpp               # Actor allocation
 │   ├── send.hpp                # Message sending
 │   ├── actor/                  # Actor implementation
@@ -109,9 +108,13 @@ void wait_for_work() {
             futures.push_back(std::move(future));  // Keep ALL futures
         }
 
-        // Wait for ALL futures (scheduler workers produce; drive via run_until_complete).
+        // Wait for ALL futures. The scheduler's workers produce; poll here.
+        // is_ready() is the promise_released bit -- a promise dying without a
+        // value sets it too -- so gate on failed() before taking.
         for (auto& f : futures) {
-            auto result = actor_zeta::run_until_complete(f, []{ std::this_thread::yield(); });
+            while (!f.is_ready()) { std::this_thread::yield(); }
+            if (f.failed()) { continue; }
+            auto result = std::move(f).take_ready();
         }
     }  // Actor destroyed - SAFE (all work complete)
 
@@ -225,25 +228,27 @@ public:
 // - first (needs_sched): true if actor needs to be scheduled
 // - second: the future to get the result
 
-// Request-response (scheduler-driven cross-thread: drive with run_until_complete)
+// Request-response (scheduler-driven cross-thread: poll from this thread)
 auto [needs_sched, future] = send(target.get(), &Target::compute, arg);
 if (needs_sched) scheduler->enqueue(target.get());
-int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
+while (!future.is_ready()) { std::this_thread::yield(); }
+int result = future.failed() ? -1 : std::move(future).take_ready();
 
 // Same-thread (no scheduler): pump the actor manually
 auto [_, f] = send(actor.get(), &Actor::compute, 42);
-int result = actor_zeta::run_until_complete(f, [&]{ actor->resume(1); });
+while (!f.is_ready()) { auto info = actor->resume(1); if (!info.messages_processed) break; }
+int result = f.failed() ? -1 : std::move(f).take_ready();
 
 // Fire-and-forget
 auto [_, fut] = send(target.get(), &Target::method, arg1, arg2);
 fut.detach();
 ```
 
-**Never call** `.get()` or `.available()` — they were removed. `unique_future<T>` has
-only `take_ready()` (non-blocking, asserts the future is ready) and `is_ready()` (poll).
-Bring the future to ready via `co_await` (inside a coroutine), `run_until_complete(f, pump)`,
-or — for cross-thread tests where the producer is test-controlled — a tiny
-`std::atomic<bool> done` + `notify_all`/`wait(false)` pair.
+**Never call** `.get()` or `.available()` — they were removed. Bring the future to ready
+via `co_await` (inside a coroutine) or by pumping the producing actor with `resume()`,
+then extract with `take_ready()` (non-blocking, asserts readiness). `is_ready()` polls,
+but it is only the `promise_released` bit — a promise that dies without a value sets it
+too — so gate on `failed()` before taking.
 
 ### Coroutine Parameters
 ```cpp
@@ -284,7 +289,8 @@ unique_future<int> compute(int x) { co_return x * x; }
 // Caller - send() returns pair<bool, future>
 auto [needs_sched, future] = send(actor.get(), &Actor::compute, 42);
 if (needs_sched) scheduler->enqueue(actor.get());
-int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
+while (!future.is_ready()) { std::this_thread::yield(); }
+int result = future.failed() ? -1 : std::move(future).take_ready();
 
 // Coroutine chaining
 unique_future<int> chain(int x) {
@@ -311,10 +317,10 @@ unique_future<int> chain(int x) {
   Stream in batches instead (`unique_future<std::vector<T>>`), paging explicitly
   when the result does not fit in memory. See CHANGELOG for the full defect list
   and the constraints any future streaming design must satisfy.
-- **Blocking future API removed**: no more `.get()`/`.wait()`/`.available()`. Use
-  `co_await` (in coroutines), `run_until_complete(f, pump)` (top-level driver), or
-  poll `is_ready()` + `take_ready()` (cross-thread tests). Removed exponential-backoff
-  spinning that lived inside the old `get()`.
+- **Blocking future API removed**: no more `.get()`/`.wait()`/`.available()`, and no
+  more exponential-backoff spinning inside `get()`. Use `co_await` (in coroutines),
+  pump the producing actor with `resume()`, or poll `is_ready()` + `failed()` +
+  `take_ready()` (cross-thread).
 - **Legacy `future_state<T>` family removed**: deleted `detail/future_state.hpp`,
   `impl/detail/future_state.ipp`, `future_state_base`, `future_state_enum`,
   `future_states::`, and the intrusive_ptr overloads for the base.

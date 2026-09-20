@@ -38,7 +38,8 @@ namespace actor_zeta {
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename... Args>
         inline auto dispatch_method_impl(ActorPtr* actor, Args&&... args)
             -> send_result_t<Actor, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type> {
-            (void)validate_send_args<Actor, MethodPtr, Args...>{};
+            // Instantiated for its static_asserts only.
+            [[maybe_unused]] const validate_send_args<Actor, MethodPtr, Args...> arg_check{};
 
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
             using method_result_type = typename callable_trait::result_type;
@@ -64,14 +65,14 @@ namespace actor_zeta {
         template<typename Interface, auto MethodPtr, uint64_t ActionId, typename... Args>
         inline auto dispatch_method_impl_address(actor::address_t target, Args&&... args)
             -> send_result_t<Interface, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type> {
-            (void)validate_send_args<Interface, MethodPtr, Args...>{};
+            // Instantiated for its static_asserts only.
+            [[maybe_unused]] const validate_send_args<Interface, MethodPtr, Args...> arg_check{};
 
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
             using method_result_type = typename callable_trait::result_type;
 
             auto cmd = mailbox::make_message_id(ActionId);
 
-            // dispatch_traits rejects any other return type before we get here.
             using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
             auto [msg, future] = detail::make_message<value_type>(
