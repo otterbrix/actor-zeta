@@ -3,7 +3,6 @@ add_subdirectory(balancer)
 add_subdirectory(broadcast)
 add_subdirectory(supervisor)
 add_subdirectory(coroutine)
-add_subdirectory(generator)
 add_subdirectory(delegation)
 
 # Optional standalone-Asio example.

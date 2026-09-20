@@ -49,27 +49,6 @@ namespace actor_zeta {
 
     } // namespace dispatch_validation
 
-    namespace detail {
-
-        // Link method's generator to message's external generator state
-        template<typename T>
-        inline void setup_generator_linking_inline(
-            generator<T>& method_generator,
-            mailbox::message* msg) noexcept {
-            auto* external_state = msg->template get_generator_state<T>();
-            if (external_state && method_generator.internal_state()) {
-                method_generator.link_to(external_state);
-
-                auto* internal_state = method_generator.internal_state();
-                auto producer = internal_state->take_producer_handle();
-                if (producer && !producer.done()) {
-                    producer.resume();
-                }
-            }
-        }
-
-    } // namespace detail
-
     // Extract args from the message body and call the method (NOT a coroutine).
     template<class Actor, typename Method, typename ArgsTypeList, std::size_t ArgsSize>
     auto invoke_actor_method(Actor* self, Method method, mailbox::message* msg) {
@@ -103,39 +82,35 @@ namespace actor_zeta {
             "Use value (T), const reference (const T&), or rvalue reference (T&&)");
 
         static_assert(
-            type_traits::is_unique_future_v<result_type> || type_traits::is_generator_v<result_type>,
-            "dispatch(): Actor methods must return unique_future<T> or generator<T>. "
+            type_traits::is_unique_future_v<result_type>,
+            "dispatch(): Actor methods must return unique_future<T>. "
             "Raw void or value returns are not allowed. "
-            "All actor methods must be coroutines.");
+            "All actor methods must be coroutines using co_return.");
 
         if constexpr (args_size > 0) {
             assert(msg->body().size() == args_size &&
                    "dispatch(): message argument count mismatch");
         }
 
-        if constexpr (type_traits::is_generator_v<result_type>) {
-            // Generator path - link to external state (streaming, not one-shot)
-            auto method_gen = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
-            detail::setup_generator_linking_inline(method_gen, msg);
-            co_return;
+        // co_await the method, set_value on the caller's promise.
+        //
+        // ORDER IS LOAD-BEARING: get_result_promise() reads result_slot_, and both
+        // it and transfer_ownership() must run BEFORE the first suspension below --
+        // past that co_await, resume_impl's message_guard destroys the message.
+        using value_type = typename type_traits::is_unique_future<result_type>::value_type;
 
+        auto result_promise = msg->template get_result_promise<value_type>();
+        msg->transfer_ownership();   // ~message won't run cleanup anymore
+        auto method_future = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
+
+        if constexpr (std::is_void_v<value_type>) {
+            co_await std::move(method_future);
+            result_promise.set_value();
         } else {
-            // unique_future path: co_await the method, set_value on the caller's promise.
-            using value_type = typename type_traits::is_unique_future<result_type>::value_type;
-
-            auto result_promise = msg->template get_result_promise<value_type>();
-            msg->transfer_ownership();   // ~message won't run cleanup anymore
-            auto method_future = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
-
-            if constexpr (std::is_void_v<value_type>) {
-                co_await std::move(method_future);
-                result_promise.set_value();
-            } else {
-                auto value = co_await std::move(method_future);
-                result_promise.set_value(std::move(value));
-            }
-            co_return;
+            auto value = co_await std::move(method_future);
+            result_promise.set_value(std::move(value));
         }
+        co_return;
     }
 
 } // namespace actor_zeta

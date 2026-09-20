@@ -91,51 +91,13 @@ public:
         co_return result;
     }
 
-    unique_future<std::vector<std::string>> consume_stream(
-            session_id_t session,
-            std::string collection) {
-
-        auto tid = thread_id_str();
-        g_log.log("[%::consume_stream] thread=% session=% collection=%",
-                  name_, tid, session.data(), collection);
-
-        std::vector<std::string> rows;
-
-        auto [_, gen] = send(
-            dispatcher_,
-            &manager_dispatcher_t::create_row_stream,
-            session,
-            collection);
-
-        g_log.log("[%::consume_stream] Got generator, consuming rows...", name_);
-
-        while (co_await gen) {
-            if (gen.has_error()) {
-                g_log.log("[%::consume_stream] Stream error: %",
-                          name_, gen.error().message());
-                last_stream_error_ = gen.error();
-                co_return rows;
-            }
-
-            auto& row = gen.current();
-            g_log.log("[%::consume_stream] Received row: %", name_, row);
-            rows.push_back("[client] " + row);
-        }
-
-        g_log.log("[%::consume_stream] Stream exhausted, got % rows", name_, rows.size());
-        last_streamed_rows_ = rows;
-
-        co_return rows;
-    }
-
     // =========================================================================
     // dispatch_traits
     // =========================================================================
 
     using dispatch_traits = actor_zeta::dispatch_traits<
         &client_t::poll,
-        &client_t::request_collection_size,
-        &client_t::consume_stream
+        &client_t::request_collection_size
     >;
 
     // =========================================================================
@@ -153,9 +115,6 @@ public:
             case msg_id<client_t, &client_t::request_collection_size>:
                 co_await dispatch(this, &client_t::request_collection_size, msg);
                 break;
-            case msg_id<client_t, &client_t::consume_stream>:
-                co_await dispatch(this, &client_t::consume_stream, msg);
-                break;
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
                 break;
@@ -167,7 +126,7 @@ public:
     // =========================================================================
 
     bool has_pending() const {
-        return !pending_.empty() || !pending_stream_.empty();
+        return !pending_.empty();
     }
 
     /// @brief Clean up completed pending futures
@@ -181,14 +140,6 @@ public:
                 ++it;
             }
         }
-        for (auto it = pending_stream_.begin(); it != pending_stream_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] stream coroutine completed", name_);
-                it = pending_stream_.erase(it);
-            } else {
-                ++it;
-            }
-        }
     }
 
     // =========================================================================
@@ -196,8 +147,6 @@ public:
     // =========================================================================
 
     const size_result_t& last_result() const { return last_result_; }
-    const std::vector<std::string>& last_streamed_rows() const { return last_streamed_rows_; }
-    std::error_code last_stream_error() const { return last_stream_error_; }
     const std::string& name() const { return name_; }
 
     ~client_t() = default;
@@ -206,10 +155,7 @@ private:
     address_t dispatcher_;
     std::string name_;
     std::vector<unique_future<size_result_t>> pending_;
-    std::vector<unique_future<std::vector<std::string>>> pending_stream_;
     size_result_t last_result_;
-    std::vector<std::string> last_streamed_rows_;
-    std::error_code last_stream_error_;
 };
 
 } // namespace dispatcher_test

@@ -43,7 +43,7 @@ namespace actor_zeta {
             type_traits::type_list_size_v<typename dispatch_traits_parser<ActorMethods...>::methods>
             == type_traits::type_list_size_v<typename Contract::dispatch_traits::methods>;
 
-        // All actor methods must return unique_future<T> or generator<T>
+        // All actor methods must return unique_future<T>
         template<auto... ActorMethods>
         concept all_methods_valid =
             dispatch_traits_parser<ActorMethods...>::all_valid;

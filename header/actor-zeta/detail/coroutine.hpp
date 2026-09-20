@@ -3,6 +3,15 @@
 #include <actor-zeta/config.hpp>
 
 #if HAVE_EXPERIMENTAL_COROUTINES
+
+// <experimental/coroutine> has no noop_coroutine(). The stub below returned a
+// NULL handle, and returning null from await_suspend in a symmetric-transfer
+// position is undefined behaviour -- the caller resumes it unconditionally.
+// Until a real noop-coroutine emulation exists, refuse the configuration rather
+// than miscompile silently. Every symmetric-transfer site in future.hpp and
+// future_awaiters.hpp depends on this.
+#error "actor-zeta does not support <experimental/coroutine>: detail::noop_coroutine() cannot be implemented on it. Build with a toolchain providing <coroutine> (GCC 10+, Clang 14+, MSVC 2019 16.8+)."
+
 #include <experimental/coroutine>
 
 namespace actor_zeta {

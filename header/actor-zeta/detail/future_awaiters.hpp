@@ -33,13 +33,8 @@ namespace actor_zeta {
     // Forward declarations (full definitions not required to define the mixin templates).
     template<typename T>
     class unique_future;
-    template<typename T>
-    class generator;
 
     namespace detail {
-        template<typename T>
-        struct next_awaiter;
-
         // --- Shared lock-free CAS suspend (PR #182 fix lives here, once) ---
         // Returns the coroutine to resume next (symmetric transfer), or noop_coroutine() if
         // the producer will resume us later.
@@ -86,7 +81,6 @@ namespace actor_zeta {
         //   * propagate_awaited_state() / update_propagated_outer() / clear_awaited_chain(),
         //   * await_transform(unique_future<U>&&),
         //   * await_transform(std::pair<bool, unique_future<U>>&&) (incl. void),
-        //   * await_transform(generator<U>&),
         //   * the constrained generic passthrough await_transform (foreign awaitables).
         template<typename Derived>
         struct future_awaiter_mixin {
@@ -181,12 +175,6 @@ namespace actor_zeta {
                 return owning_pair_awaiter{p.first, std::move(p.second), this};
             }
 
-            // === await_transform: generator<U>& ===
-            template<typename U>
-            auto await_transform(generator<U>& gen) noexcept {
-                return detail::next_awaiter<U>{gen.internal_state()};
-            }
-
             // NOTE: there is intentionally NO generic foreign-awaitable passthrough
             // await_transform — actor-zeta coroutines only co_await actor-zeta awaitables
             // (see the note at the end of this file).
@@ -267,7 +255,7 @@ namespace actor_zeta {
         // NOTE: there is intentionally NO generic foreign-awaitable passthrough await_transform.
         // An actor IS a coroutine (behavior_t); actor coroutines (and the unique_future method
         // coroutines they co_await) only ever co_await actor-zeta awaitables (unique_future /
-        // pair / generator), driven by the sharing_scheduler. They never co_await a foreign
+        // pair), driven by the sharing_scheduler. They never co_await a foreign
         // (e.g. Asio) awaitable — that would resume the actor off its scheduler thread. External
         // event loops integrate the OTHER way: a foreign coroutine co_awaits OUR unique_future
         // via unique_future::operator co_await (+ a bridge on the foreign side). So all promise

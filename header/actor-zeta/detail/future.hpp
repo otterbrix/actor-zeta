@@ -15,13 +15,6 @@
 
 namespace actor_zeta {
 
-    // Forward declarations for generator support
-    template<typename T> class generator;
-    namespace detail {
-        template<typename T> class generator_state;
-        template<typename T> struct next_awaiter;
-    }
-
     namespace detail {
         template<typename T>
         concept has_resource_method = requires(T* ptr) {
@@ -418,9 +411,8 @@ namespace actor_zeta {
                 return final_awaiter{this->state_};
             }
 
-            // await_transform overloads (unique_future<U>&&, pair<bool, unique_future<U>>&&,
-            // generator<U>&) and the constrained generic passthrough are inherited from
-            // detail::future_awaiter_mixin<PromiseDerived>.
+            // await_transform overloads (unique_future<U>&&, pair<bool, unique_future<U>>&&)
+            // are inherited from detail::future_awaiter_mixin<PromiseDerived>.
 
             void unhandled_exception() noexcept {
                 assert(false && "unhandled_exception() should never be called (-fno-exceptions)");

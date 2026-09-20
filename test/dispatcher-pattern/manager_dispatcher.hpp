@@ -603,41 +603,47 @@ public:
         co_return result;
     }
 
-    generator<std::string> create_row_stream(
+    /// @brief Fetch all rows of a collection in one batch, prefixed by this actor.
+    ///
+    /// Replaces the former streaming create_row_stream: same two-actor
+    /// row-forwarding hop (client -> manager -> storage), but the rows come back
+    /// as one vector instead of a lazily pulled stream.
+    unique_future<std::vector<std::string>> fetch_row_batch(
             session_id_t session,
             std::string collection) {
 
         auto tid = thread_id_str();
-        g_log.log("[%::create_row_stream] thread=% session=% collection=%",
+        g_log.log("[%::fetch_row_batch] thread=% session=% collection=%",
                   name_, tid, session.data(), collection);
 
+        std::vector<std::string> rows;
+
         if (collection.empty()) {
-            g_log.log("[%::create_row_stream] Error: empty collection name", name_);
-            co_yield stream_error{std::make_error_code(std::errc::invalid_argument)};
-            co_return;
+            g_log.log("[%::fetch_row_batch] Error: empty collection name", name_);
+            co_return rows;
         }
 
-        auto [_, storage_gen] = send(memory_storage_,
-            &memory_storage_t::stream_rows,
+        // Goes straight to storage rather than through this actor's own
+        // execute_plan(), which would register the cursor in result_storage_ and
+        // leave a dangling pointer once the cursor dies with this frame.
+        auto [_, cursor] = co_await send(memory_storage_,
+            &memory_storage_t::execute_plan,
             session,
-            collection_full_name_t("test_db", collection));
+            logical_plan_t("select", collection_full_name_t("test_db", collection)));
 
-        g_log.log("[%::create_row_stream] Got storage generator, forwarding rows...", name_);
-
-        while (co_await storage_gen) {
-            if (storage_gen.has_error()) {
-                g_log.log("[%::create_row_stream] Storage error: %",
-                          name_, storage_gen.error().message());
-                co_yield stream_error{storage_gen.error()};
-                co_return;
-            }
-
-            auto& row = storage_gen.current();
-            g_log.log("[%::create_row_stream] Forwarding: %", name_, row);
-            co_yield "[manager] " + row;
+        if (cursor->has_error) {
+            g_log.log("[%::fetch_row_batch] Storage error: %", name_, cursor->error_message);
+            co_return rows;
         }
 
-        g_log.log("[%::create_row_stream] Stream exhausted", name_);
+        rows.reserve(cursor->data.size());
+        for (const auto& row : cursor->data) {
+            g_log.log("[%::fetch_row_batch] Forwarding: %", name_, row);
+            rows.push_back("[manager] " + row);
+        }
+
+        g_log.log("[%::fetch_row_batch] Done, % rows", name_, rows.size());
+        co_return rows;
     }
 
     // =========================================================================
@@ -664,7 +670,7 @@ public:
         &manager_dispatcher_t::get_cached_value,
         &manager_dispatcher_t::execute_with_retry,
     
-        &manager_dispatcher_t::create_row_stream
+        &manager_dispatcher_t::fetch_row_batch
     >;
 
     // =========================================================================
@@ -727,8 +733,8 @@ public:
             case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_with_retry>:
                 co_await dispatch(this, &manager_dispatcher_t::execute_with_retry, msg);
                 break;
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::create_row_stream>:
-                co_await dispatch(this, &manager_dispatcher_t::create_row_stream, msg);
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::fetch_row_batch>:
+                co_await dispatch(this, &manager_dispatcher_t::fetch_row_batch, msg);
                 break;
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
@@ -823,8 +829,6 @@ private:
     std::vector<unique_future<aggregate_result_t>> pending_aggregate_;
     std::vector<unique_future<std::string>> pending_detail_;
     std::vector<unique_future<int>> pending_transform_;  // for transform_with_lambda
-    
-    std::vector<generator<std::string>> pending_generators_;
 
     // Cursor tracking by session
     std::unordered_map<session_id_t, cursor_t*, session_id_hash> result_storage_;

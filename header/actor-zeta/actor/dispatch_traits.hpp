@@ -67,8 +67,7 @@ namespace actor_zeta {
             using result_type = typename trait::result_type;
 
             static constexpr bool returns_unique_future = type_traits::is_unique_future_v<result_type>;
-            static constexpr bool returns_generator = type_traits::is_generator_v<result_type>;
-            static constexpr bool is_valid = returns_unique_future || returns_generator;
+            static constexpr bool is_valid = returns_unique_future;
         };
 
         template<auto MethodPtr>
@@ -77,9 +76,7 @@ namespace actor_zeta {
             using result_type = typename trait::result_type;
             using args_types = typename trait::args_types;
 
-            static constexpr bool is_coroutine =
-                type_traits::is_unique_future_v<result_type> ||
-                type_traits::is_generator_v<result_type>;
+            static constexpr bool is_coroutine = type_traits::is_unique_future_v<result_type>;
             static constexpr bool has_const_ref = type_list_has_const_lvalue_ref<args_types>;
             static constexpr bool has_rvalue_ref_move_only = type_list_has_rvalue_ref_move_only<args_types>;
 
@@ -151,9 +148,9 @@ namespace actor_zeta {
 
         static_assert(
             parser::all_valid,
-            "All actor methods must return unique_future<T> or generator<T>. "
+            "All actor methods must return unique_future<T>. "
             "Raw void or value returns are not allowed. "
-            "All actor methods must be coroutines using co_return or co_yield.");
+            "All actor methods must be coroutines using co_return.");
 
         static_assert(
             parser::all_no_const_ref,
@@ -185,11 +182,6 @@ namespace actor_zeta {
             using type = typename Actor::template unique_future<unwrap_future_t<ResultType>>;
         };
 
-        template<typename Actor, typename T>
-        struct dispatch_result_type<Actor, generator<T>> {
-            using type = generator<T>;
-        };
-
         template<typename Actor, typename ResultType>
         using dispatch_result_t = typename dispatch_result_type<Actor, ResultType>::type;
 
@@ -198,12 +190,6 @@ namespace actor_zeta {
         struct send_result_type {
             using future_type = dispatch_result_t<Actor, ResultType>;
             using type = std::pair<bool, future_type>;
-        };
-
-        // Generators also return pair<bool, generator<T>> for consistency
-        template<typename Actor, typename T>
-        struct send_result_type<Actor, generator<T>> {
-            using type = std::pair<bool, generator<T>>;
         };
 
         template<typename Actor, typename ResultType>

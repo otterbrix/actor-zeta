@@ -50,7 +50,7 @@ header/
 │   │   ├── dispatch.hpp        # Message dispatch
 │   │   └── dispatch_traits.hpp # Dispatch traits
 │   ├── mailbox/                # Message system
-│   └── detail/                 # Internal (future.hpp, generator.hpp, rtt.hpp)
+│   └── detail/                 # Internal (future.hpp, rtt.hpp)
 test/                           # Catch2 tests
 examples/                       # Usage examples
 ```
@@ -297,38 +297,29 @@ unique_future<int> chain(int x) {
 
 **See [`PROMISE_FUTURE_GUIDE.md`](PROMISE_FUTURE_GUIDE.md) for detailed patterns.**
 
-## Generator System
-
-Streaming data via `generator<T>` with `co_yield`:
-
-```cpp
-generator<int> stream_range(int start, int end) {
-    for (int i = start; i < end; ++i) {
-        co_yield i;
-    }
-}
-
-// Consumer (in coroutine)
-while (co_await gen) {
-    auto& value = gen.current();
-    process(value);
-}
-```
-
-**See [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md) for detailed patterns.**
-
 ## Recent Changes (2026)
 
+- **`generator<T>` removed entirely**: no `detail/generator.hpp`, no
+  `actor_zeta::generator` / `stream_error`, no `is_generator_v`, no generator
+  branch in `dispatch()` / `send()`. Actor methods must return
+  `unique_future<T>`, and `send()` always yields
+  `std::pair<bool, unique_future<T>>`. The feature had no correct consumption
+  route: `generator<T>` had no synchronous `next()`, and the advertised
+  `while (co_await gen)` inside an actor method went through the one
+  `await_transform` overload that never published an awaited chain — leaving the
+  behavior alive-but-not-busy, which the scheduler could not tell from idle.
+  Stream in batches instead (`unique_future<std::vector<T>>`), paging explicitly
+  when the result does not fit in memory. See CHANGELOG for the full defect list
+  and the constraints any future streaming design must satisfy.
 - **Blocking future API removed**: no more `.get()`/`.wait()`/`.available()`. Use
   `co_await` (in coroutines), `run_until_complete(f, pump)` (top-level driver), or
   poll `is_ready()` + `take_ready()` (cross-thread tests). Removed exponential-backoff
   spinning that lived inside the old `get()`.
 - **Legacy `future_state<T>` family removed**: deleted `detail/future_state.hpp`,
   `impl/detail/future_state.ipp`, `future_state_base`, `future_state_enum`,
-  `future_states::`, and the intrusive_ptr overloads for the base. `generator_state`
-  no longer inherits from `future_state_base` — it owns its own refcount/state-byte/
-  coroutine-handle fields directly. `result_storage<T>` moved to its own
-  `detail/result_storage.hpp` (used by `shared_state`).
+  `future_states::`, and the intrusive_ptr overloads for the base.
+  `result_storage<T>` moved to its own `detail/result_storage.hpp` (used by
+  `shared_state`).
 - **`actor_mixin` has no default `enqueue_impl`**: each Derived must define its own
   (enforced by the `has_enqueue_impl` concept). `cooperative_actor` (and thus
   `basic_actor`) is unaffected — it always provided its own. Sync actors on
@@ -401,7 +392,6 @@ freed by thread T0 here:
 
 - **[CHANGELOG.md](CHANGELOG.md)** - Change history
 - **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Promise/Future guide
-- **[GENERATOR_GUIDE.md](GENERATOR_GUIDE.md)** - Generator guide
 - **[docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md](docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md)** - GCC 11.4 bug workaround
 - **Examples:** `examples/` directory
 - **Tests:** `test/` directory

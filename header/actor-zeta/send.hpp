@@ -45,33 +45,18 @@ namespace actor_zeta {
 
             auto cmd = mailbox::make_message_id(ActionId);
 
-            if constexpr (type_traits::is_unique_future_v<method_result_type>) {
-                using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
+            // dispatch_traits rejects any other return type before we get here.
+            using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
-                auto [msg, future] = detail::make_message<value_type>(
-                    actor->resource(), cmd, std::forward<Args>(args)...);
+            auto [msg, future] = detail::make_message<value_type>(
+                actor->resource(), cmd, std::forward<Args>(args)...);
 
-                // On queue_closed the message destructor calls cleanup_fn_, which sets
-                // operation_canceled on the slot and releases the promise — no manual
-                // handling needed here.
-                auto [needs_sched, result] = actor->enqueue_impl(std::move(msg));
-                ignore_unused(result);
-                return {needs_sched, std::move(future)};
-
-            } else if constexpr (type_traits::is_generator_v<method_result_type>) {
-                using value_type = typename method_result_type::value_type;
-
-                auto [msg, gen] = detail::make_generator_message<value_type>(
-                    actor->resource(), cmd, std::forward<Args>(args)...);
-
-                auto [needs_sched, enq_result] = actor->enqueue_impl(std::move(msg));
-
-                if (enq_result == enqueue_result::queue_closed) {
-                    gen.cancel();
-                }
-
-                return {needs_sched, std::move(gen)};
-            }
+            // On queue_closed the message destructor calls cleanup_fn_, which sets
+            // operation_canceled on the slot and releases the promise — no manual
+            // handling needed here.
+            auto [needs_sched, result] = actor->enqueue_impl(std::move(msg));
+            ignore_unused(result);
+            return {needs_sched, std::move(future)};
         }
 
         // Dispatch for address_t (interface polymorphism)
@@ -86,29 +71,14 @@ namespace actor_zeta {
 
             auto cmd = mailbox::make_message_id(ActionId);
 
-            if constexpr (type_traits::is_unique_future_v<method_result_type>) {
-                using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
+            // dispatch_traits rejects any other return type before we get here.
+            using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
-                auto [msg, future] = detail::make_message<value_type>(
-                    target.resource(), cmd, std::forward<Args>(args)...);
-                auto [needs_sched, result] = target.enqueue_impl(std::move(msg));
-                ignore_unused(result);
-                return {needs_sched, std::move(future)};
-
-            } else if constexpr (type_traits::is_generator_v<method_result_type>) {
-                using value_type = typename method_result_type::value_type;
-
-                auto [msg, gen] = detail::make_generator_message<value_type>(
-                    target.resource(), cmd, std::forward<Args>(args)...);
-
-                auto [needs_sched, enq_result] = target.enqueue_impl(std::move(msg));
-
-                if (enq_result == enqueue_result::queue_closed) {
-                    gen.cancel();
-                }
-
-                return {needs_sched, std::move(gen)};
-            }
+            auto [msg, future] = detail::make_message<value_type>(
+                target.resource(), cmd, std::forward<Args>(args)...);
+            auto [needs_sched, result] = target.enqueue_impl(std::move(msg));
+            ignore_unused(result);
+            return {needs_sched, std::move(future)};
         }
 
     } // namespace detail

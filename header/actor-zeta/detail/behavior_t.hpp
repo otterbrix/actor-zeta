@@ -63,7 +63,7 @@ namespace actor_zeta {
             }
 
             // await_transform overloads for the actor-zeta awaitables (unique_future<T>&&,
-            // pair<bool, unique_future<T>>&&, generator<U>&) are inherited from
+            // pair<bool, unique_future<T>>&&) are inherited from
             // detail::future_awaiter_mixin<promise_type>. There is NO generic foreign-awaitable
             // passthrough anywhere: an actor IS a coroutine and only co_awaits actor-zeta
             // awaitables, driven by the sharing_scheduler. A foreign (e.g. Asio) awaiter would

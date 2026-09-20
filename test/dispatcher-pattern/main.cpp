@@ -1103,91 +1103,67 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
 
     g_log.log("========== TEST PASSED ==========");
 }
-
 // =============================================================================
-// PATTERN 6: Generator Streaming Tests
+// PATTERN 6: Two-actor row forwarding (client -> manager -> storage)
+//
+// Replaces the former streaming tests, whose only assertion was that a handle
+// had been constructed. The rows themselves are now checked, including the
+// manager's prefix, so the forwarding hop is actually covered.
 // =============================================================================
 
-TEST_CASE("generator: storage stream_rows via send") {
+TEST_CASE("dispatcher-pattern: fetch_row_batch forwards prefixed rows") {
     auto* resource = std::pmr::get_default_resource();
-    g_log.log("\n========== TEST: storage stream_rows via send ==========");
 
-    auto storage = spawn<memory_storage_t>(resource, "Storage");
-
-    session_id_t session("stream-test");
-    collection_full_name_t coll("test_db", "users");
-
-    // Get generator via send()
-    auto [_, gen] = send(storage.get(),
-        &memory_storage_t::stream_rows, session, coll);
-
-    REQUIRE(gen.valid());
-
-    // Resume storage to start generator and yield rows
-    for (int i = 0; i < 20; ++i) {
-        storage->resume(1);
-    }
-
-    // Generator should have exhausted
-    g_log.log("Generator exhausted: %", gen.exhausted());
-
-    g_log.log("========== TEST PASSED ==========");
-}
-
-TEST_CASE("generator: storage stream_rows error via send") {
-    auto* resource = std::pmr::get_default_resource();
-    g_log.log("\n========== TEST: storage stream_rows error via send ==========");
-
-    auto storage = spawn<memory_storage_t>(resource, "Storage");
-
-    session_id_t session("error-stream");
-    collection_full_name_t coll("unknown_db", "unknown_coll");
-
-    auto [_, gen] = send(storage.get(),
-        &memory_storage_t::stream_rows, session, coll);
-
-    REQUIRE(gen.valid());
-
-    // Resume more times to ensure generator yields error
-    for (int i = 0; i < 20; ++i) {
-        storage->resume(1);
-        if (gen.has_error() || gen.exhausted()) {
-            break;
-        }
-    }
-
-    // Generator should have error
-    g_log.log("Generator has_error: %, exhausted: %", gen.has_error(), gen.exhausted());
-    // Note: The generator yields error and then returns
-    // After co_yield stream_error, co_return is called, so generator might be exhausted
-
-    g_log.log("========== TEST PASSED ==========");
-}
-
-TEST_CASE("generator: manager create_row_stream via send") {
-    auto* resource = std::pmr::get_default_resource();
-    g_log.log("\n========== TEST: manager create_row_stream via send ==========");
+    g_log.log("\n========== TEST: fetch_row_batch forwards prefixed rows ==========");
 
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
 
-    session_id_t session("send-stream");
+    session_id_t session("session-batch-001");
 
-    // Send request to manager to create stream
-    auto [_2, gen] = send(dispatcher.get(),
-        &manager_dispatcher_t::create_row_stream, session, std::string("users"));
+    auto [needs_sched, future] = send(
+        dispatcher.get(),
+        &manager_dispatcher_t::fetch_row_batch,
+        session,
+        std::string("users"));
 
-    REQUIRE(gen.valid());
+    dispatcher->resume(1);   // starts the handler, suspends on the storage await
+    storage->resume(1);      // completes the storage future (flag-only)
+    (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
+    dispatcher->resume(1);   // drains the continuation, prefixes, co_returns
 
-    // Resume actors to process
-    for (int i = 0; i < 30; ++i) {
-        dispatcher->resume(1);
-        storage->resume(1);
-    }
+    REQUIRE(future.is_ready());
+    auto rows = std::move(future).take_ready();
 
-    // Should have generated some rows
-    g_log.log("Generator exhausted: %", gen.exhausted());
+    REQUIRE(rows.size() == 10);
+    REQUIRE(rows[0] == "[manager] row_0_from_test_db.users");
+    REQUIRE(rows[9] == "[manager] row_9_from_test_db.users");
 
     g_log.log("========== TEST PASSED ==========");
 }
 
+TEST_CASE("dispatcher-pattern: fetch_row_batch on an empty collection name") {
+    auto* resource = std::pmr::get_default_resource();
+
+    g_log.log("\n========== TEST: fetch_row_batch empty collection ==========");
+
+    auto storage = spawn<memory_storage_t>(resource, "Storage");
+    auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
+
+    session_id_t session("session-batch-002");
+
+    auto [needs_sched, future] = send(
+        dispatcher.get(),
+        &manager_dispatcher_t::fetch_row_batch,
+        session,
+        std::string(""));
+
+    // Rejected before any storage round trip, so one resume is enough.
+    dispatcher->resume(1);
+
+    REQUIRE(future.is_ready());
+    auto rows = std::move(future).take_ready();
+    REQUIRE(rows.empty());
+
+    g_log.log("========== TEST PASSED ==========");
+}

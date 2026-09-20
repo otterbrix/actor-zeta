@@ -10,9 +10,6 @@ namespace actor_zeta {
     template<typename T>
     class promise;
 
-    template<typename T>
-    class generator;
-
     template<class T>
     class intrusive_ptr;
 
@@ -24,9 +21,6 @@ namespace actor_zeta {
 
         template<typename T>
         struct shared_state;
-
-        template<typename T>
-        class generator_state;
 
     } // namespace detail
 

@@ -182,6 +182,5 @@ unique_future<int> chain(int x) {
 
 ## See Also
 
-- [GENERATOR_GUIDE.md](GENERATOR_GUIDE.md) - Streaming with `generator<T>`
 - `examples/coroutine/` - Working examples
 - `test/coroutines/` - Test cases

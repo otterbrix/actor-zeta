@@ -5,6 +5,37 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Removed
+- **`generator<T>` and the whole streaming subsystem**: `detail/generator.hpp`,
+  `actor_zeta::generator`, `actor_zeta::stream_error`, `detail::generator_state`,
+  `type_traits::is_generator{,_v}` / `generator_type` / `unwrap_generator{,_t}`,
+  `message::init_generator_slot` / `get_generator_state`,
+  `detail::make_generator_message`, `dispatch()`'s generator branch, and the
+  `await_transform(generator<U>&)` overload on `future_awaiter_mixin`.
+  Actor methods must now return `unique_future<T>`; `send()` always yields
+  `std::pair<bool, unique_future<T>>`.
+
+  **Why.** The feature had no correct end-to-end consumption route. `generator<T>`
+  offers no synchronous `next()`, so the only way to advance a stream was
+  `co_await` — and the advertised way to do that (`while (co_await gen)` inside an
+  actor method) went through the one `await_transform` overload that never
+  published an awaited chain. That left the consuming behavior alive-but-not-busy,
+  which the scheduler could not distinguish from idle: it either parked the actor
+  on a pending await (lost wakeup) or destroyed the live coroutine frame on the
+  next inbound message (use-after-free, plus leaked `dispatch`/method frames and
+  their `shared_state`s). The producer also resumed the consumer's coroutine on
+  its own thread, which this codebase forbids by design. Four further defects
+  shipped alongside: `yield_awaiter` claimed ownership of one coroutine frame from
+  two `generator_state`s (double `destroy()`); `take_producer_handle()` returned a
+  handle without clearing it; `co_yield stream_error{...}` ended the consumer loop
+  *before* its body ran, making in-loop `has_error()` checks dead code. No test in
+  the tree ever asserted a yielded value.
+
+  **Constraints for a future streaming design.** Pull must go through the mailbox,
+  not a direct cross-thread `coroutine_handle::resume()`. Readiness must be
+  published in a form `behavior_t::is_awaited_ready()` understands — a
+  `state_flags`-shaped bitmask plus an atomic continuation — so the consumer is
+  driven by its own scheduler. And the tests must assert streamed values, not just
+  that a handle was constructed.
 - **Blocking `unique_future` API**: `.get()`, `.wait()`, `.available()`, `.cancel()`,
   `.is_cancelled()` are gone, along with the yield/exponential-backoff spin that
   used to live inside `get()`. Bring the future to ready via `co_await` /
@@ -15,9 +46,7 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   own (enforced by the `has_enqueue_impl` concept).
 - **Legacy `future_state<T>` family**: `detail/future_state.hpp`,
   `impl/detail/future_state.ipp`, `future_state_base`, `future_state_enum`,
-  `future_states::`, and the intrusive_ptr overloads for the base. `generator_state`
-  no longer inherits from anything — it owns its own refcount/state-byte/coroutine-
-  handles directly.
+  `future_states::`, and the intrusive_ptr overloads for the base.
 - `shared_state<T>::is_future_released()` and
   `shared_state<T>::deallocate_from_finalizer()` (both specializations; zero callers).
 - Backward-compat shim `mailbox/message_result.hpp` (and its `#include` in
@@ -104,6 +133,37 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 ---
 
 ## Migration Guides
+
+### `generator<T>` removal (Unreleased)
+
+```cpp
+// Before — streaming actor method
+generator<std::string> stream_rows(session_id_t s, collection_full_name_t name) {
+    for (auto& row : rows_of(name)) {
+        co_yield row;
+    }
+}
+
+auto [needs_sched, gen] = send(storage, &storage_t::stream_rows, s, name);
+while (co_await gen) {
+    consume(gen.current());
+}
+
+// After — batch request/response
+unique_future<std::vector<std::string>> fetch_rows(session_id_t s,
+                                                   collection_full_name_t name) {
+    co_return rows_of(name);
+}
+
+auto [needs_sched, future] = send(storage, &storage_t::fetch_rows, s, name);
+for (auto& row : co_await std::move(future)) {
+    consume(row);
+}
+```
+
+If a batch does not fit in memory, page it explicitly: send one request per page
+and carry a cursor/offset in the message. There is no lazy pull in the framework
+any more, by design — see the constraints listed under **Removed** above.
 
 ### Blocking `unique_future` API removal (Unreleased)
 
@@ -216,6 +276,5 @@ std::pmr::memory_resource* resource;
 
 ## See Also
 
-- [GENERATOR_GUIDE.md](GENERATOR_GUIDE.md) - Generator patterns
 - [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md) - Promise/Future patterns
 - [CLAUDE.md](CLAUDE.md) - Development guide

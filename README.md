@@ -7,9 +7,8 @@ C++20 actor model with coroutines, PMR allocators, and no RTTI/exceptions.
 
 ## Features
 
-- **Coroutines**: `co_await`, `co_return`, `co_yield`
+- **Coroutines**: `co_await`, `co_return`
 - **unique_future<T>**: Async request-response
-- **generator<T>**: Streaming data between actors
 - **std::pmr**: Memory resource allocation
 - **No RTTI/exceptions**: `-fno-rtti -fno-exceptions`
 
@@ -48,37 +47,6 @@ if (needs_sched) scheduler->enqueue(worker.get());
 int result = co_await std::move(future);
 ```
 
-### Streaming
-
-```cpp
-class Producer : public actor_zeta::basic_actor<Producer> {
-public:
-    actor_zeta::generator<int> stream(int count) {
-        for (int i = 0; i < count; ++i) {
-            co_yield i;
-        }
-    }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<&Producer::stream>;
-
-    explicit Producer(std::pmr::memory_resource* res)
-        : actor_zeta::basic_actor<Producer>(res) {}
-
-    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
-        if (msg->command() == actor_zeta::msg_id<Producer, &Producer::stream>) {
-            co_await actor_zeta::dispatch(this, &Producer::stream, msg);
-        }
-    }
-};
-
-// Usage - send() returns pair<bool, generator>
-auto [needs_sched, gen] = actor_zeta::send(producer.get(), &Producer::stream, 10);
-if (needs_sched) scheduler->enqueue(producer.get());
-while (co_await gen) {
-    process(gen.current());
-}
-```
-
 ## Build
 
 ```bash
@@ -107,7 +75,6 @@ ctest --test-dir build --output-on-failure
 
 - [CLAUDE.md](CLAUDE.md) - Development guide
 - [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md) - Request-response patterns
-- [GENERATOR_GUIDE.md](GENERATOR_GUIDE.md) - Streaming patterns
 - [CHANGELOG.md](CHANGELOG.md) - Change history
 
 ## License

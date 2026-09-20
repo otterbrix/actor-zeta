@@ -15,7 +15,6 @@ namespace actor_zeta::detail {
 
 namespace actor_zeta {
     template<typename T> class promise;
-    template<typename T> class generator;
 }
 
 namespace actor_zeta { namespace mailbox {
@@ -48,8 +47,8 @@ namespace actor_zeta { namespace mailbox {
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
-        // Type-erased result slot: shared_state<T>* for unique_future, generator_state<T>*
-        // for generator. cleanup_fn_ runs in ~message() unless transfer_ownership() was called.
+        // Type-erased result slot: shared_state<T>* for unique_future.
+        // cleanup_fn_ runs in ~message() unless transfer_ownership() was called.
 
         template<typename T>
         void init_future_slot(::actor_zeta::detail::shared_state<T>* state) noexcept {
@@ -61,24 +60,9 @@ namespace actor_zeta { namespace mailbox {
             };
         }
 
-        template<typename T>
-        void init_generator_slot(::actor_zeta::detail::generator_state<T>* state) noexcept {
-            result_slot_ = state;
-            state->add_ref();   // message holds a refcount for the duration
-            cleanup_fn_ = [](void* p) {
-                auto* s = static_cast<::actor_zeta::detail::generator_state<T>*>(p);
-                s->release();
-            };
-        }
-
         // Non-owning promise view onto the slot (for dispatch).
         template<typename T>
         [[nodiscard]] actor_zeta::promise<T> get_result_promise() const noexcept;
-
-        template<typename T>
-        [[nodiscard]] ::actor_zeta::detail::generator_state<T>* get_generator_state() const noexcept {
-            return static_cast<::actor_zeta::detail::generator_state<T>*>(result_slot_);
-        }
 
         // After this call ~message() will NOT run cleanup_fn_ (the dispatch coroutine owns it).
         void transfer_ownership() noexcept {
