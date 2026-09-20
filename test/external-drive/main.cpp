@@ -170,8 +170,11 @@ TEST_CASE("external drive: polling from a foreign thread never resumes an actor 
     auto* resource = std::pmr::get_default_resource();
     auto producer = spawn<producer_actor>(resource);
 
-    auto [needs_sched, fut] = send(producer.get(), &producer_actor::produce, 50);
-    REQUIRE(needs_sched == true);
+    // Not a structured binding: the poller lambda below captures the future, and
+    // capturing a structured binding is ill-formed -- clang rejects it.
+    auto sent = send(producer.get(), &producer_actor::produce, 50);
+    auto& fut = sent.second;
+    REQUIRE(sent.first == true);
 
     // The examples/asio shape: a foreign thread only polls and never touches a handle.
     // The spin bound IS the hang guard; a stop flag would race the poller or be set too late.
