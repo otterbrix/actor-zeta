@@ -89,14 +89,14 @@ int main() {
     {
         auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::add, 10, 20);
-        int result = actor_zeta::run_until_complete(future, [&] { calculator->resume(100); });
+        int result = actor_zeta::run_until_complete(future, [&] { (void)calculator->resume(100); });
         std::cout << "Result: 10 + 20 = " << result << "\n\n";
     }
 
     {
         auto [needs_sched, future] = actor_zeta::send(calculator.get(),
                                        &calculator_actor::multiply, 7, 8);
-        int result = actor_zeta::run_until_complete(future, [&] { calculator->resume(100); });
+        int result = actor_zeta::run_until_complete(future, [&] { (void)calculator->resume(100); });
         std::cout << "Result: 7 * 8 = " << result << "\n\n";
     }
 
@@ -107,7 +107,7 @@ int main() {
                                        &calculator_actor::square, 5);
 
         int result = actor_zeta::run_until_complete(future, [&] {
-            calculator->resume(100);
+            (void)calculator->resume(100);
             calculator->poll_pending();
         });
         std::cout << "Result: 5^2 = " << result << "\n\n";

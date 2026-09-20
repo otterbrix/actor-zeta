@@ -123,9 +123,11 @@ public:
 
     /// @brief Runs one resume cycle for all actors
     void run_once() {
-        if (client_) client_->resume(1);
-        if (worker_) worker_->resume(1);
-        // With behavior_t API, coroutines resume automatically when futures ready
+        // The `resume` verdict is discharged by the caller: run_until_complete()
+        // invokes run_once() again until the future is ready, which is exactly the
+        // re-scheduling the verdict asks for. Hence (void) rather than a drop.
+        if (client_) (void) client_->resume(1);
+        if (worker_) (void) worker_->resume(1);
     }
 
 private:

@@ -73,6 +73,6 @@ TEST_CASE("run_until_complete drives a future via a manual pump") {
 
     auto [needs_sched, future] = send(actor.get(), &compute_actor::doubler, 50);
 
-    int result = run_until_complete(future, [&] { actor->resume(1); });
+    int result = run_until_complete(future, [&] { (void)actor->resume(1); });
     REQUIRE(result == 100);
 }

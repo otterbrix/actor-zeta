@@ -221,6 +221,37 @@ private:
 // SINGLE-THREADED TESTS (baseline)
 // ============================================================================
 
+namespace {
+
+    // The resume verdict is an obligation, not a status: `resume` means the actor
+    // must be put back in a run queue, and these tests drive by hand, so nothing
+    // else will do it.
+    //
+    // A staged resume deliberately ignores it -- the NEXT line of the sequence is
+    // the discharge. The final resume of a sequence may not: if the actor still
+    // asks to be scheduled once the sequence is over, the test's "N resumes are
+    // enough" premise is false and the actor is being stranded.
+    template<typename Actor>
+    void resume_step(Actor* actor, size_t max_throughput) {
+        (void) actor->resume(max_throughput);
+    }
+
+    // False means the actor STILL demands re-scheduling after the sequence is
+    // over -- the test's "N resumes are enough" premise is broken and the actor
+    // is being stranded.
+    //
+    // Deliberately free of Catch2 macros: several call sites below run on worker
+    // threads, and Catch2 v2 assertions are main-thread-only (they race on the
+    // ostringstream inside INFO/REQUIRE). Threaded callers latch the result into
+    // an atomic and assert after join(), matching how this file already handles
+    // future_available.
+    template<typename Actor>
+    [[nodiscard]] bool resume_leaves_idle(Actor* actor, size_t max_throughput) {
+        return actor->resume(max_throughput).result != actor_zeta::scheduler::resume_result::resume;
+    }
+
+} // namespace
+
 TEST_CASE("single-thread: worker only") {
     auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource, "Worker");
@@ -230,7 +261,7 @@ TEST_CASE("single-thread: worker only") {
     g_log.log("[TEST] Main thread: %", main_thread);
 
     auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
-    worker->resume(1);
+    REQUIRE(resume_leaves_idle(worker.get(), 1));
 
     REQUIRE(future.is_ready());
     int result = std::move(future).take_ready();
@@ -256,16 +287,16 @@ TEST_CASE("single-thread: client-worker") {
     // With new behavior_t API:
     // 1. Resume client - behavior() coroutine starts, dispatch() is called,
     //    process() sends message to worker, suspends on co_await
-    client->resume(1);
+    resume_step(client.get(), 1);
     g_log.log("[TEST] After client resume");
     REQUIRE(!future.is_ready());  // Still waiting for worker
 
     // 2. Resume worker - processes compute(), inner_future becomes ready
-    worker->resume(1);
+    resume_step(worker.get(), 1);
     g_log.log("[TEST] After worker resume");
 
     // 3. Resume client again - the awaiting coroutine resumes and completes
-    client->resume(10);
+    REQUIRE(resume_leaves_idle(client.get(), 10));
     g_log.log("[TEST] After second client resume, future.is_ready()=%", future.is_ready());
 
     REQUIRE(future.is_ready());
@@ -300,6 +331,7 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
     std::atomic<bool> done{false};
     std::atomic<int> result{0};
     std::atomic<bool> future_available{false};
+    std::atomic<bool> client_left_idle{false};
     std::string client_thread_id;
 
     // Run client in separate thread
@@ -312,15 +344,15 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
 
         // With new behavior_t API:
         // 1. Resume client - behavior coroutine starts, suspends on co_await
-        client->resume(1);
+        resume_step(client.get(), 1);
         g_log.log("[CLIENT_THREAD] After client resume");
 
         // 2. Resume worker - processes compute, future becomes ready
-        worker->resume(1);
+        resume_step(worker.get(), 1);
         g_log.log("[CLIENT_THREAD] After worker resume");
 
         // 3. Resume client again - the awaiting coroutine resumes and completes
-        client->resume(10);
+        client_left_idle = resume_leaves_idle(client.get(), 10);
         g_log.log("[CLIENT_THREAD] After second client resume, future.is_ready()=%", future.is_ready());
 
         future_available = future.is_ready();
@@ -333,6 +365,8 @@ TEST_CASE("multi-thread: client resumes worker in same thread") {
     });
 
     client_thread.join();
+    REQUIRE(client_left_idle);
+    REQUIRE(client_left_idle);
 
     REQUIRE(done);
     REQUIRE(future_available);
@@ -370,6 +404,8 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
     std::atomic<int> result2{0};
     std::atomic<bool> future1_available{false};
     std::atomic<bool> future2_available{false};
+    std::atomic<bool> client1_left_idle{false};
+    std::atomic<bool> client2_left_idle{false};
     std::string thread1_id, thread2_id;
 
     std::thread t1([&]() {
@@ -377,9 +413,9 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         g_log.log("[THREAD1] Started, thread=%", thread1_id);
 
         auto [needs_sched, future] = send(client1.get(), &client_actor::process, 10);
-        client1->resume(1);
-        worker1->resume(1);
-        client1->resume(10);  // Resume to complete awaiting coroutine
+        resume_step(client1.get(), 1);
+        resume_step(worker1.get(), 1);
+        client1_left_idle = resume_leaves_idle(client1.get(), 10);
 
         future1_available = future.is_ready();
         if (future1_available) {
@@ -393,9 +429,9 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
         g_log.log("[THREAD2] Started, thread=%", thread2_id);
 
         auto [needs_sched, future] = send(client2.get(), &client_actor::process, 20);
-        client2->resume(1);
-        worker2->resume(1);
-        client2->resume(10);  // Resume to complete awaiting coroutine
+        resume_step(client2.get(), 1);
+        resume_step(worker2.get(), 1);
+        client2_left_idle = resume_leaves_idle(client2.get(), 10);
 
         future2_available = future.is_ready();
         if (future2_available) {
@@ -406,6 +442,9 @@ TEST_CASE("multi-thread: two clients in parallel threads (separate workers)") {
 
     t1.join();
     t2.join();
+
+    REQUIRE(client1_left_idle);
+    REQUIRE(client2_left_idle);
 
     REQUIRE(future1_available);
     REQUIRE(future2_available);
@@ -468,6 +507,7 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
     std::string client_thread_id;
     std::atomic<int> result{0};
     std::atomic<bool> future_available{false};
+    std::atomic<bool> client_left_idle{false};
 
     // Client in its own thread
     std::thread client_thread([&]() {
@@ -478,9 +518,9 @@ TEST_CASE("multi-thread: verify coroutine thread affinity") {
         g_log.log("[CLIENT_THREAD] Sent process(21)");
 
         // Client resumes worker in CLIENT thread
-        client->resume(1);
-        worker->resume(1);
-        client->resume(10);  // Resume to complete awaiting coroutine
+        resume_step(client.get(), 1);
+        resume_step(worker.get(), 1);
+        client_left_idle = resume_leaves_idle(client.get(), 10);
 
         future_available = future.is_ready();
         if (future_available) {
@@ -524,9 +564,10 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
     constexpr int NUM_ITERATIONS = 10;
     std::vector<std::thread> threads;
     std::atomic<int> success_count{0};
+    std::atomic<int> left_idle_count{0};
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
-        threads.emplace_back([resource, &success_count, i]() {
+        threads.emplace_back([resource, &success_count, &left_idle_count, i]() {
             auto tid = thread_id_str();
             g_log.log("[THREAD %] Started, thread=%", i, tid);
 
@@ -535,9 +576,11 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
             auto local_client = spawn<client_actor>(resource, local_worker->address(), "Client" + std::to_string(i));
 
             auto [needs_sched, future] = send(local_client.get(), &client_actor::process, (i + 1) * 10);
-            local_client->resume(1);
-            local_worker->resume(1);
-            local_client->resume(10);  // Resume to complete awaiting coroutine
+            resume_step(local_client.get(), 1);
+            resume_step(local_worker.get(), 1);
+            if (resume_leaves_idle(local_client.get(), 10)) {
+                ++left_idle_count;
+            }
 
             if (future.is_ready()) {
                 int result = std::move(future).take_ready();
@@ -566,6 +609,7 @@ TEST_CASE("multi-thread: many iterations (each thread has own worker)") {
 
     g_log.log("[TEST] success_count=%/%", success_count.load(), NUM_ITERATIONS);
     REQUIRE(success_count == NUM_ITERATIONS);
+    REQUIRE(left_idle_count == NUM_ITERATIONS);
 
     g_log.log("========== TEST PASSED ==========");
 }

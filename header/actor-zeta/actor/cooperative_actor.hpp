@@ -147,7 +147,12 @@ namespace actor_zeta { namespace actor {
             return {needs_sched, result};
         }
 
-        scheduler::resume_info resume(size_t max_throughput) noexcept {
+        // The verdict is an obligation, not a status: `resume` means the caller must
+        // put this actor back in a run queue. Nothing else will -- a future completing
+        // is flag-only, so it neither pushes to the mailbox nor re-enqueues the actor,
+        // and send() only reports needs_sched when the inbox was blocked. Dropping the
+        // verdict strands the actor. Write (void) if you really mean to ignore it.
+        [[nodiscard]] scheduler::resume_info resume(size_t max_throughput) noexcept {
             assert(max_throughput > 0 && "max_throughput must be greater than 0");
 
             // Try to acquire running state. If actor is already running,

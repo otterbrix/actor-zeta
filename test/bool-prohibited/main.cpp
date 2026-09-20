@@ -67,7 +67,7 @@ TEST_CASE("void methods work (fire-and-forget)") {
             &good_actor::ping);
 
     // Execute actor synchronously
-    actor->resume(10);
+    (void)actor->resume(10);
 
     // Wait for completion
     std::move(future).take_ready();
@@ -86,7 +86,7 @@ TEST_CASE("int methods work (request-response)") {
             &good_actor::calculate);
 
     // Execute actor synchronously
-    actor->resume(10);
+    (void)actor->resume(10);
 
     // Wait for result
     int result = std::move(future).take_ready();
@@ -104,7 +104,7 @@ TEST_CASE("enum methods work (request-response)") {
             &good_actor::check_status);
 
     // Execute actor synchronously
-    actor->resume(10);
+    (void)actor->resume(10);
 
     // Wait for result
     auto status = std::move(future).take_ready();
@@ -122,7 +122,7 @@ TEST_CASE("string methods work (request-response)") {
             &good_actor::get_name);
 
     // Execute actor synchronously
-    actor->resume(10);
+    (void)actor->resume(10);
 
     // Wait for result
     std::string name = std::move(future).take_ready();
@@ -140,7 +140,7 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::ping);
-        actor->resume(10);
+        (void)actor->resume(10);
         std::move(future).take_ready();
     }
 
@@ -149,7 +149,7 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::calculate);
-        actor->resume(10);
+        (void)actor->resume(10);
         REQUIRE(std::move(future).take_ready() == 42);
     }
 
@@ -158,7 +158,7 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::check_status);
-        actor->resume(10);
+        (void)actor->resume(10);
         REQUIRE(std::move(future).take_ready() == good_actor::status::ok);
     }
 
@@ -167,7 +167,7 @@ TEST_CASE("address_t works with all method types") {
         auto [needs_sched, future] = actor_zeta::send(
             addr,
             &good_actor::get_name);
-        actor->resume(10);
+        (void)actor->resume(10);
         REQUIRE(std::move(future).take_ready() == "good_actor");
     }
 }

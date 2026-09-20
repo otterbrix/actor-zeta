@@ -151,7 +151,7 @@ public:
                     &collection_part_t::insert,
                     actor_zeta::detail::get<0, insert_args>(args),
                     actor_zeta::detail::get<1, insert_args>(args));
-                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -159,7 +159,7 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::remove,
                     actor_zeta::detail::get<0, remove_args>(args));
-                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -168,7 +168,7 @@ public:
                     &collection_part_t::update,
                     actor_zeta::detail::get<0, update_args>(args),
                     actor_zeta::detail::get<1, update_args>(args));
-                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -176,7 +176,7 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::find,
                     actor_zeta::detail::get<0, find_args>(args));
-                auto result = actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                auto result = actor_zeta::run_until_complete(future, [&] { (void)child->resume(1); });
                 msg->get_result_promise<std::string>().set_value(std::move(result));
                 break;
             }

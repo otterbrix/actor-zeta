@@ -93,7 +93,7 @@ TEST_CASE("simple coroutines with co_return") {
         );
 
         // Process message through actor
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -109,7 +109,7 @@ TEST_CASE("simple coroutines with co_return") {
         );
 
         // Process message through actor
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -125,7 +125,7 @@ TEST_CASE("simple coroutines with co_return") {
         );
 
         // Process message through actor
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -147,7 +147,7 @@ TEST_CASE("Coroutine futures") {
             actor.get(),
             &coroutine_test_actor::coro_int
         );
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -162,7 +162,7 @@ TEST_CASE("Coroutine futures") {
             actor.get(),
             &coroutine_test_actor::coro_string
         );
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future1.valid());
 
@@ -236,7 +236,7 @@ TEST_CASE("coroutine methods with unique_future return type") {
             actor.get(),
             &arithmetic_test_actor::coro_add, 10, 20
         );
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -252,7 +252,7 @@ TEST_CASE("coroutine methods with unique_future return type") {
             &arithmetic_test_actor::coro_concat,
             std::string("hello"), std::string(" world")
         );
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -267,7 +267,7 @@ TEST_CASE("coroutine methods with unique_future return type") {
             actor.get(),
             &arithmetic_test_actor::coro_add, 5, 7
         );
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(future.is_ready());
 
@@ -335,7 +335,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         REQUIRE(result.valid());
 
         // Process the message
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(result.is_ready());
         int value = std::move(result).take_ready();
@@ -352,7 +352,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         REQUIRE(result.valid());
 
         // Process the message
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(result.is_ready());
         int value = std::move(result).take_ready();
@@ -367,7 +367,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 5, 6);
 
         // Process all messages
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(std::move(r1).take_ready() == 3);
         REQUIRE(std::move(r2).take_ready() == 7);
@@ -382,7 +382,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 6, 7);
 
         // Process all messages
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(std::move(r1).take_ready() == 6);
         REQUIRE(std::move(r2).take_ready() == 20);
@@ -396,7 +396,7 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         auto [ns2, async_result] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 3, 4);
 
         // Process all messages
-        actor->resume(100);
+        (void)actor->resume(100);
 
         REQUIRE(std::move(sync_result).take_ready() == 15);
         REQUIRE(std::move(async_result).take_ready() == 12);
@@ -445,7 +445,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             actor.get(),
             &coroutine_test_actor::coro_int
             );
-            actor->resume(100);
+            (void)actor->resume(100);
             REQUIRE(future.valid());
             REQUIRE(future.is_ready());
             int result = std::move(future).take_ready();
@@ -464,7 +464,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             actor.get(),
             &coroutine_test_actor::coro_int
             );
-            actor->resume(100);
+            (void)actor->resume(100);
             int result = std::move(future).take_ready();
             REQUIRE(result == 42);
         }
@@ -479,7 +479,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             actor.get(),
             &coroutine_test_actor::coro_string
             );
-            actor->resume(100);
+            (void)actor->resume(100);
             REQUIRE(future.valid());
             std::string result = std::move(future).take_ready();
             REQUIRE(result == "hello");
@@ -494,7 +494,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             actor.get(),
             &coroutine_test_actor::coro_void
             );
-            actor->resume(100);
+            (void)actor->resume(100);
             REQUIRE(future.valid());
             std::move(future).take_ready();  // Should not throw
         }

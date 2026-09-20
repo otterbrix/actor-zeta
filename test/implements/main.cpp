@@ -194,7 +194,7 @@ TEST_CASE("implements - send and dispatch work correctly") {
         42
     );
 
-    actor_a->resume(10);
+    (void)actor_a->resume(10);
     REQUIRE(actor_a->call_count() == 1);
     REQUIRE(actor_a->last_value() == 42);
 
@@ -205,7 +205,7 @@ TEST_CASE("implements - send and dispatch work correctly") {
         100
     );
 
-    actor_b->resume(10);
+    (void)actor_b->resume(10);
     REQUIRE(actor_b->call_count() == 1);
     REQUIRE(actor_b->values().size() == 1);
     REQUIRE(actor_b->values()[0] == 100);

@@ -54,21 +54,21 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
     // poll_pending() is called inside behavior() automatically
 
     // 1. Client behavior -> starts coroutine, suspends on co_await send(dispatcher)
-    client->resume(1);
+    (void)client->resume(1);
 
     // 2. Dispatcher behavior -> starts coroutine, suspends on co_await send(storage)
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // 3. Storage behavior -> executes size(), returns ready future
-    storage->resume(1);
+    (void)storage->resume(1);
 
     // 4. Send poll to dispatcher to trigger behavior() and poll_pending()
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // 5. Send poll to client to trigger behavior() and poll_pending()
     (void)send(client.get(), &client_t::poll);
-    client->resume(1);
+    (void)client->resume(1);
 
     // Check result
     REQUIRE(future.is_ready());
@@ -100,14 +100,14 @@ TEST_CASE("dispatcher-pattern: error handling") {
         std::string("users"));
 
     // Execute
-    client->resume(1);
+    (void)client->resume(1);
 
     // Dispatcher returns error immediately (co_return before co_await)
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // Send poll to client to trigger poll_pending()
     (void)send(client.get(), &client_t::poll);
-    client->resume(1);
+    (void)client->resume(1);
 
     // Check result
     REQUIRE(future.is_ready());
@@ -136,13 +136,13 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
         std::string("test_db"),
         std::string("users"));
 
-    client->resume(1);
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)client->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     (void)send(client.get(), &client_t::poll);
-    client->resume(1);
+    (void)client->resume(1);
 
     REQUIRE(future1.is_ready());
     auto result1 = std::move(future1).take_ready();
@@ -156,13 +156,13 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
         std::string("test_db"),
         std::string("orders"));
 
-    client->resume(1);
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)client->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     (void)send(client.get(), &client_t::poll);
-    client->resume(1);
+    (void)client->resume(1);
 
     REQUIRE(future2.is_ready());
     auto result2 = std::move(future2).take_ready();
@@ -176,13 +176,13 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
         std::string("test_db"),
         std::string("products"));
 
-    client->resume(1);
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)client->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     (void)send(client.get(), &client_t::poll);
-    client->resume(1);
+    (void)client->resume(1);
 
     REQUIRE(future3.is_ready());
     auto result3 = std::move(future3).take_ready();
@@ -210,13 +210,13 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
         std::string("test_db"),
         std::string("nonexistent"));
 
-    client->resume(1);
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)client->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     (void)send(client.get(), &client_t::poll);
-    client->resume(1);
+    (void)client->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -256,13 +256,13 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
             std::string("orders"));
 
         // Execute entire chain in this thread
-        client->resume(1);
-        dispatcher->resume(1);
-        storage->resume(1);
+        (void)client->resume(1);
+        (void)dispatcher->resume(1);
+        (void)storage->resume(1);
         (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-        dispatcher->resume(1);
+        (void)dispatcher->resume(1);
         (void)send(client.get(), &client_t::poll);
-        client->resume(1);
+        (void)client->resume(1);
 
         future_available = future.is_ready();
         if (future_available) {
@@ -309,10 +309,10 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
         session,
         std::move(plan));
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -325,7 +325,7 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
     // Cleanup
     (void)send(dispatcher.get(),
          &manager_dispatcher_t::close_cursor, session);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     g_log.log("========== TEST PASSED ==========");
 }
@@ -350,7 +350,7 @@ TEST_CASE("dispatcher-pattern: execute_plan with invalid plan") {
         session,
         std::move(plan));
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -381,10 +381,10 @@ TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
         session,
         std::move(plan));
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -417,19 +417,19 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
         std::string("orders"));
 
     // Execute: dispatcher -> storage (step 1)
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
 
     // Poll to resume after first co_await
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // Step 2
-    storage->resume(1);
+    (void)storage->resume(1);
 
     // Poll to complete
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -458,10 +458,10 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
         std::string("nonexistent"),  // Does not exist
         std::string("orders"));
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -493,31 +493,31 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
         session,
         std::vector<std::string>{"users", "orders", "products"});
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // Storage receives 3 parallel requests
-    storage->resume(1);
-    storage->resume(1);
-    storage->resume(1);
+    (void)storage->resume(1);
+    (void)storage->resume(1);
+    (void)storage->resume(1);
 
     // Poll - first co_await ready
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // Poll - second co_await
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // Poll - third co_await
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     // Nested coroutine get_aggregate_detail
     // total = 400 > 200, so extra co_await
-    storage->resume(1);
+    (void)storage->resume(1);
 
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -548,11 +548,11 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
         session,
         std::vector<std::string>{"products"});
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
 
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -581,7 +581,7 @@ TEST_CASE("dispatcher-pattern: aggregate - empty collection list") {
         session,
         std::vector<std::string>{});  // Empty!
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -641,13 +641,13 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
                 std::string("test_db"),
                 collection);
 
-            client->resume(1);
-            dispatcher->resume(1);
-            storage->resume(1);
+            (void)client->resume(1);
+            (void)dispatcher->resume(1);
+            (void)storage->resume(1);
             (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-            dispatcher->resume(1);
+            (void)dispatcher->resume(1);
             (void)send(client.get(), &client_t::poll);
-            client->resume(1);
+            (void)client->resume(1);
 
             results[i].available = future.is_ready();
             if (results[i].available) {
@@ -700,7 +700,7 @@ TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
         &manager_dispatcher_t::transform_with_lambda,
         5, 10);  // value=5, factor=10
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -724,7 +724,7 @@ TEST_CASE("lambda-inside: lambda capturing this and state (compute_with_lambda_a
         &manager_dispatcher_t::compute_with_lambda_and_state,
         std::string("query"));
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -752,12 +752,12 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
         std::string("users"));
 
     // Dispatcher suspends on co_await, storage processes
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
 
     // Poll to resume dispatcher after storage returns
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -783,10 +783,10 @@ TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
         session,
         std::string("orders"));
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -816,12 +816,12 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
         3);  // multiplier
 
     // Dispatcher suspends on co_await (outer), then lambda suspends on co_await (inner)
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
 
     // Poll to resume lambda-coroutine, then outer coroutine
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -848,10 +848,10 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
         std::string("orders"),
         2);
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -875,10 +875,10 @@ TEST_CASE("database: create_cursor_from_query - lambda-coroutine returns unique_
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::create_cursor_from_query, session, std::string("users"));
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -901,10 +901,10 @@ TEST_CASE("database: validate_and_execute - chained lambda-coroutines") {
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::validate_and_execute, session, std::move(plan));
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -928,7 +928,7 @@ TEST_CASE("database: validate_and_execute - validation failure") {
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::validate_and_execute, session, std::move(plan));
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto cursor = std::move(future).take_ready();
@@ -950,18 +950,18 @@ TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::get_database_statistics, session);
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     // Process 3 parallel storage requests
-    storage->resume(1);
-    storage->resume(1);
-    storage->resume(1);
+    (void)storage->resume(1);
+    (void)storage->resume(1);
+    (void)storage->resume(1);
     // Poll after each storage completes to resume lambda-coroutines
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -989,7 +989,7 @@ TEST_CASE("database: process_batch_buffer - move-only argument") {
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::process_batch_buffer, session, std::move(batch));
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1013,7 +1013,7 @@ TEST_CASE("database: process_batch_buffer - empty batch") {
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::process_batch_buffer, session, std::move(batch));
 
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1035,19 +1035,19 @@ TEST_CASE("database: get_cached_value - promise direct manipulation") {
     // Test cached values for different collections
     auto [needs_sched1, future1] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("users"));
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     REQUIRE(future1.is_ready());
     REQUIRE(std::move(future1).take_ready() == 100);
 
     auto [needs_sched2, future2] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("orders"));
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     REQUIRE(future2.is_ready());
     REQUIRE(std::move(future2).take_ready() == 250);
 
     auto [needs_sched3, future3] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("products"));
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
     REQUIRE(future3.is_ready());
     REQUIRE(std::move(future3).take_ready() == 50);
 
@@ -1066,10 +1066,10 @@ TEST_CASE("database: execute_with_retry - success without retry") {
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("users"), 0);
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1091,10 +1091,10 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
     auto [needs_sched2, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("orders"), 1);
 
-    dispatcher->resume(1);
-    storage->resume(1);
+    (void)dispatcher->resume(1);
+    (void)storage->resume(1);
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto result = std::move(future).take_ready();
@@ -1127,10 +1127,10 @@ TEST_CASE("dispatcher-pattern: fetch_row_batch forwards prefixed rows") {
         session,
         std::string("users"));
 
-    dispatcher->resume(1);   // starts the handler, suspends on the storage await
-    storage->resume(1);      // completes the storage future (flag-only)
+    (void)dispatcher->resume(1);   // starts the handler, suspends on the storage await
+    (void)storage->resume(1);      // completes the storage future (flag-only)
     (void)send(dispatcher.get(), &manager_dispatcher_t::poll);
-    dispatcher->resume(1);   // drains the continuation, prefixes, co_returns
+    (void)dispatcher->resume(1);   // drains the continuation, prefixes, co_returns
 
     REQUIRE(future.is_ready());
     auto rows = std::move(future).take_ready();
@@ -1159,7 +1159,7 @@ TEST_CASE("dispatcher-pattern: fetch_row_batch on an empty collection name") {
         std::string(""));
 
     // Rejected before any storage round trip, so one resume is enough.
-    dispatcher->resume(1);
+    (void)dispatcher->resume(1);
 
     REQUIRE(future.is_ready());
     auto rows = std::move(future).take_ready();

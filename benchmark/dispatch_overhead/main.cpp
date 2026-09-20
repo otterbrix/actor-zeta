@@ -70,27 +70,27 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
         switch (method_id) {
             case 0: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method1, 1);
-                run_until_complete(f, [&] { actor->resume(1); });
+                run_until_complete(f, [&] { (void)actor->resume(1); });
                 break;
             }
             case 1: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method2, 2);
-                run_until_complete(f, [&] { actor->resume(1); });
+                run_until_complete(f, [&] { (void)actor->resume(1); });
                 break;
             }
             case 2: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method3, 3);
-                run_until_complete(f, [&] { actor->resume(1); });
+                run_until_complete(f, [&] { (void)actor->resume(1); });
                 break;
             }
             case 3: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method4, 4);
-                run_until_complete(f, [&] { actor->resume(1); });
+                run_until_complete(f, [&] { (void)actor->resume(1); });
                 break;
             }
             case 4: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method5, 5);
-                run_until_complete(f, [&] { actor->resume(1); });
+                run_until_complete(f, [&] { (void)actor->resume(1); });
                 break;
             }
         }
@@ -181,7 +181,7 @@ static void BM_FullCycle_1Arg(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        int result = run_until_complete(f, [&] { (void)actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 
@@ -195,7 +195,7 @@ static void BM_FullCycle_2Args(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum, 10, 20);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        int result = run_until_complete(f, [&] { (void)actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 
@@ -209,7 +209,7 @@ static void BM_FullCycle_3Args(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum3, 10, 20, 30);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        int result = run_until_complete(f, [&] { (void)actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 
@@ -223,7 +223,7 @@ static void BM_FullCycle_Coroutine(benchmark::State& state) {
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        int result = run_until_complete(f, [&] { (void)actor->resume(1); });
         benchmark::DoNotOptimize(result);
     }
 

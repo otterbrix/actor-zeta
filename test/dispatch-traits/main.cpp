@@ -231,7 +231,7 @@ TEST_CASE("send via address_t - actor method dispatched correctly") {
     REQUIRE(future.valid());
 
     // Process message by running actor's behavior
-    actor->resume(1);
+    (void)actor->resume(1);
 
     // Now future should be available
     REQUIRE(future.is_ready());
@@ -615,7 +615,7 @@ TEST_CASE("send via address_t - void return type") {
     REQUIRE(future.valid());
 
     // Process message
-    actor->resume(1);
+    (void)actor->resume(1);
 
     REQUIRE(future.is_ready());
     std::move(future).take_ready();  // Should not crash
@@ -636,7 +636,7 @@ TEST_CASE("send via address_t - string return type") {
     REQUIRE(future.valid());
 
     // Process message
-    actor->resume(1);
+    (void)actor->resume(1);
 
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).take_ready() == "test_name");  // Value from coroutine

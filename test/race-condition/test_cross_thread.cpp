@@ -75,7 +75,7 @@ TEST_CASE("cross-thread: basic polling pattern") {
         // without busy-spinning (producer is test-controlled and can notify).
         std::atomic<bool> done{false};
         std::thread producer([&]() {
-            actor->resume(1);
+            (void)actor->resume(1);
             done.store(true, std::memory_order_release);
             done.notify_all();
         });
@@ -113,7 +113,7 @@ TEST_CASE("cross-thread: concurrent start polling") {
             while (!start.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }
-            actor->resume(1);
+            (void)actor->resume(1);
             done.store(true, std::memory_order_release);
             done.notify_all();
         });
@@ -372,7 +372,7 @@ TEST_CASE("cross-thread: immediate available") {
                                        &cross_thread_worker::compute, i);
 
         // Process immediately in same thread
-        actor->resume(1);
+        (void)actor->resume(1);
 
         // Should be ready immediately
         REQUIRE(future.is_ready());
@@ -455,7 +455,7 @@ TEST_CASE("cross-thread: memory ordering") {
         std::atomic<bool> producer_done{false};
 
         std::thread producer([&]() {
-            actor->resume(1);
+            (void)actor->resume(1);
             producer_done.store(true, std::memory_order_release);
             producer_done.notify_all();
         });

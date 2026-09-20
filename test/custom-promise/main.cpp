@@ -118,9 +118,9 @@ TEST_CASE("vector of futures - same type from different actors") {
     }
 
     // Process messages
-    worker1->resume(10);
-    worker2->resume(10);
-    worker3->resume(10);
+    (void)worker1->resume(10);
+    (void)worker2->resume(10);
+    (void)worker3->resume(10);
 
     // Verify results
     REQUIRE(futures[0].is_ready());
@@ -212,7 +212,7 @@ TEST_CASE("backward compatibility - old actor code works") {
         21
     );
 
-    actor->resume(10);
+    (void)actor->resume(10);
 
     REQUIRE(future1.is_ready());
     REQUIRE(std::move(future1).take_ready() == 42);
@@ -224,7 +224,7 @@ TEST_CASE("backward compatibility - old actor code works") {
             &old_style_actor::do_work
     );
 
-    actor->resume(10);
+    (void)actor->resume(10);
 
     REQUIRE(future2.is_ready());
     std::move(future2).take_ready();  // Should not crash

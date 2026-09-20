@@ -55,9 +55,9 @@ public:
             // Synchronous mode (no scheduler)
             auto [needs_sched_sync, future_sync] = actor_zeta::send(actor_0_.get(), &Actor::start);
             actor_zeta::detail::ignore_unused(future_sync);
-            actor_0_->resume(1);
-            actor_1_->resume(1);
-            actor_0_->resume(1);
+            (void)actor_0_->resume(1);
+            (void)actor_1_->resume(1);
+            (void)actor_0_->resume(1);
         }
         co_return;
     }

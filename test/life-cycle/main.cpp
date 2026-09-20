@@ -12,7 +12,7 @@ TEST_CASE("life-cycle") {
             REQUIRE(test_handlers::ptr_0_counter == 0);
             auto actor = actor_zeta::spawn<test_handlers>(resource.get());
             auto [needs_sched, fut] = actor_zeta::send(actor.get(), &test_handlers::ptr_0);
-            actor->resume(10);
+            (void)actor->resume(10);
             std::move(fut).take_ready();
             REQUIRE(test_handlers::ptr_0_counter == 1);
             REQUIRE(test_handlers::ptr_1_counter == 0);

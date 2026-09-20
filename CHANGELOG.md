@@ -74,6 +74,15 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   to preserve release-acquire coverage on the surviving `shared_state` type.
 
 ### Changed
+- **An actor suspended on `co_await` is no longer parked**, and `resume()` /
+  `job_ptr::resume()` are now `[[nodiscard]]`. Before, such an actor blocked its
+  own inbox, so the next `send()` reported `needs_sched` and the sender
+  re-scheduled it. It no longer does, which means the ONLY signal is the verdict
+  `resume_result::resume` returned by `resume()` — the caller must put the actor
+  back in a run queue. That contract was always true (`work_sharing` and every
+  real driver honour it); the park merely masked violations. Manual drivers that
+  discard the verdict now fail to compile; write `(void)` where the next step of
+  a hand-staged sequence is the discharge.
 - **`send()` API**: Removed sender address parameter. Now: `send(actor, &Method, args...)` returns `std::pair<bool, unique_future<T>>`
 - **`make_message()` API**: Removed sender address parameter
 - **`enqueue_impl()` return type**: Changed to `std::pair<bool, enqueue_result>` (bool first)
