@@ -9,16 +9,23 @@
 #include <vector>
 #include <memory_resource>
 
+namespace {
+    // Which side of the Last-One-Out race the current thread is playing. The
+    // tracking resource stamps it into the iteration's role slot on every
+    // deallocation, which is what makes release_promise()'s self-report
+    // CHECKABLE: "I deallocated" must coincide with "this thread deallocated".
+    thread_local int tls_release_role = 0;   // 1 = promise side, 2 = future side
+    constexpr int role_promise = 1;
+    constexpr int role_future = 2;
+} // namespace
+
+
 using namespace actor_zeta;
 using namespace actor_zeta::detail;
 
 // =============================================================================
-// Tests for the new shared_state architecture (replacing future_state_fixes)
-// =============================================================================
-
-// =============================================================================
-// Issue #1: Race between available() and final_suspend
-// NEW SOLUTION: is_ready() checks promise_released flag, not has_result()
+// Issue #1: race between the old available() and final_suspend.
+// Resolution: is_ready() reports promise_released, not has_result().
 // =============================================================================
 
 TEST_CASE("Issue #1: is_ready vs has_result distinction", "[race][availability]") {
@@ -35,7 +42,8 @@ TEST_CASE("Issue #1: is_ready vs has_result distinction", "[race][availability]"
     REQUIRE_FALSE(state->is_ready());  // Promise not released yet!
 
     // After release_promise, is_ready becomes true
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
     // Cleanup
@@ -54,15 +62,16 @@ TEST_CASE("Issue #1: void specialization", "[race][void]") {
     REQUIRE(state->has_result());
     REQUIRE_FALSE(state->is_ready());
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
     state->release_future();
 }
 
 // =============================================================================
-// Issue #2: Data race on error_code write
-// NEW SOLUTION: Atomic flags ensure proper ordering
+// Issue #2: data race on the error_code write.
+// Resolution: the atomic flag word orders the write against every reader.
 // =============================================================================
 
 TEST_CASE("Issue #2: error state is atomic", "[error][atomic]") {
@@ -76,7 +85,8 @@ TEST_CASE("Issue #2: error state is atomic", "[error][atomic]") {
     REQUIRE(state->has_result());  // error counts as result
     REQUIRE(state->get_error() == ec);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -167,7 +177,8 @@ TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out
     SECTION("Promise releases first") {
         auto* state = allocate_shared_state<int>(&resource);
         state->set_value(42);
-        (void)state->release_promise();
+        const bool deallocated = state->release_promise();
+        REQUIRE_FALSE(deallocated);
         REQUIRE(deallocation_count.load() == 0);  // Future still holds ref
 
         state->release_future();
@@ -182,7 +193,10 @@ TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out
         REQUIRE(deallocation_count.load() == 0);  // Promise still holds ref
 
         state->set_value(42);
-        (void)state->release_promise();
+        const bool deallocated = state->release_promise();
+        // The future already released, so THIS call is the Last-One-Out that
+        // deallocates -- as the deallocation_count check below confirms.
+        REQUIRE(deallocated);
         REQUIRE(deallocation_count.load() == 1);  // Last one out deallocates
     }
 }
@@ -270,6 +284,7 @@ TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]")
     struct tracking_resource : std::pmr::memory_resource {
         std::pmr::memory_resource* upstream_;
         std::atomic<int>* counter_;
+        std::atomic<int>* role_ = nullptr;
 
         tracking_resource(std::pmr::memory_resource* up, std::atomic<int>* c)
             : upstream_(up), counter_(c) {}
@@ -280,6 +295,7 @@ TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]")
 
         void do_deallocate(void* p, std::size_t bytes, std::size_t align) override {
             counter_->fetch_add(1, std::memory_order_relaxed);
+            if (role_) { role_->store(tls_release_role, std::memory_order_release); }
             upstream_->deallocate(p, bytes, align);
         }
 
@@ -288,26 +304,52 @@ TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]")
         }
     };
 
+    std::atomic<int> dealloc_role{0};
     tracking_resource resource(std::pmr::get_default_resource(), &deallocation_count);
+    resource.role_ = &dealloc_role;
+
+    // release_promise() reports whether THIS call deallocated the state. The two
+    // releases genuinely race, so no per-iteration OUTCOME is assertable -- but
+    // the ATTRIBUTION is: whichever side the resource saw deallocate must be the
+    // side whose self-report said so. A release_promise() hard-coded to
+    // `return true` fails this; a `<=` comparison on a counter does not.
+    int promise_won = 0;
+    int attribution_mismatches = 0;
 
     for (int i = 0; i < NUM_ITERATIONS; ++i) {
         auto* state = allocate_shared_state<int>(&resource);
         state->set_value(int(i));
 
-        std::thread t1([state]() {
-            (void)state->release_promise();
+        dealloc_role.store(0, std::memory_order_release);
+        std::atomic<bool> promise_claimed{false};
+
+        std::thread t1([state, &promise_claimed]() {
+            tls_release_role = role_promise;
+            promise_claimed.store(state->release_promise(), std::memory_order_release);
         });
 
         std::thread t2([state]() {
+            tls_release_role = role_future;
             state->release_future();
         });
 
         t1.join();
         t2.join();
+
+        const bool claimed = promise_claimed.load(std::memory_order_acquire);
+        const int  who     = dealloc_role.load(std::memory_order_acquire);
+        if (claimed) {
+            ++promise_won;
+        }
+        if (claimed != (who == role_promise)) {
+            ++attribution_mismatches;
+        }
     }
 
     // Exactly one deallocation per iteration
     REQUIRE(deallocation_count.load() == NUM_ITERATIONS);
+    REQUIRE(attribution_mismatches == 0);
+    REQUIRE(promise_won <= NUM_ITERATIONS);
 }
 
 TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
@@ -319,10 +361,15 @@ TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
 
         std::atomic<bool> producer_done{false};
         std::atomic<int> read_value{-1};
+        // release_promise() reports whether THIS call deallocated the state. The
+        // peer thread here only reads -- it never releases the future -- so the
+        // answer is deterministically false. Latch it and assert after the join:
+        // a Catch2 macro fired from inside a thread is itself a data race.
+        std::atomic<bool> promise_deallocated{false};
 
-        std::thread producer([state, i, &producer_done]() {
+        std::thread producer([state, i, &producer_done, &promise_deallocated]() {
             state->set_value(int(i));
-            (void)state->release_promise();
+            promise_deallocated.store(state->release_promise(), std::memory_order_relaxed);
             producer_done.store(true, std::memory_order_release);
         });
 
@@ -338,6 +385,7 @@ TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
         consumer.join();
 
         REQUIRE(read_value.load() == i);
+        REQUIRE_FALSE(promise_deallocated.load());
         state->release_future();
     }
 }
@@ -355,11 +403,16 @@ TEST_CASE("Concurrent: is_ready acquire synchronizes side effect on shared_state
         std::atomic<int> side_effect{0};
         std::atomic<int> read_side_effect{-1};
 
-        std::thread writer([state, &side_effect]() {
+        // Same shape as above: latch release_promise()'s answer, assert after the
+        // join -- a Catch2 macro fired from inside a thread is itself a data race.
+        std::atomic<bool> promise_deallocated{false};
+
+        std::thread writer([state, &side_effect, &promise_deallocated]() {
             // Relaxed store BEFORE the releasing operations on the state.
             side_effect.store(42, std::memory_order_relaxed);
             state->set_value(100);              // release on flags_
-            (void) state->release_promise();    // acq_rel on flags_
+            promise_deallocated.store(state->release_promise(),   // acq_rel on flags_
+                                      std::memory_order_relaxed);
         });
 
         std::thread reader([state, &side_effect, &read_side_effect]() {
@@ -377,6 +430,7 @@ TEST_CASE("Concurrent: is_ready acquire synchronizes side effect on shared_state
         reader.join();
 
         REQUIRE(read_side_effect.load(std::memory_order_relaxed) == 42);
+        REQUIRE_FALSE(promise_deallocated.load());
         state->release_future();
     }
 }
@@ -437,4 +491,112 @@ TEST_CASE("Integration: move semantics", "[integration][move]") {
     p2.set_value(123);
     REQUIRE(f2.is_ready());
     REQUIRE(std::move(f2).take_ready() == 123);
+}
+// =============================================================================
+// SETTLED-OUTCOME / I1 -- producer totality.
+//
+// release_promise() is the ONLY writer of promise_released in the library, and
+// promise_released is exactly what is_ready() reports. Before the repair, a
+// promise that released without ever writing an outcome produced a future that
+// answered is_ready()==true, failed()==false, and had nothing to take. The only
+// thing between that and a read of unset storage was take_ready()'s assert --
+// which is compiled out under NDEBUG, i.e. in every Release build that ships.
+//
+// The invariant now: an acquire load that observes promise_released observes a
+// result bit in the same load. `is_ready() => has_result()`, always.
+// =============================================================================
+
+TEST_CASE("SETTLED-OUTCOME: release without an outcome is repaired, not published raw",
+          "[invariant][settled-outcome]") {
+    auto* resource = std::pmr::get_default_resource();
+    auto* state = allocate_shared_state<int>(resource);
+
+    REQUIRE_FALSE(state->is_ready());
+    REQUIRE_FALSE(state->has_result());
+
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
+
+    REQUIRE(state->is_ready());
+    REQUIRE(state->has_result());   // I1: ready implies an outcome exists
+    REQUIRE(state->has_error());    // and it is an error, not a phantom value
+    REQUIRE(state->get_error() == std::make_error_code(std::errc::state_not_recoverable));
+
+    state->release_future();
+}
+
+TEST_CASE("SETTLED-OUTCOME: totality holds for the void specialization too",
+          "[invariant][settled-outcome]") {
+    auto* resource = std::pmr::get_default_resource();
+    auto* state = allocate_shared_state<void>(resource);
+
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
+
+    REQUIRE(state->is_ready());
+    REQUIRE(state->has_result());
+    REQUIRE(state->has_error());
+
+    state->release_future();
+}
+
+TEST_CASE("SETTLED-OUTCOME: a real value is never overwritten by the repair",
+          "[invariant][settled-outcome]") {
+    auto* resource = std::pmr::get_default_resource();
+    auto* state = allocate_shared_state<int>(resource);
+
+    state->set_value(42);
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
+
+    REQUIRE(state->is_ready());
+    REQUIRE(state->has_result());
+    REQUIRE_FALSE(state->has_error());   // the repair must not fire here
+    REQUIRE(state->get_value() == 42);
+
+    state->release_future();
+}
+
+TEST_CASE("SETTLED-OUTCOME: holds_value distinguishes the four outcomes",
+          "[invariant][settled-outcome]") {
+    auto* resource = std::pmr::get_default_resource();
+
+    SECTION("pending: released? no. value? no.") {
+        auto* state = allocate_shared_state<int>(resource);
+        REQUIRE_FALSE(state->holds_value());          // nothing written yet
+        const bool d = state->release_promise();
+        REQUIRE_FALSE(d);
+        REQUIRE(state->is_ready());
+        REQUIRE_FALSE(state->holds_value());          // repaired to an error, not a value
+        state->release_future();
+    }
+
+    SECTION("value present, then consumed -- I2 makes the second take visible") {
+        auto* state = allocate_shared_state<int>(resource);
+        state->set_value(7);
+        REQUIRE(state->holds_value());
+
+        REQUIRE(state->take_value() == 7);
+        // The value bit is NOT cleared -- flags are monotonic. What changes is that
+        // `consumed` is now set, which is how a second extraction becomes detectable
+        // instead of reading moved-from storage.
+        REQUIRE(state->has_result());
+        REQUIRE_FALSE(state->has_error());
+        REQUIRE_FALSE(state->holds_value());
+
+        const bool d = state->release_promise();
+        REQUIRE_FALSE(d);
+        state->release_future();
+    }
+
+    SECTION("error: ready, but never extractable") {
+        auto* state = allocate_shared_state<int>(resource);
+        state->set_error(std::make_error_code(std::errc::operation_canceled));
+        const bool d = state->release_promise();
+        REQUIRE_FALSE(d);
+        REQUIRE(state->is_ready());
+        REQUIRE(state->has_error());
+        REQUIRE_FALSE(state->holds_value());
+        state->release_future();
+    }
 }

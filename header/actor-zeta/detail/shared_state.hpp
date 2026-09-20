@@ -85,15 +85,59 @@ namespace actor_zeta::detail {
             return value_.get();
         }
 
+        // SETTLED-OUTCOME / I2 -- flags are MONOTONIC. Taking the value SETS a bit
+        // rather than clearing value_set: clearing it would make release_promise()'s
+        // totality repair fire on a state whose value was legitimately consumed.
+        // Nothing in flags_ is ever cleared except promise_finalizing.
         [[nodiscard]] T take_value() noexcept {
+            flags_.fetch_or(state_flags::consumed, std::memory_order_release);
             return value_.take();
+        }
+
+        // SETTLED-OUTCOME / I3 -- the extraction predicate.
+        //
+        // "A value exists and has not been taken yet." Deliberately NOT is_ready():
+        // that is promise_released, which says the producer finished, not that it
+        // produced anything. Reading it as a value gate is the whole bug class this
+        // invariant closes.
+        [[nodiscard]] bool holds_value() const noexcept {
+            const auto bits = flags_.load(std::memory_order_acquire);
+            return (bits & (state_flags::value_set | state_flags::error_set | state_flags::consumed))
+                   == state_flags::value_set;
+        }
+
+        // Raw flag word, for diagnostics only.
+        [[nodiscard]] std::uint8_t flags_snapshot() const noexcept {
+            return flags_.load(std::memory_order_acquire);
         }
 
 
         // Returns true if this call deallocated the state (future already released =>
         // cancelled; the continuation must NOT be resumed).
+        //
+        // TOTALITY (invariant SETTLED-OUTCOME / I1). This is the ONLY writer of
+        // promise_released in the whole library, and promise_released is what
+        // is_ready() reports. A promise that releases without ever writing a value or
+        // an error therefore produces a future that says "ready", says "not failed",
+        // and has nothing to take -- and take_ready()'s assert, the only thing between
+        // that and a read of unset storage, is compiled out under NDEBUG.
+        //
+        // So repair it here, folding error_set into the SAME release-ordered RMW that
+        // publishes promise_released. No observer can then see the released bit without
+        // a result bit: `is_ready() => has_result()` holds at every instant, on every
+        // thread, in every build mode.
+        //
+        // The plain load is safe: set_value()/set_error() are producer-side and
+        // sequenced before this call on the producer's own thread (final_suspend, or
+        // ~promise), so no other thread can be writing a result bit concurrently.
         [[nodiscard]] bool release_promise() noexcept {
-            auto old = flags_.fetch_or(state_flags::promise_released,std::memory_order_acq_rel);
+            std::uint8_t bits = state_flags::promise_released;
+            if ((flags_.load(std::memory_order_acquire) & state_flags::result_set) == 0) {
+                error_ = std::make_error_code(std::errc::state_not_recoverable);
+                bits = static_cast<std::uint8_t>(bits | state_flags::error_set);
+            }
+
+            auto old = flags_.fetch_or(bits, std::memory_order_acq_rel);
 
             if (old & state_flags::future_released) {
                 deallocate();
@@ -186,14 +230,56 @@ namespace actor_zeta::detail {
         }
 
         void get_value() noexcept {}
-        void take_value() noexcept {}
+
+        // See the T specialization: monotonic flags, I2.
+        void take_value() noexcept {
+            flags_.fetch_or(state_flags::consumed, std::memory_order_release);
+        }
+
+        // SETTLED-OUTCOME / I3 -- the extraction predicate.
+        //
+        // "A value exists and has not been taken yet." Deliberately NOT is_ready():
+        // that is promise_released, which says the producer finished, not that it
+        // produced anything. Reading it as a value gate is the whole bug class this
+        // invariant closes.
+        [[nodiscard]] bool holds_value() const noexcept {
+            const auto bits = flags_.load(std::memory_order_acquire);
+            return (bits & (state_flags::value_set | state_flags::error_set | state_flags::consumed))
+                   == state_flags::value_set;
+        }
+
+        // Raw flag word, for diagnostics only.
+        [[nodiscard]] std::uint8_t flags_snapshot() const noexcept {
+            return flags_.load(std::memory_order_acquire);
+        }
 
 
         // Returns true if this call deallocated the state (future already released =>
         // cancelled; the continuation must NOT be resumed).
+        //
+        // TOTALITY (invariant SETTLED-OUTCOME / I1). This is the ONLY writer of
+        // promise_released in the whole library, and promise_released is what
+        // is_ready() reports. A promise that releases without ever writing a value or
+        // an error therefore produces a future that says "ready", says "not failed",
+        // and has nothing to take -- and take_ready()'s assert, the only thing between
+        // that and a read of unset storage, is compiled out under NDEBUG.
+        //
+        // So repair it here, folding error_set into the SAME release-ordered RMW that
+        // publishes promise_released. No observer can then see the released bit without
+        // a result bit: `is_ready() => has_result()` holds at every instant, on every
+        // thread, in every build mode.
+        //
+        // The plain load is safe: set_value()/set_error() are producer-side and
+        // sequenced before this call on the producer's own thread (final_suspend, or
+        // ~promise), so no other thread can be writing a result bit concurrently.
         [[nodiscard]] bool release_promise() noexcept {
-            auto old = flags_.fetch_or(state_flags::promise_released,
-                                       std::memory_order_acq_rel);
+            std::uint8_t bits = state_flags::promise_released;
+            if ((flags_.load(std::memory_order_acquire) & state_flags::result_set) == 0) {
+                error_ = std::make_error_code(std::errc::state_not_recoverable);
+                bits = static_cast<std::uint8_t>(bits | state_flags::error_set);
+            }
+
+            auto old = flags_.fetch_or(bits, std::memory_order_acq_rel);
             if (old & state_flags::future_released) {
                 deallocate();
                 return true;   // Cancelled - don't resume continuation
