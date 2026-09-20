@@ -283,7 +283,17 @@ namespace actor_zeta { namespace actor {
             };
 
             if (!try_acquire_running()) {
-                return scheduler::resume_info(scheduler::resume_result::done, 0);
+                // `awaiting`, not `done`. Another thread holds `running`; try_acquire
+                // just set the scheduled bit for it, and that thread will discharge the
+                // obligation by returning `resume`. So the verdict this caller owes is
+                // "drop your node, the wakeup belongs to somebody else" -- which is what
+                // awaiting means, and what the worker does with it.
+                //
+                // `done` means finished. The worker reacts to it by calling
+                // policy_.after_completion(), a no-op only in the unprofiled policy, and
+                // any driver that treats `done` as terminal -- reasonably -- retires an
+                // actor that is merely contended.
+                return scheduler::resume_info(scheduler::resume_result::awaiting, 0);
             }
 
             struct resume_guard {
