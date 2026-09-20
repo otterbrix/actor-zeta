@@ -41,12 +41,6 @@ namespace actor_zeta { namespace scheduler {
             policy_.external_enqueue(this, resumable);
         }
 
-        template<typename Resumable>
-        void execute_later(Resumable* resumable) {
-            assert(resumable && "Cannot enqueue null job");
-            policy_.internal_enqueue(this, resumable);
-        }
-
         scheduler_ptr parent() {
             return parent_;
         }

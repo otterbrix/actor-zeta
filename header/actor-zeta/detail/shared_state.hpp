@@ -167,11 +167,6 @@ namespace actor_zeta::detail {
                    == state_flags::value_set;
         }
 
-        // Raw flag word, for diagnostics only.
-        [[nodiscard]] std::uint8_t flags_snapshot() const noexcept {
-            return flags_.load(std::memory_order_acquire);
-        }
-
 
         // Returns true if this call deallocated the state (future already released =>
         // cancelled; the continuation must NOT be resumed).

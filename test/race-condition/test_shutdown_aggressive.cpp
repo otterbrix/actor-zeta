@@ -9,26 +9,28 @@
 #include <vector>
 
 // =============================================================================
-// NOTE: bad_shutdown_actor test removed!
+// What this file actually covers
 // =============================================================================
 //
-// REASON: With shutdown_guard_t, race condition is IMPOSSIBLE to reproduce!
+// It used to say a bad_shutdown_actor case had been removed because
+// shutdown_guard_t "automatically calls begin_shutdown() before base class
+// destructor", making the race impossible to reproduce. That ordering was never
+// real: shutdown_guard_ was declared FIRST among the members, so it was destroyed
+// LAST -- after state_, mailbox_ and current_behavior_ were already gone. It ran
+// after everything it claimed to protect, and ~cooperative_actor's own body
+// already published `destroying` and waited. The guard has since been deleted.
 //
-// BEFORE (without shutdown_guard):
-//   - Actor without explicit begin_shutdown() → race condition
-//   - Test could reliably reproduce bug with TSan
+// What does protect the teardown is that body: publish `destroying`, then
+// wait_for_activity_to_drain() for the thread holding `running` and for any
+// sender already past enqueue_impl's gate.
 //
-// NOW (with shutdown_guard):
-//   - shutdown_guard_t automatically calls begin_shutdown() for ALL actors
-//   - Even actors without explicit destructor are SAFE
-//   - Race condition cannot be reproduced anymore!
-//
-// CONCLUSION: This is GOOD! shutdown_guard_t provides automatic safety.
-//             Test was useful for finding the bug, but now the bug is fixed.
+// So this is a stress test, not a proof, and it is aimed at the surviving
+// question: an actor destroyed under load must not be resumed or enqueued after
+// its members are gone. Run it under TSan and ASan for that to mean anything.
 // =============================================================================
 
 // =============================================================================
-// Test Actor - Demonstrates automatic shutdown_guard protection
+// Test Actor - Demonstrates automatic teardown under load
 // =============================================================================
 
 class good_shutdown_actor final : public actor_zeta::basic_actor<good_shutdown_actor> {
@@ -38,9 +40,8 @@ public:
         , counter_(0) {
     }
 
-    // NOTE: No explicit destructor needed!
-    // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
-    // This prevents race condition - safe to destroy dispatch() members.
+    // No explicit destructor needed: ~cooperative_actor publishes `destroying` and
+    // waits out the runner and any in-flight sender before the members go.
     ~good_shutdown_actor() = default;
 
     actor_zeta::unique_future<int> slow_task(int value) {
@@ -67,10 +68,10 @@ private:
 };
 
 // =============================================================================
-// Aggressive Shutdown Test - Verifies automatic shutdown_guard protection
+// Aggressive Shutdown Test - Verifies automatic teardown under load
 // =============================================================================
 
-TEST_CASE("Aggressive Shutdown Test: Automatic shutdown_guard protection") {
+TEST_CASE("Aggressive Shutdown Test: Automatic teardown under load") {
     // TEST OBJECTIVE:
     // Verify that proper use of begin_shutdown() prevents race condition
     //

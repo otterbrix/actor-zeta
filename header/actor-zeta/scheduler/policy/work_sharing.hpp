@@ -51,12 +51,6 @@ namespace actor_zeta { namespace scheduler {
             enqueue(self->parent(), std::move(node));
         }
 
-        template<class Worker, class Resumable>
-        void internal_enqueue(Worker* self, Resumable* resumable) {
-            auto node = std::make_unique<job_ptr>(resumable, &scheduler::detail::resume_impl<Resumable>);
-            enqueue(self->parent(), std::move(node));
-        }
-
         template<class Worker>
         void resume_job_later(Worker* self, std::unique_ptr<job_ptr> node) {
             enqueue(self->parent(), std::move(node));

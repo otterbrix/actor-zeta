@@ -161,15 +161,6 @@ namespace actor_zeta { namespace detail {
             return storage_.value_;
         }
 
-        [[nodiscard]] bool empty() const noexcept {
-            assert(!was_moved_from_ && "empty() on moved-from storage!");
-            return !has_value_;
-        }
-
-        [[nodiscard]] bool has_value() const noexcept {
-            assert(!was_moved_from_ && "has_value() on moved-from storage!");
-            return has_value_;
-        }
     };
 
     // Nothing to store, but the same shape as result_storage<T>: shared_state<T> is

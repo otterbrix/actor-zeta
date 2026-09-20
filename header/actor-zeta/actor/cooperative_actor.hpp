@@ -617,7 +617,6 @@ namespace actor_zeta { namespace actor {
     protected:
         explicit cooperative_actor(std::pmr::memory_resource* in_resource)
             : actor_mixin<Actor>()
-            , shutdown_guard_(this)
             , resource_(check_ptr(in_resource))
             , current_message_(nullptr)
             , mailbox_()
@@ -675,47 +674,6 @@ namespace actor_zeta { namespace actor {
             }
         }
 
-        void begin_shutdown() noexcept {
-            auto current = state_.load(std::memory_order_acquire);
-            int cas_attempts = 0;
-
-            while (!is_destroying(current)) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && "begin_shutdown: CAS livelock!");
-#else
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
-                }
-#endif
-                auto desired = set_destroying(current);
-                if (state_.compare_exchange_weak(current, desired,
-                                                 std::memory_order_release,
-                                                 std::memory_order_acquire)) {
-                    break;
-                }
-            }
-
-            wait_for_activity_to_drain();
-        }
-
-        struct shutdown_guard_t {
-            cooperative_actor* self_;
-
-            explicit shutdown_guard_t(cooperative_actor* self) noexcept
-                : self_(self) {}
-
-            ~shutdown_guard_t() noexcept {
-                self_->begin_shutdown();
-            }
-
-            shutdown_guard_t(const shutdown_guard_t&) = delete;
-            shutdown_guard_t& operator=(const shutdown_guard_t&) = delete;
-            shutdown_guard_t(shutdown_guard_t&&) = delete;
-            shutdown_guard_t& operator=(shutdown_guard_t&&) = delete;
-        };
-
         // Waits out everything that can still touch this actor's members: the thread
         // holding `running`, and any sender already past enqueue_impl's gate. Callers
         // must have published `destroying` first, or a sender can slip in behind us.
@@ -762,8 +720,6 @@ namespace actor_zeta { namespace actor {
         MailBox& mailbox() noexcept {
             return mailbox_;
         }
-
-        shutdown_guard_t shutdown_guard_;
 
         std::pmr::memory_resource* resource_;
         mailbox::message* current_message_;

@@ -16,6 +16,5 @@ namespace actor_zeta::detail::state_flags {
 
     // Composite masks
     inline constexpr std::uint8_t result_set    = value_set | error_set;
-    inline constexpr std::uint8_t both_released = promise_released | future_released;
 
 } // namespace actor_zeta::detail::state_flags

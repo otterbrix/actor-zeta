@@ -42,7 +42,6 @@ TEST_CASE("state_flags: basic flag values should exist") {
 
 TEST_CASE("state_flags: composite masks") {
     REQUIRE(state_flags::result_set == (state_flags::value_set | state_flags::error_set));
-    REQUIRE(state_flags::both_released == (state_flags::promise_released | state_flags::future_released));
 }
 
 TEST_CASE("state_flags: flags are non-overlapping") {
