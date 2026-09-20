@@ -530,6 +530,17 @@ namespace actor_zeta { namespace actor {
         scheduler::resume_info park(Finalize& finalize,
                                     CheckRaceWindow& check_race_window,
                                     size_t handled) noexcept {
+            // Parking a LIVE behavior is the lost wakeup this whole ordering exists to
+            // prevent: awaiting pairs with keep_scheduled = false, so the actor would
+            // leave with no job in any queue and a continuation nobody will ever drain.
+            // Every caller is dominated by an is_busy() check that returns `resume`
+            // first -- this makes that argument a checked invariant instead of a
+            // property of the control flow that a future edit could quietly break.
+            //
+            // done() is "no behavior, or one parked at final_suspend", i.e. exactly the
+            // complement of the state in question.
+            assert(current_behavior_.done() && "park() with a live behavior -- lost wakeup");
+
             auto result = mailbox().try_block()
                               ? scheduler::resume_result::awaiting
                               : scheduler::resume_result::resume;
