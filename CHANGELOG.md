@@ -82,6 +82,11 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   `test/future-state-fixes/main.cpp::"Concurrent: is_ready acquire synchronizes
   side effect on shared_state"` — ported from the removed `test/slot-refcount/`
   to preserve release-acquire coverage on the surviving `shared_state` type.
+- **`promise<T>::exception(std::exception_ptr)`**, symmetric to
+  `error(std::error_code)` and guarded on `__cpp_exceptions`. Filling a promise by
+  hand is a supported pattern -- a router takes `msg->get_result_promise<T>()` and
+  completes it itself -- and a router that catches something needs a channel that
+  does not flatten it to a code.
 
 ### Changed
 - **An actor suspended on `co_await` is no longer parked**, and `resume()` /
@@ -99,6 +104,23 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 - **`make_message()` API**: Removed sender address parameter
 - **`enqueue_impl()` return type**: Changed to `std::pair<bool, enqueue_result>` (bool first)
 - **`behavior()` signature**: Returns `behavior_t` (coroutine), use `co_await dispatch(...)` inside
+- **`actor_state` widened from `uint8_t` to `uint32_t`.** The three flags keep the
+  low bits; the count of in-flight senders lives above them. One word means one
+  modification order, so a sender and the destructor cannot miss each other and
+  neither of the two `seq_cst` fences a separate counter would need is required.
+  Five spare bits would have capped the count at 31, and the 32nd registration
+  would have carried into a bit that does not exist.
+- **`shared_state<void>` is no longer a separate specialization.** 95 of its 104
+  lines were byte-identical to the primary template, including the
+  `#ifdef __cpp_exceptions` block, twice. Layout is unchanged, measured both ways.
+- **`try_schedule_after_enqueue` is now `leave_and_maybe_schedule`.** It drops the
+  sender's registration and claims the `scheduled` bit in the same
+  read-modify-write; splitting them would leave a window in which the sender is
+  uncounted and has not claimed yet. The selection is bit-for-bit the old one.
+- **The CAS livelock guard prints before aborting, in release too.** It used to be
+  `assert` in debug and a bare `std::terminate()` in release -- the same refusal
+  written twice, silently the second time.
+- Comments and CI notes no longer name specific consuming projects.
 
 ### Added (earlier)
 - Compile-time check for `T&&` to move-only types in coroutines (GCC 11.4 bug workaround)
@@ -106,11 +128,39 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 - Cross-thread stress tests for `unique_future` (`test/race-condition/`)
 
 ### Fixed
-- Cross-thread race condition in `unique_future` (PR #182): the lock-free CAS
-  handshake between producer and consumer continuation now lives in a single
-  `future_awaiter_mixin`, consumed by both promise types (`unique_future` and
-  `behavior_t`) instead of being duplicated in each.
-- Clang-14 compatibility: Structured bindings cannot be captured in lambdas
+- **Every public header now compiles on its own.** `detail/behavior_t.hpp`
+  referenced a concept defined only in `detail/future.hpp`; both files carried a
+  near-identical copy, and one of them drifted out of scope. The concept now has
+  one home in `detail/type_traits.hpp`. `actor/dispatch_traits.hpp` was missing
+  `<cassert>` and a complete `actor::address_t`, and `actor/implements.hpp` and
+  `send.hpp` inherited both failures through it. A new
+  `test/header-selfsufficiency` target generates one translation unit per header
+  by walking the tree, so a new header is covered without anyone listing it.
+- **Extracting from a future that holds no value is refused** rather than
+  reading an inactive union member. Applies to `take_ready()`, both `get()`
+  overloads on `result_storage`, and `co_await`. See the migration guide.
+- **`co_await send(...)` no longer compiles.** It could never complete. See the
+  migration guide.
+- **A use-after-free during teardown.** `enqueue_impl` checked `is_destroying`
+  and then pushed, while the destructor waited only on the `running` bit -- and a
+  sender is not running. The destructor could finish and free the mailbox with a
+  sender inside `push_front`. Senders now register in the same atomic word that
+  carries `destroying`, and the destructor waits for the count to drain.
+- **`exponential_backoff` shifted by 32.** `1 << (attempt - 10)` was unbounded:
+  at attempt 41 it produced `INT_MIN` microseconds, a sleep that does not sleep,
+  and from 42 it was undefined behaviour. Reached whenever a teardown wait ran
+  longer than about 22ms. The exponent is capped now, and a ubsan job was added
+  to CI -- asan and tsan were green throughout.
+- **`try_unblock()` had no caller**, which left `blocked()` meaning two different
+  things. `park()` blocks the inbox on the way out; `resume_impl` now unblocks it
+  on the way in. Without that, a concurrent `send()` to a running actor took the
+  `unblocked_reader` branch and was handed `needs_sched` for an actor that was
+  already running -- a second job node for one actor.
+- **A contended `resume()` reported `done`.** See the migration guide.
+- **A user exception no longer kills the process** and now reaches the caller.
+  See the migration guide.
+- **`take_ready()` for `void` never marked the result consumed**, so
+  `holds_value()` kept reporting `true` for a consumed `unique_future<void>`.
 
 ## [2025-01] - Major Refactoring
 
@@ -154,6 +204,132 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 ---
 
 ## Migration Guides
+
+### `co_await send(...)` no longer compiles (Unreleased)
+
+It never could complete. `send()` returns `{needs_sched, future}`, where
+`needs_sched` is the obligation to put the target in a run queue and nothing in
+the library discharges it. An awaiter can only hand it back from
+`await_resume()` -- after the wait -- and the wait cannot finish until the target
+has run. A coroutine holds an `address_t` and no scheduler, so it cannot
+discharge the obligation itself. The actor spun in the run queue forever, with no
+diagnostic.
+
+It is a `static_assert` now, naming the two-step form.
+
+```cpp
+// Before -- compiles, suspends, never resumes
+auto [needs_sched, result] = co_await send(target, &Target::compute, x);
+
+// After -- take the obligation, discharge it, then await
+auto [needs_sched, f] = send(target, &Target::compute, x);
+if (needs_sched) {
+    scheduler->enqueue(target);
+}
+auto result = co_await std::move(f);
+```
+
+If the coroutine has no scheduler to call, record the obligation somewhere its
+driver reads and discharge it there -- that is what the actor's own worker does
+with the `resume` verdict. If the target drives itself (its `enqueue_impl`
+returns `needs_sched == false` unconditionally and it wakes its own loop), the
+two-step form collapses to consuming the pair in place:
+
+```cpp
+auto sent = send(target, &Target::compute, x);
+auto result = co_await std::move(sent.second);
+```
+
+### Extraction refuses on a future that holds no value (Unreleased)
+
+`take_ready()` and `co_await` used to assert and then read the value anyway, so
+under `NDEBUG` a state carrying an error and no value move-constructed a `T` out
+of bytes that were never written. That state is ordinary: a `send()` to a closing
+mailbox cancels the promise. The extraction points now refuse in every build and
+say why.
+
+`is_ready()` is not a value gate -- it reports `promise_released`, which a
+promise dying without a value also sets.
+
+```cpp
+// Before -- undefined behaviour in Release when the send was cancelled
+while (!f.is_ready()) { std::this_thread::yield(); }
+auto value = std::move(f).take_ready();
+
+// After -- gate on failed()
+while (!f.is_ready()) { std::this_thread::yield(); }
+if (f.failed()) {
+    // f.error() says why: operation_canceled, broken_pipe, interrupted,
+    // state_not_recoverable
+    return;
+}
+auto value = std::move(f).take_ready();
+```
+
+`co_await` has no error path, so a `co_await` of a cancelled future refuses as
+well. Observe cancellation by polling, or enable exceptions -- see below.
+
+### A contended `resume()` reports `awaiting`, not `done` (Unreleased)
+
+When `resume()` cannot acquire the actor, another thread holds it and will
+discharge the obligation. The verdict is now `awaiting` -- "drop this node, the
+wakeup belongs to somebody else" -- which is what the worker already did with it.
+`done` means finished, and a driver that treats it that way retired an actor that
+was merely contended.
+
+```cpp
+// A hand-written driver that stopped on `done`
+switch (info.result) {
+    case resume_result::resume:   requeue(actor); break;
+    case resume_result::awaiting: /* drop the node */ break;
+    case resume_result::done:     /* NOW only reachable during teardown */ break;
+}
+```
+
+If your driver treated `done` as "retire this actor", it will now see `awaiting`
+for the contended case, which means the same thing it always meant: drop the
+node and wait to be scheduled again.
+
+### Exceptions reach the caller, and no longer kill the process (Unreleased)
+
+Only with `EXCEPTIONS_DISABLE=OFF`; with `-fno-exceptions` the compiler emits no
+catch wrapper for a coroutine body and none of this applies.
+
+Before, a throw from an actor method reached `behavior_t`'s
+`unhandled_exception()`, which was `assert(false)` + `std::terminate()`. The
+caller meanwhile got `broken_pipe` from the destructor of a promise that never
+had `set_value` called on it -- told that something failed, never what.
+
+`dispatch()` now catches and settles the caller's promise with the exception.
+
+```cpp
+// The method
+unique_future<int> compute(int x) {
+    if (x < 0) { throw std::runtime_error("negative"); }
+    co_return x * 2;
+}
+
+// The caller, extracting
+auto [needs_sched, f] = send(actor, &Actor::compute, -1);
+if (needs_sched) { scheduler->enqueue(actor); }
+while (!f.is_ready()) { std::this_thread::yield(); }
+try {
+    auto value = std::move(f).take_ready();   // rethrows the original
+} catch (const std::runtime_error& e) {
+    // e.what() == "negative"
+}
+
+// The caller, only polling
+if (f.failed()) {
+    // f.error() == std::errc::interrupted -- distinct from state_not_recoverable,
+    // which is what a promise released without any outcome produces
+}
+```
+
+A throw from `behavior()` itself, past `dispatch()`, has nowhere to go:
+`behavior_t` is the root of the await chain and its result is read by nobody. It
+is reported on stderr and discarded, and the actor goes on to the next message.
+Put work that can throw in a dispatched method, where the throw reaches a caller.
 
 ### `resume()` is `[[nodiscard]]` (Unreleased)
 
