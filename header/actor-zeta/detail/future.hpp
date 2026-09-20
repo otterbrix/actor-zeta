@@ -451,6 +451,21 @@ namespace actor_zeta {
                 return res;
             }
 
+            // The SAME predicate the runtime path above uses, lifted so a static_assert
+            // and extract_resource_impl() can never disagree about a type.
+            template<typename U>
+            static constexpr bool supplies_resource() noexcept {
+                using decayed = std::decay_t<U>;
+                if constexpr (std::is_same_v<decayed, std::pmr::memory_resource*>) {
+                    return true;
+                } else if constexpr (std::is_pointer_v<decayed>) {
+                    return detail::has_resource_method<
+                        std::remove_pointer_t<std::remove_reference_t<U>>>;
+                } else {
+                    return detail::has_resource_method<std::remove_reference_t<U>>;
+                }
+            }
+
             static std::pmr::memory_resource* extract_resource_from_args() noexcept {
                 return nullptr;
             }
@@ -466,15 +481,28 @@ namespace actor_zeta {
                 return nullptr;
             }
 
+            // Zero arguments means there is nothing that could carry a memory resource.
+            // That is a property of the coroutine's SIGNATURE, so it is decided here
+            // rather than aborted at run time. Dependent on a defaulted parameter so it
+            // only fires when this overload is actually selected.
+            template<typename Dependent = PromiseDerived>
             [[noreturn]] static std::pmr::memory_resource* extract_resource_or_abort() noexcept {
-                assert(false && "Coroutine must be defined inline (GCC doesn't pass 'this' for out-of-line methods)");
+                static_assert(sizeof(Dependent) == 0,
+                              "a unique_future<T> coroutine must be an actor member function defined inline (GCC does not pass 'this' for out-of-line methods), or take a std::pmr::memory_resource* argument");
                 std::abort();
             }
 
             template<typename First, typename... Rest>
             RETURNS_NONNULL static std::pmr::memory_resource* extract_resource_or_abort(First&& first, Rest&&... rest) noexcept {
+                // Whether ANY argument can supply a resource is a property of the types, so
+                // decide it here. The pointer merely being null at run time is not, which is
+                // what the assert below still covers.
+                static_assert((supplies_resource<First>() || ... || supplies_resource<Rest>()),
+                              "no argument of this coroutine can supply a memory resource -- "
+                              "make it an actor member function (so `this` is in the pack) or "
+                              "pass a std::pmr::memory_resource*");
                 auto* res = extract_resource_from_args(std::forward<First>(first), std::forward<Rest>(rest)...);
-                assert(res != nullptr && "Coroutine must be actor member function with resource() method");
+                assert(res != nullptr && "resource() returned null");
                 if (!res) {
                     std::abort();
                 }

@@ -210,6 +210,20 @@ namespace actor_zeta {
 
         template<auto SearchPtr, auto... MethodPtrs>
         static constexpr uint64_t find_method_index() {
+            // Both the searched-for pointer and the registered list are template
+            // parameters, so "is it registered?" is decidable here, at compile time.
+            //
+            // Falling back to index 0 is not a recoverable default: msg_id<Actor, M>
+            // would silently collapse onto the FIRST registered method, the matching
+            // `case msg_id<...>` in behavior() would duplicate another case label, and
+            // the compiler's diagnostic would point at an unrelated line. A
+            // static_assert names the actual mistake at the actual call site.
+            static_assert(sizeof...(MethodPtrs) > 0,
+                          "dispatch_traits for this actor registers no methods");
+            static_assert((is_same_ptr_v<SearchPtr, MethodPtrs> || ...),
+                          "this method is not registered in the actor's dispatch_traits -- "
+                          "add it to `using dispatch_traits = actor_zeta::dispatch_traits<...>`");
+
             constexpr bool matches[] = {is_same_ptr_v<SearchPtr, MethodPtrs>...};
 
             for (std::size_t i = 0; i < sizeof...(MethodPtrs); ++i) {
