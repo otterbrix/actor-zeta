@@ -1,118 +1,86 @@
 # Promise/Future Guide
 
-Async request-response pattern using `unique_future<T>`.
+Request-response over `unique_future<T>`. `header/actor-zeta/detail/future.hpp` is the
+reference; this page shows the shapes that work and names the traps.
 
-## Overview
+## Handler
 
-**Features:** C++20 coroutines (`co_await`, `co_return`), fire-and-forget, request-response, PMR allocation.
-
-## Basic Usage
-
-### Handler (coroutine)
+Every actor method returns `unique_future<T>` and is a coroutine.
 
 ```cpp
 class Worker : public basic_actor<Worker> {
 public:
-    unique_future<int> compute(int x) {
-        co_return x * 2;  // Must use co_return
-    }
+    unique_future<int> compute(int x) { co_return x * 2; }
 
-    unique_future<void> process() {
-        co_return;  // co_return for void
-    }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<
-        &Worker::compute, &Worker::process>;
-
-    explicit Worker(std::pmr::memory_resource* res)
-        : basic_actor<Worker>(res) {}
+    using dispatch_traits = actor_zeta::dispatch_traits<&Worker::compute>;
+    explicit Worker(std::pmr::memory_resource* res) : basic_actor<Worker>(res) {}
 
     behavior_t behavior(mailbox::message* msg) {
-        auto cmd = msg->command();
-        if (cmd == msg_id<Worker, &Worker::compute>) {
+        if (msg->command() == msg_id<Worker, &Worker::compute>) {
             co_await dispatch(this, &Worker::compute, msg);
-        } else if (cmd == msg_id<Worker, &Worker::process>) {
-            co_await dispatch(this, &Worker::process, msg);
         }
     }
 };
 ```
 
-### Caller
+## Caller
+
+`send()` returns `std::pair<bool, unique_future<T>>`. The bool is the obligation to
+schedule the target; nothing in the library discharges it for you.
 
 ```cpp
-// send() returns std::pair<bool, unique_future<T>>
-// - first: needs_scheduling (true if actor needs to be scheduled)
-// - second: the future
-
-// Method 1: co_await in coroutine (recommended)
+// 1. Inside an actor coroutine
 unique_future<int> caller() {
     auto [needs_sched, future] = send(worker.get(), &Worker::compute, 42);
     if (needs_sched) scheduler->enqueue(worker.get());
-    int result = co_await std::move(future);
-    co_return result;
+    co_return co_await std::move(future);
 }
 
-// Method 2: drive from outside a coroutine.
-//   cross-thread (scheduler worker produces): poll, yielding between checks
-//   same-thread (no scheduler): pump the actor yourself with resume()
+// 2. Outside any coroutine: poll. A scheduler worker produces; yield between checks.
 auto [needs_sched, future] = send(worker.get(), &Worker::compute, 42);
 if (needs_sched) scheduler->enqueue(worker.get());
-
 while (!future.is_ready()) { std::this_thread::yield(); }
-if (future.failed()) {          // is_ready() alone is not a value gate -- see below
-    handle(future.error());
-} else {
-    int result = std::move(future).take_ready();
-}
+if (future.failed()) { handle(future.error()); }
+else { int result = std::move(future).take_ready(); }
 
-// Method 3: Fire-and-forget
+// 3. Fire-and-forget
 auto [_, fut] = send(logger.get(), &Logger::log, "message");
-fut.detach();  // Ignore result
+fut.detach();
 ```
 
-The blocking `get()` / `wait()` / `available()` API was removed (see CHANGELOG):
-there is no waiting method on `unique_future` at all. The future is brought to
-ready externally — a `co_await` inside a coroutine, a pump of the producing actor,
-or an external producer thread — and the value is then extracted with the
-non-blocking `take_ready()`.
+`co_await send(...)` is a compile error. `co_await` on a `unique_future` works only
+inside an actor coroutine; a plain coroutine has no `operator co_await` and must poll
+(`examples/external-drive/`).
 
-## API Reference
+## API
 
-| Method | Description |
-|--------|-------------|
-| `co_await std::move(f)` | Wait inside a coroutine (primary API) |
-| `is_ready() const` | Non-blocking poll: has `release_promise()` been called? |
-| `take_ready() &&` | Extract the value — **asserts** the future is ready (no waiting). Pair with `co_await`, a poll loop, or external completion. |
-| `failed() const` | Future completed with an error |
-| `error() const` | Returns the error code (default-constructed if none) |
-| `detach()` | Fire-and-forget release |
-| `valid() const` | Future has a state (not moved-from) |
+| Method | Meaning |
+|--------|---------|
+| `co_await std::move(f)` | Wait inside an actor coroutine; refuses (aborts) if the future settled without a value |
+| `is_ready()` | The `promise_released` bit. Not a value gate: a promise that dies without a value sets it too |
+| `failed()` | Settled with an error code |
+| `error()` | The code, or a default-constructed `std::error_code` |
+| `take_ready() &&` | Extract. Requires readiness; refuses (aborts) in every build if there is no value; with exceptions enabled, rethrows a captured exception first |
+| `detach()` | Release without consuming |
+| `valid()` | Not moved-from |
 
-**`is_ready()` alone is not a readiness gate.** It is the `promise_released` bit,
-which a promise that dies without a value sets too — a cancelled producer
-(`promise<T>::error(std::make_error_code(std::errc::operation_canceled))`), a
-dropped promise (`broken_pipe`), an actor torn down with queued work. In every
-one of those cases a poll loop keyed on `is_ready()` alone falls straight through
-to `take_ready()` on a future that carries no value, and `take_ready()` only
-*asserts* the value is there — an assert that is gone under `NDEBUG`, which is how
-a Release build ships. So always check `failed()` before extracting, and bound the
-spin so a producer that never completes fails visibly instead of hanging.
+The trap: `is_ready()` alone lets a poll loop fall through to `take_ready()` on a
+future with no value. That state is ordinary: a `send()` to a closing mailbox
+(`operation_canceled`), a promise dropped unsettled (`broken_pipe`), a promise released
+with no outcome (`state_not_recoverable`), a method that threw (`interrupted`). Check
+`failed()` first, and bound every spin so a producer that never runs fails visibly.
 
 ## Patterns
 
-### Multiple Futures
+### Many futures
 
 ```cpp
 std::vector<unique_future<int>> futures;
-futures.reserve(workers.size());  // Required!
-
 for (auto& worker : workers) {
     auto [needs_sched, future] = send(worker.get(), &Worker::compute, data);
     if (needs_sched) scheduler->enqueue(worker.get());
     futures.push_back(std::move(future));
 }
-
 for (auto& future : futures) {
     while (!future.is_ready()) { std::this_thread::yield(); }
     if (future.failed()) { continue; }
@@ -120,28 +88,18 @@ for (auto& future : futures) {
 }
 ```
 
-### Timeout (poll with deadline)
+### Deadline
 
-`unique_future` has no built-in timeout or `cancel()`. Either build your own
-deadline-poll loop using `is_ready()`, or have the producer set
-`std::errc::operation_canceled` (via `promise::error`) from another path:
+No built-in timeout or `cancel()`. Poll against a clock; a producer that wants to
+cancel calls `promise<T>::error(std::make_error_code(std::errc::operation_canceled))`.
 
 ```cpp
-auto [needs_sched, future] = send(worker.get(), &Worker::slow_task, data);
-if (needs_sched) scheduler->enqueue(worker.get());
-
 auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-while (!future.is_ready()) {
-    if (std::chrono::steady_clock::now() > deadline) {
-        future.detach();           // give up on this future
-        break;
-    }
+while (!future.is_ready() && std::chrono::steady_clock::now() < deadline) {
     std::this_thread::yield();
 }
-// Gate on failed() as well: is_ready() is only the promise_released bit.
-if (future.is_ready() && !future.failed()) {
-    int result = std::move(future).take_ready();
-}
+if (!future.is_ready())      { future.detach(); }   // give up; the producer settles the state on its own
+else if (!future.failed())   { int result = std::move(future).take_ready(); }
 ```
 
 ### Chaining
@@ -150,46 +108,50 @@ if (future.is_ready() && !future.failed()) {
 unique_future<int> chain(int x) {
     auto [needs_sched, f] = send(other.get(), &Other::process, x);
     if (needs_sched) scheduler->enqueue(other.get());
-    int r = co_await std::move(f);
-    co_return r + 10;
+    co_return co_await std::move(f) + 10;
 }
 ```
 
-## Best Practices
+### Exceptions
+
+Only with `EXCEPTIONS_DISABLE=OFF`. A throw inside an actor method reaches the
+caller's future: `take_ready()` and `co_await` rethrow it, and a poller sees
+`failed()` with `std::errc::interrupted`. A throw from `behavior()` itself is
+reported on stderr and discarded. With `-fno-exceptions` (the default) failure is
+`failed()` + `error()` and nothing else. CLAUDE.md tables every route.
+
+## Do / Don't
 
 | Do | Don't |
 |----|-------|
-| `co_await` inside coroutines (primary API) | Try `.get()` / `.wait()` / `.available()` — they no longer exist |
-| Gate every `take_ready()` on `is_ready() && !failed()` | Call `take_ready()` after `is_ready()` without checking `failed()` |
-| Pair `take_ready()` with a guarantee of readiness | Call `take_ready()` on a future you haven't driven |
-| `reserve()` the vector before pushing futures | Let the vector reallocate (move-only futures) |
-| Stop the scheduler before destroying actors | Destroy actors with pending futures |
-| Fire-and-forget via `detach()` for logging | Store futures you'll never consume |
+| `co_await` inside actor coroutines | Call `.get()` / `.wait()` / `.available()`: they no longer exist |
+| Gate `take_ready()` on `is_ready() && !failed()` | Extract after `is_ready()` alone |
+| Bound every poll loop | Spin forever on a producer nobody scheduled |
+| Discharge `needs_sched` before awaiting | `co_await send(...)` |
+| `detach()` futures you will not read | Keep futures you never consume |
+| Stop the scheduler before destroying actors | Destroy an actor the scheduler still holds |
 
-## Ownership Rules
+## Ownership
 
-| State | Owner |
-|-------|-------|
-| `pending` | Mailbox owns message |
-| `ready/error` | Future owns message |
-| Future destroyed early | Mailbox deletes after processing |
+`send()` allocates one `shared_state<T>` from the receiver's memory resource; the
+message carries a pointer to it (`result_slot_`) and the caller holds the
+`unique_future`. `dispatch()` settles it with a value, an error, or an exception. A
+message destroyed before dispatch (closed mailbox, actor torn down with a queued
+message) settles it with `operation_canceled`; a promise destroyed unsettled produces
+`broken_pipe`. The state is freed by whichever side releases last, so a future may
+outlive its actor and reads as `failed()`. The memory resource must outlive both.
 
 ## Debugging
 
-| Issue | Solution |
-|-------|----------|
-| `take_ready()` aborts in debug | Future isn't ready: forgot `co_await`, pumped the wrong actor, or the handler never `co_return`ed |
-| A poll loop hits its bound | The producer never makes progress — wrong actor, wrong scheduler, or the future was cancelled |
-| Use-after-free on actor destruction | Stop the scheduler / wait all futures BEFORE the actor is destroyed |
-
-## Limitations
-
-- No built-in timeout — see the deadline-poll pattern above.
-- No exceptions — observe failure via `failed()` + `error()`.
-- Single consumer — `unique_future` is move-only.
-- Actor must outlive any future it produced (see CLAUDE.md "Actor Shutdown").
+| Symptom | Cause |
+|---------|-------|
+| `take_ready()` aborts with "holds no value" | The future settled with an error; check `failed()` first |
+| `take_ready()` asserts "not ready" | Nothing drove the producer: `needs_sched` not discharged, wrong actor pumped, or the handler never returned |
+| Poll loop hits its bound | Same as above, or the send was cancelled |
+| "double co_await on unique_future" assert | Single consumer: a future is awaited once |
+| Use-after-free in `resume()` | The actor was destroyed while a scheduler still held it; see CLAUDE.md "Actor Shutdown" |
 
 ## See Also
 
-- `examples/coroutine/` - Working examples
-- `test/coroutines/` - Test cases
+- `examples/coroutine/`, `examples/external-drive/`
+- `test/coroutines/`, `test/cancelled-extraction/`, `test/exception-propagation/`

@@ -1,51 +1,21 @@
 # actor-zeta
 
-[![GCC](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml/badge.svg?branch=develop)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml)
-[![Clang](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml/badge.svg?branch=develop)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml)
+[![GCC](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml/badge.svg?branch=master)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_gcc.yaml)
+[![Clang](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml/badge.svg?branch=master)](https://github.com/cyberduckninja/actor-zeta/actions/workflows/ubuntu_clang.yaml)
 
-C++20 actor model with coroutines, PMR allocators, and no RTTI/exceptions.
+C++20 actor model: cooperative scheduling, request-response over coroutines and
+`unique_future<T>`, `std::pmr` allocation, no RTTI, exceptions optional.
 
-## Features
-
-- **Coroutines**: `co_await`, `co_return`
-- **unique_future<T>**: Async request-response
-- **std::pmr**: Memory resource allocation
-- **No RTTI/exceptions**: `-fno-rtti -fno-exceptions`
+Everything lives under `header/`. Link the `actor-zeta` CMake target, or include
+`<actor-zeta/src.hpp>` in exactly one translation unit to compile the `.ipp`
+implementations yourself.
 
 ## Requirements
 
-- C++20 (GCC 11+, Clang 12+)
-- CMake >= 3.15
-- Conan 2.x
-
-## Quick Start
-
-### Request-Response
-
-```cpp
-class Worker : public actor_zeta::basic_actor<Worker> {
-public:
-    actor_zeta::unique_future<int> compute(int x) {
-        co_return x * 2;
-    }
-
-    using dispatch_traits = actor_zeta::dispatch_traits<&Worker::compute>;
-
-    explicit Worker(std::pmr::memory_resource* res)
-        : actor_zeta::basic_actor<Worker>(res) {}
-
-    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
-        if (msg->command() == actor_zeta::msg_id<Worker, &Worker::compute>) {
-            co_await actor_zeta::dispatch(this, &Worker::compute, msg);
-        }
-    }
-};
-
-// Usage - send() returns pair<bool, future>
-auto [needs_sched, future] = actor_zeta::send(worker.get(), &Worker::compute, 42);
-if (needs_sched) scheduler->enqueue(worker.get());
-int result = co_await std::move(future);
-```
+- C++20. CI builds GCC 11, 12, 13 and Clang 14, 16, 17, 18 on Ubuntu 22.04, and
+  AppleClang on macOS 14 and 15.
+- CMake 3.15+
+- Conan 2 for the test and example dependencies (Catch2, Asio, benchmark)
 
 ## Build
 
@@ -57,26 +27,25 @@ cmake -B build -GNinja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DALLOW_TESTS=ON \
   -DCMAKE_TOOLCHAIN_FILE=./build/Debug/generators/conan_toolchain.cmake
-
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-## CMake Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `ALLOW_EXAMPLES` | OFF | Build examples |
-| `ALLOW_TESTS` | OFF | Build tests |
+| Option | Default | Effect |
+|--------|---------|--------|
+| `ALLOW_EXAMPLES` | OFF | build `examples/` |
+| `ALLOW_TESTS` | OFF | build `test/` (Catch2) |
+| `ALLOW_BENCHMARK` | OFF | build `benchmark/` |
 | `RTTI_DISABLE` | ON | `-fno-rtti` |
-| `EXCEPTIONS_DISABLE` | ON | `-fno-exceptions` |
+| `EXCEPTIONS_DISABLE` | ON | `-fno-exceptions`; OFF is a supported mode with its own CI job |
 
-## Documentation
+## Where next
 
-- [CLAUDE.md](CLAUDE.md) - Development guide
-- [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md) - Request-response patterns
-- [CHANGELOG.md](CHANGELOG.md) - Change history
+- [CLAUDE.md](CLAUDE.md) — defining, spawning, messaging and shutting down actors; the rules the code holds to
+- [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md) — `unique_future<T>` shapes that work, and the traps
+- [CHANGELOG.md](CHANGELOG.md) — history and migration guides
+- `examples/` — `coroutine`, `delegation`, `balancer`, `broadcast`, `supervisor`, `external-drive`, `asio`
 
 ## License
 
-BSD-3-Clause license
+BSD-3-Clause
