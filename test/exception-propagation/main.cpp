@@ -58,7 +58,14 @@ namespace {
         using dispatch_traits = actor_zeta::dispatch_traits<&thrower_actor::inner,
                                                             &thrower_actor::outer>;
 
-        behavior_t behavior(mailbox::message*) { co_return; }
+        behavior_t behavior(mailbox::message* msg) {
+            const auto cmd = msg->command();
+            if (cmd == msg_id<thrower_actor, &thrower_actor::inner>) {
+                co_await dispatch(this, &thrower_actor::inner, msg);
+            } else if (cmd == msg_id<thrower_actor, &thrower_actor::outer>) {
+                co_await dispatch(this, &thrower_actor::outer, msg);
+            }
+        }
     };
 
 } // namespace
@@ -161,6 +168,34 @@ int main() {
             rethrown = true;
         }
         check(rethrown, "promise<void>::exception(): extraction rethrows");
+    }
+
+    // Through send() and dispatch(), which is how every caller actually reaches a
+    // method. The exception has to cross into the CALLER's state: dispatch's
+    // co_await rethrows, and without a catch there the caller's promise is only ever
+    // settled by ~promise, with broken_pipe and no exception.
+    {
+        auto driven = spawn<thrower_actor>(resource);
+        auto sent = send(driven.get(), &thrower_actor::inner, -1);
+        while (driven->resume(4).messages_processed != 0) {
+        }
+
+        check(sent.second.is_ready(), "send(): a thrown body still completes the future");
+        check(sent.second.failed(), "send(): and it is reported as failed");
+        check(sent.second.error() == std::make_error_code(std::errc::interrupted),
+              "send(): with the interrupted code, not broken_pipe");
+
+        bool rethrown = false;
+        std::string what;
+        try {
+            const int value = std::move(sent.second).take_ready();
+            std::printf("     take_ready() returned %d instead of rethrowing\n", value);
+        } catch (const std::runtime_error& e) {
+            rethrown = true;
+            what = e.what();
+        }
+        check(rethrown, "send(): extraction rethrows");
+        check(what == "inner said no", "send(): the original exception crossed actors");
     }
 
     // The success path must be untouched by any of this.

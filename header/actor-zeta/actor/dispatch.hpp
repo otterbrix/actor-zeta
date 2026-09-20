@@ -103,13 +103,37 @@ namespace actor_zeta {
         msg->transfer_ownership();   // ~message won't run cleanup anymore
         auto method_future = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
 
-        if constexpr (std::is_void_v<value_type>) {
-            co_await std::move(method_future);
-            result_promise.set_value();
-        } else {
-            auto value = co_await std::move(method_future);
-            result_promise.set_value(std::move(value));
+        // The catch is what carries a user exception ACROSS actors.
+        //
+        // Without it, the co_await below rethrows into this coroutine's body, the body
+        // unwinds, and result_promise -- a local -- is destroyed before the handler
+        // runs. ~promise then settles the caller with broken_pipe and no exception,
+        // while THIS coroutine's own state captures the exception that nobody reads.
+        // The caller is told something failed and never what.
+        //
+        // Worse, the exception then reaches behavior_t's co_await of dispatch(), whose
+        // unhandled_exception() is the end of the line.
+        //
+        // Guarded rather than unconditional: under -fno-exceptions the compiler emits
+        // no catch wrapper for a coroutine body at all, so there is nothing to catch
+        // and promise<T>::exception() does not exist.
+#ifdef __cpp_exceptions
+        try {
+#endif
+            if constexpr (std::is_void_v<value_type>) {
+                co_await std::move(method_future);
+                result_promise.set_value();
+            } else {
+                auto value = co_await std::move(method_future);
+                result_promise.set_value(std::move(value));
+            }
+#ifdef __cpp_exceptions
+        } catch (...) {
+            // set_value never ran, so the promise is still unsettled and this is the
+            // only outcome it will get.
+            result_promise.exception(std::current_exception());
         }
+#endif
         co_return;
     }
 
