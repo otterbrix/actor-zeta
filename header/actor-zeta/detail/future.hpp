@@ -62,22 +62,10 @@ namespace actor_zeta {
             requires(!std::is_void_v<T> && std::is_constructible_v<T, U&&>)
         void set_value(U&& value) noexcept {
             assert(state_ && "set_value() on moved-from promise");
-            state_->set_value(T(std::forward<U>(value)));
-            // Thread safety (Q6): do NOT take/resume the continuation here — the consumer
-            // resumes it in its own actor's resume_impl(), on its own thread.
-            // The finalizing flag must be set before release, or release_future() may
-            // deallocate the state out from under the rest of this function.
-            state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
-            bool cancelled = state_->release_promise();
-            if (cancelled) {
-                state_ = nullptr;
-                return;  // future was already released; state deallocated
-            }
-            if (!state_->try_complete_finalize()) {
-                state_ = nullptr;
-                return;  // future released concurrently; state deallocated
-            }
-            state_ = nullptr;  // ownership transferred
+            // Straight into emplace(): shared_state::set_value forwards, so there is no
+            // longer a materialised T to move out of.
+            state_->set_value(std::forward<U>(value));
+            settle();
         }
 
         // Set value (void) — same protocol as the non-void overload above.
@@ -86,17 +74,7 @@ namespace actor_zeta {
         {
             assert(state_ && "set_value() on moved-from promise");
             state_->set_value();
-            state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
-            bool cancelled = state_->release_promise();
-            if (cancelled) {
-                state_ = nullptr;
-                return;
-            }
-            if (!state_->try_complete_finalize()) {
-                state_ = nullptr;
-                return;
-            }
-            state_ = nullptr;
+            settle();
         }
 
         // Also the cancellation channel:
@@ -104,18 +82,7 @@ namespace actor_zeta {
         void error(std::error_code ec) noexcept {
             assert(state_ && "error() on moved-from promise");
             state_->set_error(ec);
-            state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
-                                    std::memory_order_release);
-            bool cancelled = state_->release_promise();
-            if (cancelled) {
-                state_ = nullptr;
-                return;
-            }
-            if (!state_->try_complete_finalize()) {
-                state_ = nullptr;
-                return;
-            }
-            state_ = nullptr;
+            settle();
         }
 
         [[nodiscard]] bool valid() const noexcept {
@@ -129,19 +96,39 @@ namespace actor_zeta {
     private:
         void release_if_needed() noexcept {
             if (state_) {
+                // A promise that dies without an outcome still has to produce one, and
+                // broken_pipe says more than the state_not_recoverable that
+                // release_promise()'s totality repair would otherwise stamp.
                 state_->set_error(std::make_error_code(std::errc::broken_pipe));
-                state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
-                bool cancelled = state_->release_promise();
-                if (cancelled) {
-                    state_ = nullptr;
-                    return;
-                }
-                if (!state_->try_complete_finalize()) {
-                    state_ = nullptr;
-                    return;
-                }
-                state_ = nullptr;
+                settle();
             }
+        }
+
+        // The producer's exit, written once instead of four times. Every public way to
+        // finish a promise -- set_value, set_value(), error, and dying with no outcome
+        // -- writes its result and then lands here.
+        //
+        // Thread safety (Q6): the continuation is NOT taken or resumed here. The
+        // consumer resumes it from its own actor's resume_impl(), on its own thread.
+        //
+        // promise_finalizing has to be published BEFORE release_promise(), or a
+        // concurrent release_future() can deallocate the state out from under the rest
+        // of this function.
+        void settle() noexcept {
+            assert(state_ && "settle() without a state");
+
+            state_->flags_.fetch_or(detail::state_flags::promise_finalizing, std::memory_order_release);
+
+            // release_promise() returning true means it deallocated, so the second call
+            // must not happen -- the short-circuit is the whole logic. Its own answer
+            // then says whether the future side got there first and deallocated instead.
+            // Either way the promise is finished with the state, which is also true when
+            // nobody deallocated, so the value only ever steers the second call.
+            if (!state_->release_promise()) {
+                [[maybe_unused]] const bool state_still_alive = state_->try_complete_finalize();
+            }
+
+            state_ = nullptr;
         }
 
         state_type* state_;
