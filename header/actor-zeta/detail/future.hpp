@@ -250,19 +250,49 @@ namespace actor_zeta {
             return state_;
         }
 
-        // Access to coroutine handle (for propagating awaited state)
+        // Access to the producing coroutine's handle.
+        //
+        // RELIED ON BY DOWNSTREAM: a downstream driver's index tests and a downstream driver's
+        // drive_future.hpp hand-roll the drain with it -- read
+        // promise().awaited_flags_ / awaited_continuation_, then resume the
+        // continuation -- to drive a future from a non-actor thread.
+        //
+        // Withheld once the state reports ready: a finished producer is parked AT its
+        // final suspend point, and resuming a coroutine there is undefined
+        // ([coroutine.handle.resumption]). Withholding it also keeps a reintroduced
+        // self-destroy from silently becoming a use-after-free.
+        //
+        // An empty return is normal, not an error: either a promise<T>-backed future
+        // (no producing coroutine at all) or a producer that has already finished.
         [[nodiscard]] detail::coroutine_handle<promise_type> coroutine_handle() const noexcept {
+            if (!state_ || state_->is_ready()) {
+                return {};
+            }
             return handle_;
         }
 
     private:
         void release() noexcept {
+            // Reclaim the producing frame BEFORE releasing the state.
+            //
+            // done() means the coroutine is parked at final_suspend -- finished, and
+            // nobody else will touch the frame, so it is ours. A frame still mid-body is
+            // NOT ours: releasing the state below sets future_released, and the
+            // producer's own final_awaiter (steps 3/4) destroys it on the way out.
+            // Exactly one of the two paths runs, which is what keeps this free of both
+            // leaks and double frees.
+            //
+            // Order matters: doing this after release_future() would race the producer to
+            // the same frame, and would read done() out of memory it may already have freed.
+            if (handle_ && handle_.done()) {
+                handle_.destroy();
+            }
+            handle_ = {};
+
             if (state_) {
                 state_->release_future();
                 state_ = nullptr;
             }
-            handle_ = {};
-            // DO NOT call handle_.destroy() - coroutine destroys itself in final_suspend
         }
 
         // CRTP base: PromiseDerived is the final promise type.
@@ -335,9 +365,15 @@ namespace actor_zeta {
                             return detail::noop_coroutine();
                         }
 
-                        // 5. Consumer is still alive - symmetric transfer to continuation
-                        // This is safe for method coroutines (same actor context)
-                        self.destroy();
+                        // 5. Consumer is still alive. Do NOT destroy the frame here: the
+                        //    consumer's unique_future is still holding this very handle, and
+                        //    destroying under it is how coroutine_handle() came to return
+                        //    freed memory. Park at final_suspend instead and let the owner
+                        //    reclaim the frame in release() -- the same shape behavior_t has
+                        //    always used.
+                        //
+                        //    Steps 3 and 4 above still destroy, and must: there the future is
+                        //    already gone, so nobody would ever reclaim the frame.
                         return cont ? cont : detail::noop_coroutine();
                     }
 
