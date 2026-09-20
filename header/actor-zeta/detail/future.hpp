@@ -203,12 +203,6 @@ namespace actor_zeta {
             release();
         }
 
-        // === MAIN API: co_await ===
-
-        auto operator co_await() noexcept {
-            return awaiter{state_};
-        }
-
         // === Non-blocking value extraction (post-pump) ===
 
         // take_ready() - extract the value of an already-ready future without blocking.
@@ -260,65 +254,6 @@ namespace actor_zeta {
         [[nodiscard]] detail::coroutine_handle<promise_type> coroutine_handle() const noexcept {
             return handle_;
         }
-
-        // === Awaiter (Variant B+ with CAS) ===
-        // Public so await_transform can access it from other unique_future<U> instantiations
-        struct awaiter {
-            state_type* state_;
-
-            bool await_ready() const noexcept {
-                // Fast path: if result already exists - don't suspend
-                return state_->has_result();
-            }
-
-            detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> h) noexcept {
-                // CAS for setting continuation
-                // This allows detecting double-await (programmer error)
-
-                detail::coroutine_handle<> expected = nullptr;
-                if (state_->continuation_.compare_exchange_strong(
-                        expected, h,
-                        std::memory_order_acq_rel,
-                        std::memory_order_acquire)) {
-
-                    // CAS successful - we set continuation
-                    // Now check: maybe result is already ready?
-                    if (state_->flags_.load(std::memory_order_acquire)
-                            & detail::state_flags::result_set) {
-                        // Result is ready! Try to take continuation back
-                        auto cont = state_->continuation_.exchange(
-                            nullptr, std::memory_order_acquire);
-                        if (cont) {
-                            // We took it - resume ourselves
-                            return cont;
-                        }
-                        // Producer already took it - they will resume us
-                        return detail::noop_coroutine();
-                    }
-
-                    // Result not ready - wait, producer will resume us
-                    return detail::noop_coroutine();
-
-                } else {
-                    // CAS failed - someone already set continuation
-                    // For single-consumer this is a programmer error
-                    assert(false && "double co_await on unique_future is undefined behavior");
-
-                    // In release: result should be ready (producer took old cont)
-                    return h;  // resume ourselves
-                }
-            }
-
-            auto await_resume() {
-                // Check error before returning value
-                assert(!state_->has_error() && "future completed with error");
-                if constexpr (std::is_void_v<T>) {
-                    state_->take_value();
-                } else {
-                    return state_->take_value();
-                }
-            }
-        };
 
     private:
         void release() noexcept {
@@ -581,12 +516,6 @@ namespace actor_zeta {
     unique_future<T> promise<T>::get_future() noexcept {
         assert(state_ && "get_future() on moved-from promise");
         return unique_future<T>(state_);
-    }
-
-    // Free function co_await operator
-    template<typename T>
-    auto operator co_await(unique_future<T>&& f) noexcept {
-        return typename unique_future<T>::awaiter{f.internal_state()};
     }
 
     // Factory functions

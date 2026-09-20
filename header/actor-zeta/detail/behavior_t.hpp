@@ -223,12 +223,6 @@ namespace actor_zeta {
             return flags->load(std::memory_order_acquire) & detail::state_flags::promise_released;
         }
 
-        /// @brief Resume the coroutine (call from resume_impl when awaited future is ready)
-        void resume() noexcept {
-            assert(handle_ && !handle_.done() && "resume() on invalid or done behavior");
-            handle_.resume();
-        }
-
         /// @brief Take the deepest awaited continuation for resuming
         /// @return The continuation handle, or null if none
         [[nodiscard]] detail::coroutine_handle<> take_awaited_continuation() noexcept {

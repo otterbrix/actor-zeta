@@ -90,10 +90,6 @@ namespace actor_zeta::detail {
         }
 
 
-        [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
-            return continuation_.exchange(nullptr, std::memory_order_acq_rel);
-        }
-
         // Returns true if this call deallocated the state (future already released =>
         // cancelled; the continuation must NOT be resumed).
         [[nodiscard]] bool release_promise() noexcept {
@@ -191,10 +187,6 @@ namespace actor_zeta::detail {
 
         void get_value() noexcept {}
         void take_value() noexcept {}
-
-        [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
-            return continuation_.exchange(nullptr, std::memory_order_acq_rel);
-        }
 
 
         // Returns true if this call deallocated the state (future already released =>
