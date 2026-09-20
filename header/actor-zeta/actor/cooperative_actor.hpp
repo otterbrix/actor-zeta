@@ -768,7 +768,13 @@ namespace actor_zeta { namespace actor {
         std::pmr::memory_resource* resource_;
         mailbox::message* current_message_;
         MailBox mailbox_;
-        behavior_t current_behavior_;  // ONE coroutine per actor for behavior()
+        // ONE coroutine per actor for behavior(). Deliberately unreachable from
+        // outside: unique_future::coroutine_handle() hands out the frame of a future
+        // the caller OWNS, and its contract makes serialisation the caller's problem.
+        // The behavior root is owned by nobody outside, and the `running` bit that
+        // would serialise it is private -- so an accessor here would be a public way
+        // to advance an actor's chain off its own thread.
+        behavior_t current_behavior_;
         std::atomic<actor_state> state_{actor_state::idle};
 
 #ifndef NDEBUG

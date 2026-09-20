@@ -33,6 +33,12 @@ namespace actor_zeta {
             }
 
             // immediate start (no initial suspend)
+            // Load-bearing, not a style choice. `suspend_never` means the body has
+            // already run to its first co_await (or to completion) by the time
+            // resume_impl's `current_behavior_ = self()->behavior(msg)` returns, so a
+            // behavior is never observed live-but-not-yet-started. With
+            // `suspend_always` the very next line could hand park() a live frame, and
+            // park() pairs `awaiting` with no job in any queue -- a lost wakeup.
             detail::suspend_never initial_suspend() noexcept { return {}; }
 
             // Q7: always stay suspended at final_suspend; ~behavior_t() destroys the frame.
@@ -62,6 +68,15 @@ namespace actor_zeta {
             // passthrough anywhere: a foreign (e.g. Asio) awaiter would resume the coroutine
             // off its scheduler thread (UAF / threading hazard). External loops integrate by
             // polling our unique_future instead — see the note in future_awaiters.hpp.
+            //
+            // That absence carries more weight than it looks. Because await_transform is a
+            // MEMBER, [expr.await]/3.2 routes EVERY co_await in a behavior through it, so
+            // every suspension point runs propagate_awaited_state() first and publishes
+            // awaited_flags_. That is what makes "a suspended behavior is always is_busy()"
+            // true, and in turn what makes park() unreachable for a live behavior. A third
+            // overload -- or a yield_value -- would create a suspension point that skips the
+            // publication, and the invariant would be gone with no diagnostic.
+            // test/foreign-awaitable-prohibited checks that it stays absent.
 
             // === PMR allocation (same pattern as unique_future) ===
 

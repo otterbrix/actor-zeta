@@ -226,6 +226,14 @@ namespace actor_zeta::detail {
                 return false;
             }
             // Defensive: clear finalizing on unexpected race.
+            //
+            // `true` here is load-bearing, not a default. The caller reads false as "the
+            // state is gone, stop touching it", and final_awaiter turns that into
+            // `self.destroy(); return noop_coroutine()` -- dropping a continuation it was
+            // holding. Reaching this branch means the CAS failed for a reason OTHER than
+            // future_released, i.e. the consumer is still alive and still waiting: return
+            // false and the awaiting coroutine is never resumed. One character from a real
+            // lost wakeup.
             flags_.fetch_and(static_cast<std::uint8_t>(~state_flags::promise_finalizing), std::memory_order_release);
             return true;
         }
