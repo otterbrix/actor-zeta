@@ -18,10 +18,12 @@
 
 #include <cstdio>
 #include <memory_resource>
+#include <thread>
 #include <stdexcept>
 #include <string>
 
 #include <actor-zeta.hpp>
+#include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
 
 using namespace actor_zeta;
@@ -66,6 +68,48 @@ namespace {
                 co_await dispatch(this, &thrower_actor::outer, msg);
             }
         }
+    };
+
+    // Suspends on a pending future first, then throws after being resumed. Every
+    // case above throws BEFORE its first co_await, so await_ready() is true, the
+    // continuation is never parked, and the resume path is never exercised.
+    class late_thrower final : public basic_actor<late_thrower> {
+    public:
+        explicit late_thrower(std::pmr::memory_resource* ptr)
+            : basic_actor<late_thrower>(ptr) {}
+
+        unique_future<int> after_gate() {
+            auto gate = std::move(gate_);
+            co_await std::move(gate);
+            throw std::runtime_error("threw after resuming");
+            co_return 0;
+        }
+
+        // void all the way, for the void branch of owning_awaiter::await_resume.
+        unique_future<void> void_inner() {
+            throw std::runtime_error("void inner said no");
+            co_return;
+        }
+
+        unique_future<void> void_outer() {
+            auto inner = void_inner();
+            co_await std::move(inner);
+            co_return;
+        }
+
+        using dispatch_traits = actor_zeta::dispatch_traits<&late_thrower::after_gate,
+                                                            &late_thrower::void_outer>;
+
+        behavior_t behavior(mailbox::message* msg) {
+            const auto cmd = msg->command();
+            if (cmd == msg_id<late_thrower, &late_thrower::after_gate>) {
+                co_await dispatch(this, &late_thrower::after_gate, msg);
+            } else if (cmd == msg_id<late_thrower, &late_thrower::void_outer>) {
+                co_await dispatch(this, &late_thrower::void_outer, msg);
+            }
+        }
+
+        unique_future<void> gate_;
     };
 
     // Throws from behavior() itself, past dispatch(). Nothing downstream can catch
@@ -231,6 +275,89 @@ int main() {
         again.second.detach();
         const auto second = rude->resume(4);
         check(second.messages_processed == 1, "behavior() throw: the actor survives it");
+    }
+
+    // A throw AFTER a real suspension. The method parks on a pending gate, the gate
+    // is settled by hand, and only the resume that follows throws -- so the exception
+    // travels through the drain path rather than through an await_ready() shortcut.
+    {
+        auto actor2 = spawn<late_thrower>(resource);
+        promise<void> gate(resource);
+        actor2->gate_ = gate.get_future();
+
+        auto sent = send(actor2.get(), &late_thrower::after_gate);
+        const auto suspended = actor2->resume(4);
+        check(suspended.result == scheduler::resume_result::resume,
+              "late throw: the method parked on a pending future");
+        check(!sent.second.is_ready(), "late throw: and the caller is still waiting");
+
+        gate.set_value();
+        while (actor2->resume(4).result == scheduler::resume_result::resume) {
+        }
+
+        check(sent.second.is_ready(), "late throw: settling the gate finishes the caller");
+        bool rethrown = false;
+        std::string what;
+        try {
+            const int value = std::move(sent.second).take_ready();
+            std::printf("     take_ready() returned %d instead of rethrowing\n", value);
+        } catch (const std::runtime_error& e) {
+            rethrown = true;
+            what = e.what();
+        }
+        check(rethrown, "late throw: extraction rethrows");
+        check(what == "threw after resuming", "late throw: the exception from the resumed body");
+    }
+
+    // void all the way: unique_future<void> awaited by another unique_future<void>,
+    // which is the branch of owning_awaiter::await_resume with nothing to return.
+    {
+        auto actor3 = spawn<late_thrower>(resource);
+        auto sent = send(actor3.get(), &late_thrower::void_outer);
+        while (actor3->resume(4).messages_processed != 0) {
+        }
+
+        check(sent.second.failed(), "void chain: the caller is told it failed");
+        bool rethrown = false;
+        std::string what;
+        try {
+            std::move(sent.second).take_ready();
+        } catch (const std::runtime_error& e) {
+            rethrown = true;
+            what = e.what();
+        }
+        check(rethrown, "void chain: extraction rethrows");
+        check(what == "void inner said no", "void chain: the original exception");
+    }
+
+    // Across threads, on a real scheduler -- the shape a caller actually uses.
+    {
+        auto sched = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 8);
+        sched->start();
+        {
+            auto worker = spawn<thrower_actor>(resource);
+            auto [needs_sched, future] = send(worker.get(), &thrower_actor::inner, -1);
+            if (needs_sched) {
+                sched->enqueue(worker.get());
+            }
+            while (!future.is_ready()) {
+                std::this_thread::yield();
+            }
+            check(future.failed(), "cross-thread: reported as failed");
+
+            bool rethrown = false;
+            std::string what;
+            try {
+                const int value = std::move(future).take_ready();
+                std::printf("     take_ready() returned %d instead of rethrowing\n", value);
+            } catch (const std::runtime_error& e) {
+                rethrown = true;
+                what = e.what();
+            }
+            check(rethrown, "cross-thread: extraction rethrows");
+            check(what == "inner said no", "cross-thread: the original exception");
+            sched->stop();   // workers out before the actor goes
+        }
     }
 
     // The success path must be untouched by any of this.
