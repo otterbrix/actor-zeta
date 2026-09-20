@@ -31,14 +31,18 @@ endif()
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     if (EXCEPTIONS_DISABLE)
         message(STATUS "Disable C++ exceptions (MSVC).")
-        string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
-        add_compile_definitions(__EXCEPTIONS_DISABLE__)
+        # Removing every /EH is how MSVC is told not to; adding /EHsc back, as this
+        # used to, turned them ON while __EXCEPTIONS_DISABLE__ said the opposite.
+        # shared_state.hpp raises a #error on exactly that disagreement, so
+        # EXCEPTIONS_DISABLE=ON did not build here at all -- and no MSVC job exists to
+        # notice. _HAS_EXCEPTIONS=0 is the half the MS STL reads.
+        string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+        add_compile_definitions(__EXCEPTIONS_DISABLE__ _HAS_EXCEPTIONS=0)
     endif()
 
     if (RTTI_DISABLE)
         message(STATUS "Disable RTTI (MSVC).")
-        string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+        string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
     endif()
 elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang"))
@@ -50,7 +54,7 @@ elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES 
 
     if (RTTI_DISABLE)
         message(STATUS "Disable RTTI (GNU/Clang).")
-        string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+        string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
     endif()
 endif()
