@@ -172,6 +172,9 @@ namespace actor_zeta { namespace detail {
         }
     };
 
+    // Nothing to store, but the same shape as result_storage<T>: shared_state<T> is
+    // one template for every T, and without these it would need a second copy of
+    // itself just to avoid naming take()/get() on void.
     template<>
     struct result_storage<void> {
         explicit result_storage(std::pmr::memory_resource*) noexcept {}
@@ -181,6 +184,21 @@ namespace actor_zeta { namespace detail {
         result_storage(result_storage&&) noexcept = default;
         result_storage& operator=(const result_storage&) = default;
         result_storage& operator=(result_storage&&) noexcept = default;
+
+        void emplace() noexcept {}
+
+        // `return <void expression>;` in a void function is legal, which is what lets
+        // shared_state::take_value() stay a single body.
+        void take() noexcept {}
+        void get() noexcept {}
+        void get() const noexcept {}
     };
+
+    // The merge is only free if this stays true: shared_state<void> holds one of these
+    // by value, and an empty member lands in the padding after flags_ rather than
+    // growing the allocation. allocate()/deallocate() both pass sizeof() to PMR, so a
+    // growth here would be a real cost on every void future.
+    static_assert(std::is_empty_v<result_storage<void>>,
+                  "result_storage<void> must stay empty");
 
 }} // namespace actor_zeta::detail

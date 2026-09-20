@@ -216,6 +216,13 @@ namespace actor_zeta {
             }
             assert(state_ && state_->has_result() && !state_->has_error()
                    && "take_ready() on a future that is not ready or completed with error");
+            // Marks the result consumed, same as the T overload. It used to skip this --
+            // shared_state<void> was a separate specialization and simply had no
+            // take_value() -- so a consumed unique_future<void> kept reporting
+            // holds_value() == true. Harmless only because nothing in the library reads
+            // holds_value(); it is I3's predicate and it should mean the same thing for
+            // every T.
+            state_->take_value();
             release();
         }
 
