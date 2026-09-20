@@ -29,7 +29,6 @@ namespace actor_zeta { namespace scheduler {
             explicit worker_data(Scheduler*) {}
         };
 
-        // Single enqueue - accepts node (new or reused)
         template<class Coordinator>
         bool enqueue(Coordinator* self, std::unique_ptr<job_ptr> node) {
             std::unique_lock<std::mutex> guard(cast(self).lock);

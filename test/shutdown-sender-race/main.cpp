@@ -1,29 +1,11 @@
 /// @file
-/// A sender already inside enqueue_impl when the actor is destroyed.
-///
-/// enqueue_impl checks is_destroying() and then calls mailbox().push_back(). The
-/// destructor sets destroying and waits -- but wait_for_resume_to_complete() waits
-/// only on the `running` bit, and a sender is not running. So the destructor can
-/// finish, ~default_mailbox_impl can free the queues, and the sender is left
-/// writing into them.
-///
-/// The is_destroying() check at the top of enqueue_impl is what makes this a defect
-/// rather than a contract violation: the check exists precisely to make a concurrent
-/// send safe during teardown, and half-closing the window is worse than not trying.
-/// What is guaranteed is narrow and worth stating exactly: a sender that has
-/// REGISTERED is waited for. A sender still between its first load of the state word
-/// and a successful registration holds a raw pointer to an object that may already be
-/// gone, and no design here can help that -- it is the "Destroy actor while scheduler
-/// running" row in CLAUDE.md, widened to any thread that sends.
-///
-/// Deterministic, not statistical: MailBox is a template parameter, so the test
-/// supplies one that parks inside push_back until told to continue. The main thread
-/// releases it on a timer, then destroys the actor. Without the fix the destructor
-/// returns first and the sender wakes up holding freed memory; with the fix the
-/// destructor waits for the sender to leave.
-///
-/// Meaningful under AddressSanitizer. In an ordinary build it still exercises the
-/// ordering and must not hang.
+/// A sender already inside enqueue_impl when the actor is destroyed. It registered in
+/// the same RMW that read `destroying`, and ~cooperative_actor waits for that count
+/// (a sender is not `running`); without it the mailbox is freed under push_back. Only
+/// a REGISTERED sender is covered -- one before registration holds a raw pointer to a
+/// possibly-dead object. Deterministic: the probe MailBox parks in push_back until a
+/// timer releases it after the destructor had time to finish. Meaningful under ASan; a
+/// plain build only proves it does not hang.
 
 #include <atomic>
 #include <chrono>
@@ -40,8 +22,6 @@ namespace {
     std::atomic<bool> g_sender_inside{false};
     std::atomic<bool> g_sender_may_continue{false};
 
-    // Parks inside push_back so the destructor can be made to race a sender that is
-    // provably already past enqueue_impl's is_destroying() check.
     class probe_mailbox_impl : public mailbox::default_mailbox_impl {
     public:
         actor_zeta::detail::enqueue_result push_back_impl(mailbox::message_ptr ptr) {
@@ -87,11 +67,8 @@ int main() {
         std::this_thread::yield();
     }
 
-    // Let the sender out only after the destructor has had time to run to completion
-    // on its own. Without the fix it does exactly that, and the sender then writes
-    // into a freed mailbox.
     std::thread releaser([] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // after the destructor has had time to finish on its own
         g_sender_may_continue.store(true, std::memory_order_release);
     });
 

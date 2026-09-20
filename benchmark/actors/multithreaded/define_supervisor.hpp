@@ -33,26 +33,20 @@ public:
     }
 
     actor_zeta::unique_future<void> prepare() {
-        // Spawn two actors with scheduler
         actor_0_ = actor_zeta::spawn<Actor>(resource_, scheduler_);
         actor_1_ = actor_zeta::spawn<Actor>(resource_, scheduler_);
 
-        // Set partners
         actor_0_->set_partner(actor_1_.get());
         actor_1_->set_partner(actor_0_.get());
         co_return;
     }
 
-    // Start ping-pong - send start message to actor0.
-    //
-    // The scheduler is the only driver in this chain: ping_pong_actor enqueues its own
-    // partner and the worker discharges every `resume` verdict, so this supervisor only
-    // has to report the initial unblock. There is no hand-driven fallback -- the
+    // Only the initial enqueue is needed: ping_pong_actor enqueues its own partner and
+    // the worker discharges every resume verdict. No hand-driven fallback -- the
     // children's start()/ping() are guarded on scheduler_.
     actor_zeta::unique_future<void> send() {
         if (actor_0_ && scheduler_) {
             auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
-            // Only enqueue if actor was unblocked by this message
             if (needs_sched) {
                 scheduler_->enqueue(actor_0_.get());
             }

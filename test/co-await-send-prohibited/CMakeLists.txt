@@ -1,14 +1,10 @@
-# `co_await send(...)` must not compile.
+# `co_await send(...)` must not compile: send() hands the scheduling obligation back
+# as needs_sched, and an awaiter could only surface it from await_resume() -- after a
+# wait that cannot end without it. The actor spins in the run queue forever with no
+# diagnostic, so the prohibition is a compile error, decidable from the type alone.
 #
-# The shape suspends on a future whose producer nobody scheduled: send() hands the
-# scheduling obligation back as needs_sched, and an awaiter can only surface it from
-# await_resume(), i.e. after the wait that cannot end without it. The actor then
-# spins in the run queue forever with no diagnostic, so the prohibition has to be a
-# compile error -- it is decidable from the type alone.
-#
-# Checked at configure time: try_compile the forbidden shape and fail loudly if it
-# builds. A test that merely ran the right shape would not notice the wrong one
-# coming back.
+# Checked at configure time: try_compile the forbidden shape and fail if it builds. A
+# test that only ran the right shape would not notice the wrong one coming back.
 
 set(CURRENT_TEST_NAME tests_co_await_send_prohibited)
 

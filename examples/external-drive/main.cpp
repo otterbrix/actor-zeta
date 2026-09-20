@@ -1,34 +1,12 @@
 /// @file
-/// Driving a unique_future from OUTSIDE an actor.
-///
-/// A caller that is not a cooperative_actor -- a CLI, a test, an Asio connection
-/// handler, any foreign event loop -- still needs the value out of a
-/// unique_future. There are exactly two supported ways.
-///
-///   ROUTE 1 -- POLLING (prefer this).
-///     is_ready() / failed() / take_ready(). Works for EVERY future, including
-///     the promise<T>-backed ones send() hands back. The poller never touches a
-///     coroutine handle, so it can never pull an actor's frame onto its own
-///     thread. This is what examples/asio does.
-///
-///   ROUTE 2 -- MANUAL DRAIN via coroutine_handle().
-///     Only for a COROUTINE-BACKED future: one obtained by calling a method
-///     coroutine directly instead of through send(). The caller reaches the
-///     promise, reads the deepest awaited state, claims the continuation and
-///     resumes it -- the drain block of cooperative_actor::resume_impl,
-///     hand-rolled outside the actor.
-///
-///     Three things the caller owns and the framework cannot check:
-///       * SERIALIZATION. This resumes an actor's frame outside the `running`
-///         bit that cooperative_actor::try_acquire_running establishes. Never do
-///         it while a scheduler may also be driving that actor.
-///       * THE READINESS GATE. Claiming the continuation does not check whether
-///         the awaited value exists. Resuming early takes from empty storage and
-///         aborts. Gate on the value bit first, as awaited_is_ready() does below.
-///       * THE FRAME. It is owned by the future, not by the handle: never
-///         destroy() it. An empty handle is normal, not an error -- a
-///         promise<T>-backed future has no producing coroutine, and a producer
-///         that has already finished is parked at final_suspend and withheld.
+/// Driving a unique_future from OUTSIDE an actor. Two supported routes.
+///   ROUTE 1 -- POLLING (prefer): is_ready()/failed()/take_ready(). Works for every
+///     future; the poller never touches a handle, so it cannot pull a frame onto its thread.
+///   ROUTE 2 -- MANUAL DRAIN via coroutine_handle(): COROUTINE-BACKED futures only (a
+///     method called directly, not through send()). The caller owns what the framework
+///     cannot check: SERIALIZATION (never while a scheduler may drive the actor), the
+///     READINESS GATE (claim only after the value bit, else it takes from empty storage),
+///     and the FRAME (owned by the future: never destroy() the handle; empty is normal).
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
@@ -73,10 +51,7 @@ namespace {
             , producer_(producer)
             , producer_needs_sched_(false) {}
 
-        /// Public and callable directly on purpose: a direct call returns a
-        /// coroutine-backed future, which is what route 2 needs. The same method
-        /// reached through send() would return a promise<T>-backed future whose
-        /// coroutine_handle() is empty.
+        /// Called directly on purpose: only a direct call yields a coroutine-backed future.
         unique_future<int> consume(int x) {
             auto [needs_sched, future] = send(producer_, &producer_actor::produce, x);
             producer_needs_sched_.store(needs_sched, std::memory_order_release);
@@ -108,9 +83,6 @@ namespace {
         std::atomic<bool> producer_needs_sched_;
     };
 
-    /// The readiness gate. Has the deepest future this coroutine is suspended on
-    /// been completed by its producer? Completion is flag-only, so this is a
-    /// plain atomic load -- nothing is resumed here.
     template<typename T>
     bool awaited_is_ready(const unique_future<T>& fut) {
         auto handle = fut.coroutine_handle();
@@ -121,23 +93,14 @@ namespace {
         if (!flags) {
             return false;
         }
-        // promise_released alone is NOT a readiness gate: a promise that dies
-        // without a value sets it too -- a cancelled producer, an actor torn down
-        // with queued work, a dropped promise (broken_pipe). Draining on that bit
-        // resumes the consumer past its co_await with nothing to take, and
-        // await_resume()'s assert(!has_error()) is compiled out under NDEBUG, so
-        // the consumer reads unset storage and reports success.
-        //
-        // Require the value bit instead. An awaited future that completed with an
-        // error is deliberately NOT drained here: await_resume() has no way to
-        // report failure, so there is nothing safe to do with it from outside.
+        // promise_released is NOT a gate: a promise dying without a value sets it too, and
+        // await_resume()'s assert is gone under NDEBUG. Require the value bit; never drain an error.
         const auto bits = flags->load(std::memory_order_acquire);
         return (bits & detail::state_flags::value_set) != 0
             && (bits & detail::state_flags::error_set) == 0;
     }
 
-    /// Claim the deepest awaited continuation and run it. Call ONLY when
-    /// awaited_is_ready() is true.
+    /// Claim the deepest awaited continuation and run it. ONLY after awaited_is_ready().
     template<typename T>
     bool drain_awaited(const unique_future<T>& fut) {
         auto handle = fut.coroutine_handle();
@@ -161,7 +124,6 @@ namespace {
 int main() {
     auto* resource = std::pmr::get_default_resource();
 
-    // ---------------------------------------------------------------- route 1
     std::cout << "ROUTE 1 - polling a send() future from a foreign thread\n";
     {
         auto producer = spawn<producer_actor>(resource);
@@ -169,24 +131,20 @@ int main() {
         auto [needs_sched, future] = send(producer.get(), &producer_actor::produce, 21);
         std::cout << "  send() reported needs_sched=" << std::boolalpha << needs_sched << "\n";
 
-        // A send() future is promise<T>-backed: there is no producing coroutine
-        // to reach, so route 2 does not apply at all.
+        // promise<T>-backed: no producing coroutine, so route 2 does not apply.
         std::cout << "  coroutine_handle() is empty: "
                   << !future.coroutine_handle() << "\n";
 
-        // Bounded: if the producer is never driven -- needs_sched false, say --
-        // an unbounded poller would make the join() below block forever.
         std::atomic<bool> seen{false};
         std::thread poller([&] {
-            for (int i = 0; i < 1'000'000 && !future.is_ready(); ++i) {
+            for (int i = 0; i < 1'000'000 && !future.is_ready(); ++i) { // bounded: an undriven producer must not block join()
                 std::this_thread::yield();
             }
             seen.store(future.is_ready(), std::memory_order_release);
         });
 
-        // The actor runs here, on this thread only. The poller never resumes it.
         if (needs_sched) {
-            auto verdict = producer->resume(1);
+            auto verdict = producer->resume(1); // the actor runs on this thread only
             std::cout << "  resume() verdict handled, messages="
                       << verdict.messages_processed << "\n";
         }
@@ -196,14 +154,12 @@ int main() {
                   << " (observed by poller: " << seen.load() << ")\n\n";
     }
 
-    // ---------------------------------------------------------------- route 2
     std::cout << "ROUTE 2 - manually draining a coroutine-backed future\n";
     {
         auto producer = spawn<producer_actor>(resource);
         auto consumer = spawn<consumer_actor>(resource, producer->address());
 
-        // Direct call, NOT send(): this is what makes the future coroutine-backed.
-        auto future = consumer->consume(21);
+        auto future = consumer->consume(21); // direct call, NOT send(): coroutine-backed
 
         auto handle = future.coroutine_handle();
         std::cout << "  handle is live: " << static_cast<bool>(handle)
@@ -211,13 +167,10 @@ int main() {
         std::cout << "  awaited chain published: "
                   << (handle && handle.promise().awaited_flags_ != nullptr) << "\n";
 
-        // The gate says no: the producer has not run, so the awaited value does
-        // not exist yet. Draining here would resume past a co_await with nothing
-        // to take and abort.
+        // The gate says no: the producer has not run. Draining here would abort.
         std::cout << "  gate before producer runs: " << awaited_is_ready(future) << "\n";
 
-        // Discharge the scheduling obligation the handler recorded. Completion is
-        // flag-only -- it does NOT resume the consumer.
+        // Discharge the recorded obligation. Completion is flag-only: the consumer is NOT resumed.
         if (consumer->producer_needs_sched()) {
             auto verdict = producer->resume(2);
             std::cout << "  producer driven, messages=" << verdict.messages_processed << "\n";
@@ -225,14 +178,10 @@ int main() {
 
         std::cout << "  gate after producer ran: " << awaited_is_ready(future) << "\n";
 
-        // Now, and only now, the continuation is ours to claim. The gate is not
-        // decoration: draining before the value exists resumes the consumer past
-        // its co_await and takes from empty storage.
-        const bool drained = awaited_is_ready(future) && drain_awaited(future);
+        const bool drained = awaited_is_ready(future) && drain_awaited(future); // the gate is not decoration
         std::cout << "  drained: " << drained
                   << ", future ready: " << future.is_ready() << "\n";
-        // `drained` can legitimately be false, and take_ready() only ASSERTS
-        // readiness -- an assert examples do not have, because they ship Release.
+        // take_ready() only ASSERTS readiness, and examples ship Release: gate on failed().
         if (drained && future.is_ready() && !future.failed()) {
             std::cout << "  result = " << std::move(future).take_ready() << "\n";
         } else {

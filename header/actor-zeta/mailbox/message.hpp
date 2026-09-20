@@ -21,10 +21,9 @@ namespace actor_zeta { namespace mailbox {
 
     class message final : public actor_zeta::detail::singly_linked<message> {
     public:
-        // How a message MUST be freed: it lives inside a PMR block behind a BlockHdr,
-        // so `delete p` would hand the global allocator a pointer that is not the
-        // allocation base. Declaring it here makes the queues refuse, at compile time,
-        // to be instantiated with std::default_delete.
+        // A message lives inside a PMR block behind a BlockHdr, so `delete p` would
+        // hand the global allocator a pointer that is not the allocation base.
+        // Declaring this makes the queues refuse std::default_delete at compile time.
         using deleter_type = message_deleter;
 
         message() = delete;
@@ -37,7 +36,6 @@ namespace actor_zeta { namespace mailbox {
         message(std::pmr::memory_resource* /* resource */, message_id /*name*/);
         message(std::pmr::memory_resource* /* resource */, message_id /*name*/, actor_zeta::detail::rtt&& /*body*/);
 
-        // Allocator-extended move constructor (PMR migration)
         message(std::allocator_arg_t, std::pmr::memory_resource* resource, message&& other) noexcept;
 
         ~message() noexcept;
@@ -131,7 +129,6 @@ namespace actor_zeta { namespace mailbox {
 
     static_assert(std::is_empty_v<message_deleter>, "EBO expected");
 
-    // PMR factory for heap-allocated messages.
     template<class... Args>
     message_ptr pmr_make_message(std::pmr::memory_resource* resource, Args&&... args) {
         constexpr std::size_t front = detail::kFront;

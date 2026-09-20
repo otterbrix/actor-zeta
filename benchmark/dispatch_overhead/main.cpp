@@ -5,12 +5,10 @@
 
 using namespace actor_zeta;
 
-// dispatch_overhead exists to price the dispatch path itself, so its driver has to stay
-// on the benchmark thread: handing these actors to scheduler::sharing_scheduler would
-// replace the number under test with a condition-variable wakeup and a cross-thread
-// spin. This is that driver -- a one-actor, same-thread run queue. It exists so the
-// resume verdict is discharged rather than dropped: `resume` means "put me back in a
-// run queue", and here the run queue is this loop.
+// A one-actor, same-thread run queue. The driver has to stay on the benchmark thread:
+// handing these actors to sharing_scheduler would replace the dispatch cost under test
+// with a condition-variable wakeup and a cross-thread spin. The loop discharges the
+// resume verdict ("put me back in a run queue") instead of dropping it.
 class same_thread_scheduler {
 public:
     explicit same_thread_scheduler(size_t max_throughput) noexcept
@@ -89,10 +87,9 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
 
     int method_id = static_cast<int>(state.range(0));
 
-    // Precondition, established ONCE outside the measured region: one drive after one
-    // send makes the future ready. It holds per actor+driver, not per method, so
-    // probing method1 covers every case of the switch below. See BM_FullCycle_1Arg for
-    // why take_ready() must not be reached on a future nothing has checked.
+    // Probe, outside the measured region: one drive after one send makes the future
+    // ready. That holds per actor+driver, not per method, so probing method1 covers
+    // every case below; see BM_FullCycle_1Arg for why an unchecked take_ready() matters.
     {
         auto [probe_needs_sched, probe_future] = send(actor.get(), &old_style_actor::method1, 1);
         sched.enqueue(actor.get());
@@ -207,7 +204,6 @@ static void BM_Dispatch_0Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
-    // Create message once, reuse
     auto [msg, future_unused] = detail::make_message(resource,
         msg_id<coroutine_actor, &coroutine_actor::noop>);
 
@@ -225,12 +221,11 @@ static void BM_FullCycle_1Arg(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
     same_thread_scheduler sched(1);
 
-    // Precondition, established ONCE outside the measured region: one drive after one
-    // send makes the future ready. take_ready() only ASSERTS readiness, and asserts
-    // vanish under NDEBUG -- which benchmarks are built with -- so an unchecked
-    // violation reads unset storage and reports a plausible wrong number. The timed
-    // loop still gates on is_ready()/failed(): one predictable branch costs far less
-    // than publishing a fabricated timing.
+    // Probe, outside the measured region: one drive after one send makes the future
+    // ready. take_ready() only ASSERTS readiness, and benchmarks build with NDEBUG, so
+    // an unchecked violation would read unset storage and report a plausible wrong
+    // number. The timed loop still gates on is_ready()/failed(): one predictable
+    // branch is cheaper than a fabricated timing.
     {
         auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::compute, 42);
         sched.enqueue(actor.get());
@@ -260,8 +255,7 @@ static void BM_FullCycle_2Args(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
     same_thread_scheduler sched(1);
 
-    // Precondition, established ONCE outside the measured region, as in
-    // BM_FullCycle_1Arg: one drive after one send makes the future ready.
+    // Probe, outside the measured region, as in BM_FullCycle_1Arg.
     {
         auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::sum, 10, 20);
         sched.enqueue(actor.get());
@@ -291,8 +285,7 @@ static void BM_FullCycle_3Args(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
     same_thread_scheduler sched(1);
 
-    // Precondition, established ONCE outside the measured region, as in
-    // BM_FullCycle_1Arg: one drive after one send makes the future ready.
+    // Probe, outside the measured region, as in BM_FullCycle_1Arg.
     {
         auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::sum3, 10, 20, 30);
         sched.enqueue(actor.get());
@@ -322,8 +315,7 @@ static void BM_FullCycle_Coroutine(benchmark::State& state) {
     auto actor = spawn<coroutine_actor>(resource);
     same_thread_scheduler sched(1);
 
-    // Precondition, established ONCE outside the measured region, as in
-    // BM_FullCycle_1Arg: one drive after one send makes the future ready.
+    // Probe, outside the measured region, as in BM_FullCycle_1Arg.
     {
         auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::compute, 42);
         sched.enqueue(actor.get());

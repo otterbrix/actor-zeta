@@ -7,8 +7,6 @@ namespace actor_zeta {
 
     namespace detail {
 
-        // Compile-time argument validation
-
         template<typename Actor, auto MethodPtr, typename... Args>
         struct validate_send_args {
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
@@ -32,8 +30,6 @@ namespace actor_zeta {
                 "send(): all arguments must be storable in message "
                 "(move/copy constructible, not abstract)");
         };
-
-        // Dispatch implementation - creates message and calls enqueue_impl
 
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename... Args>
         inline auto dispatch_method_impl(ActorPtr* actor, Args&&... args)
@@ -59,8 +55,6 @@ namespace actor_zeta {
             ignore_unused(result);
             return {needs_sched, std::move(future)};
         }
-
-        // Dispatch for address_t (interface polymorphism)
 
         template<typename Interface, auto MethodPtr, uint64_t ActionId, typename... Args>
         inline auto dispatch_method_impl_address(actor::address_t target, Args&&... args)
@@ -146,7 +140,7 @@ namespace actor_zeta {
 
         assert(target && "target address must not be empty");
 
-        auto* actor = static_cast<Actor*>(target.get());   // direct dispatch path
+        auto* actor = static_cast<Actor*>(target.get());
         using methods = typename Actor::dispatch_traits::methods;
 
         return runtime_dispatch_helper<Actor, Method, methods>::dispatch(

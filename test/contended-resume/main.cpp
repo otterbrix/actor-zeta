@@ -1,20 +1,10 @@
 /// @file
-/// The verdict a second resume() gets while another thread holds `running`.
-///
-/// It used to be `done`. That is the verdict for "finished", and the worker reacts
-/// to it by calling policy_.after_completion() and dropping the node -- which is
-/// harmless only because the shipped policy's hook is empty. Any profiling policy
-/// that retires an actor there, or any external driver that treats `done` as
-/// terminal, would retire an actor that is merely contended.
-///
-/// What actually happened is `awaiting`: try_acquire_running() has just set the
-/// scheduled bit on behalf of the running thread, and that thread discharges the
-/// obligation by returning `resume`. "Drop your node, the wakeup belongs to somebody
-/// else" is exactly what awaiting means.
-///
-/// No threads here. Re-entering resume() from inside behavior() is deterministic:
-/// the actor's own `running` bit is already set, so the nested call takes the
-/// already-running branch every time.
+/// A second resume() while another thread holds `running` must get `awaiting`, not
+/// `done`: the worker answers `done` with policy_.after_completion() and drops the
+/// node, so a retiring policy would retire a merely contended actor. `awaiting` is
+/// what happened -- try_acquire_running() set the scheduled bit on the runner's
+/// behalf, and the runner discharges it by returning `resume`. No threads: re-entering
+/// resume() from inside behavior() is deterministic (`running` is already set).
 
 #include <cstdio>
 #include <memory_resource>
@@ -31,8 +21,7 @@ namespace {
             : basic_actor<probe_t>(ptr) {}
 
         unique_future<void> poke() {
-            // Re-enter while we provably hold `running`.
-            nested = self_->resume(1);
+            nested = self_->resume(1); // re-enter while provably holding `running`
             saw_nested = true;
             co_return;
         }
@@ -57,7 +46,6 @@ int main() {
     auto actor = spawn<probe_t>(resource);
     actor->self_ = actor.get();
 
-    // A fresh actor is born with a blocked inbox, so the first send owes a schedule.
     auto sent = send(actor.get(), &probe_t::poke);
     if (!sent.first) {
         std::puts("HARNESS BROKEN: first send to a fresh actor must report needs_sched");
@@ -83,14 +71,12 @@ int main() {
         return 1;
     }
 
-    // The obligation the nested call handed over must come back out as `resume`.
     if (outer.result != scheduler::resume_result::resume) {
         std::printf("outer verdict %d, expected resume: the scheduled bit the nested "
                     "call set has no job behind it\n", static_cast<int>(outer.result));
         return 1;
     }
 
-    // And the actor must still be reachable afterwards.
     auto again = send(actor.get(), &probe_t::poke);
     again.second.detach();
     while (actor->resume(1).messages_processed != 0) {

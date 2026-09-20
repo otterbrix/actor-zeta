@@ -27,10 +27,6 @@ namespace {
 using namespace actor_zeta;
 using namespace actor_zeta::detail;
 
-// =============================================================================
-// TEST SECTION 1: state_flags existence
-// =============================================================================
-
 TEST_CASE("state_flags: basic flag values should exist") {
     REQUIRE(state_flags::empty == 0b0000'0000);
     REQUIRE(state_flags::value_set == 0b0000'0001);
@@ -51,10 +47,6 @@ TEST_CASE("state_flags: flags are non-overlapping") {
     REQUIRE((state_flags::error_set & state_flags::promise_released) == 0);
     REQUIRE((state_flags::promise_released & state_flags::future_released) == 0);
 }
-
-// =============================================================================
-// TEST SECTION 2: shared_state<T> basic operations
-// =============================================================================
 
 TEST_CASE("shared_state<int>: initial state") {
     auto* resource = std::pmr::get_default_resource();
@@ -79,7 +71,7 @@ TEST_CASE("shared_state<int>: set_value") {
 
     REQUIRE(state->has_result());
     REQUIRE_FALSE(state->has_error());
-    REQUIRE_FALSE(state->is_ready());  // is_ready checks promise_released!
+    REQUIRE_FALSE(state->is_ready());  // is_ready() is promise_released, not the value
     REQUIRE(state->get_value() == 42);
 
     const bool deallocated = state->release_promise();
@@ -119,10 +111,6 @@ TEST_CASE("shared_state<int>: set_error") {
     state->release_future();
 }
 
-// =============================================================================
-// TEST SECTION 3: shared_state<void> operations
-// =============================================================================
-
 TEST_CASE("shared_state<void>: initial state") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<void>(resource);
@@ -143,7 +131,7 @@ TEST_CASE("shared_state<void>: set_value") {
     state->set_value();
 
     REQUIRE(state->has_result());
-    REQUIRE_FALSE(state->is_ready());  // is_ready checks promise_released
+    REQUIRE_FALSE(state->is_ready());
 
     const bool deallocated = state->release_promise();
     REQUIRE_FALSE(deallocated);
@@ -151,10 +139,6 @@ TEST_CASE("shared_state<void>: set_value") {
 
     state->release_future();
 }
-
-// =============================================================================
-// TEST SECTION 4: Last-One-Out ownership model
-// =============================================================================
 
 TEST_CASE("Last-One-Out: promise releases first") {
     auto* resource = std::pmr::get_default_resource();
@@ -170,7 +154,6 @@ TEST_CASE("Last-One-Out: promise releases first") {
     REQUIRE(state->has_result());
     REQUIRE(state->get_value() == 42);
 
-    // Future releases — deallocates
     state->release_future();
     // State is now deallocated — no access!
 }
@@ -187,32 +170,23 @@ TEST_CASE("Last-One-Out: future releases first") {
     REQUIRE_FALSE(state->is_ready());  // promise not released yet
     REQUIRE(state->has_result());
 
-    // Promise releases — and because the future already released, THIS call is
-    // the Last-One-Out that deallocates. release_promise() reporting true is the
-    // protocol; the discarded return used to hide it.
+    // The future already released, so THIS call is the Last-One-Out and must say so.
     const bool deallocated = state->release_promise();
     REQUIRE(deallocated);
     // State is now deallocated — no access!
 }
 
-// =============================================================================
-// TEST SECTION 5: is_ready() vs has_result() semantics
-// =============================================================================
-
 TEST_CASE("is_ready checks promise_released, has_result checks value/error") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
 
-    // Initially: nothing set
     REQUIRE_FALSE(state->is_ready());
     REQUIRE_FALSE(state->has_result());
 
-    // After set_value: has_result=true, is_ready=false
     state->set_value(42);
     REQUIRE_FALSE(state->is_ready());
     REQUIRE(state->has_result());
 
-    // After release_promise: is_ready=true
     const bool deallocated = state->release_promise();
     REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
@@ -221,18 +195,13 @@ TEST_CASE("is_ready checks promise_released, has_result checks value/error") {
     state->release_future();
 }
 
-// =============================================================================
-// TEST SECTION 6: Continuation (CAS-based awaiter support)
-// =============================================================================
-
 TEST_CASE("shared_state: continuation atomic operations") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
 
-    // Initially null
     REQUIRE(state->continuation_.load() == nullptr);
 
-    // Simulated awaiter: CAS to set continuation
+    // The awaiter's CAS, then the producer's exchange.
     std::coroutine_handle<> dummy_handle = std::noop_coroutine();
 
     std::coroutine_handle<> expected = nullptr;
@@ -243,7 +212,6 @@ TEST_CASE("shared_state: continuation atomic operations") {
     REQUIRE(cas_success);
     REQUIRE(state->continuation_.load() == dummy_handle);
 
-    // Producer: exchange to take continuation
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
     REQUIRE(cont == dummy_handle);
     REQUIRE(state->continuation_.load() == nullptr);
@@ -260,14 +228,12 @@ TEST_CASE("shared_state: double CAS detects double-await") {
     std::coroutine_handle<> handle1 = std::noop_coroutine();
     std::coroutine_handle<> handle2 = std::noop_coroutine();
 
-    // First CAS succeeds
     std::coroutine_handle<> expected1 = nullptr;
     bool cas1 = state->continuation_.compare_exchange_strong(
         expected1, handle1,
         std::memory_order_acq_rel, std::memory_order_acquire);
     REQUIRE(cas1);
 
-    // Second CAS fails (someone already set continuation)
     std::coroutine_handle<> expected2 = nullptr;
     bool cas2 = state->continuation_.compare_exchange_strong(
         expected2, handle2,
@@ -279,10 +245,6 @@ TEST_CASE("shared_state: double CAS detects double-await") {
     REQUIRE_FALSE(deallocated);
     state->release_future();
 }
-
-// =============================================================================
-// TEST SECTION 7: Concurrent operations stress tests
-// =============================================================================
 
 TEST_CASE("shared_state: concurrent set_value and release") {
     constexpr int NUM_ITERATIONS = 10000;
@@ -337,7 +299,6 @@ TEST_CASE("shared_state: concurrent set_value and release") {
 
         std::thread t2([state]() {
             tls_release_role = role_future;
-            // Spin until result is set
             while (!state->has_result()) {
                 std::this_thread::yield();
             }
@@ -435,10 +396,6 @@ TEST_CASE("shared_state: concurrent release_promise and release_future") {
     REQUIRE(promise_won <= NUM_ITERATIONS);
 }
 
-// =============================================================================
-// TEST SECTION 8: Memory ordering verification
-// =============================================================================
-
 TEST_CASE("shared_state: memory ordering - value visible after has_result") {
     constexpr int NUM_ITERATIONS = 10000;
 
@@ -456,11 +413,10 @@ TEST_CASE("shared_state: memory ordering - value visible after has_result") {
         });
 
         std::thread reader([state, &reader_done, &read_value]() {
-            // Wait for has_result()
             while (!state->has_result()) {
                 std::this_thread::yield();
             }
-            // Value must be visible now (release-acquire synchronization)
+            // The value must be visible: set_value() releases, has_result() acquires.
             read_value.store(state->get_value(), std::memory_order_relaxed);
             reader_done.store(true, std::memory_order_release);
         });
@@ -476,10 +432,6 @@ TEST_CASE("shared_state: memory ordering - value visible after has_result") {
     }
 }
 
-// =============================================================================
-// TEST SECTION 9: Static assertions (compile-time checks)
-// =============================================================================
-
 TEST_CASE("static assertions: lock-free atomics") {
     STATIC_REQUIRE(std::atomic<std::uint8_t>::is_always_lock_free);
 
@@ -489,10 +441,6 @@ TEST_CASE("static assertions: lock-free atomics") {
         WARN("coroutine_handle atomic is NOT lock-free on this platform");
     }
 }
-
-// =============================================================================
-// TEST SECTION 10: Complex types
-// =============================================================================
 
 TEST_CASE("shared_state<string>: non-trivial type") {
     auto* resource = std::pmr::get_default_resource();

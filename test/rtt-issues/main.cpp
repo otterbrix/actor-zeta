@@ -1,9 +1,3 @@
-/// @file main.cpp
-/// @brief Tests to demonstrate RTT issues from CODE_REVIEW_RTT.md
-///
-/// These tests are designed to FAIL or demonstrate problems in current implementation.
-/// After fixes are applied, they should PASS.
-
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
@@ -16,30 +10,23 @@
 
 using actor_zeta::detail::rtt;
 
-// ============================================================================
-// Issue #1: Destruction Order Test
-// ============================================================================
-
 namespace destruction_order_test {
 
-    // Track destruction order
     static std::vector<int> destruction_sequence;
 
     struct TrackedObject {
         int id;
 
         explicit TrackedObject(int id_) : id(id_) {
-            // std::cout << "TrackedObject(" << id << ") constructed\n";
         }
 
         TrackedObject(TrackedObject&& other) noexcept : id(other.id) {
-            other.id = -1; // mark as moved
+            other.id = -1;
         }
 
         ~TrackedObject() {
-            if (id >= 0) { // only track non-moved objects
+            if (id >= 0) {
                 destruction_sequence.push_back(id);
-                // std::cout << "TrackedObject(" << id << ") destroyed\n";
             }
         }
     };
@@ -59,44 +46,35 @@ TEST_CASE("Issue #1: Destruction order should be reverse (LIFO)") {
         {
             auto* resource = std::pmr::get_default_resource();
             rtt r(resource,
-                  TrackedObject(1),  // first created
-                  TrackedObject(2),  // second created
-                  TrackedObject(3)); // third created
+                  TrackedObject(1),
+                  TrackedObject(2),
+                  TrackedObject(3));
 
             REQUIRE(r.size() == 3);
         }
-        // After rtt destruction, check order
 
         REQUIRE(destruction_sequence.size() == 3);
-
-        // C++ convention: reverse order (LIFO)
-        // Expected: 3, 2, 1 (last created, first destroyed)
-        // Current (buggy): 1, 2, 3 (first created, first destroyed)
 
         INFO("Actual destruction order: "
              << destruction_sequence[0] << ", "
              << destruction_sequence[1] << ", "
              << destruction_sequence[2]);
 
-        // FIXED: Now destroys in reverse order (LIFO) - C++ convention
-        CHECK(destruction_sequence[0] == 3); // last created, first destroyed
-        CHECK(destruction_sequence[1] == 2); // middle
-        CHECK(destruction_sequence[2] == 1); // first created, last destroyed
+        CHECK(destruction_sequence[0] == 3);
+        CHECK(destruction_sequence[1] == 2);
+        CHECK(destruction_sequence[2] == 1);
 
-        // Correct LIFO order
         REQUIRE(destruction_sequence == std::vector<int>{3, 2, 1});
     }
 
     SECTION("Dependency scenario: Service depends on Logger") {
         clear();
 
-        // Simulates real-world scenario where later objects depend on earlier ones
         struct Logger {
             int* destruction_flag;
             Logger(int* flag) : destruction_flag(flag) {}
             ~Logger() { *destruction_flag = 1; }
             void log(const char*) const {
-                // In real code, this would crash if Logger is destroyed
             }
         };
 
@@ -107,8 +85,6 @@ TEST_CASE("Issue #1: Destruction order should be reverse (LIFO)") {
             Service(const Logger* l, int* flag) : logger(l), destruction_flag(flag) {}
             ~Service() {
                 *destruction_flag = 1;
-                // If logger was destroyed first, this would be UB:
-                // logger->log("Service shutting down");
             }
         };
 
@@ -118,39 +94,24 @@ TEST_CASE("Issue #1: Destruction order should be reverse (LIFO)") {
         {
             auto* resource = std::pmr::get_default_resource();
 
-            // Create Logger first, then Service that depends on it
             Logger logger(&logger_destroyed);
             Service service(&logger, &service_destroyed);
 
-            // Store in rtt (copies are made)
             rtt r(resource,
-                  TrackedObject(1),  // placeholder to track order
+                  TrackedObject(1),
                   TrackedObject(2));
         }
 
-        // Note: This test mainly demonstrates the concept.
-        // The actual dependency issue is harder to test without UB.
+        // Logger/Service are never stored in the rtt: a real dependency check would
+        // need UB to observe. Only the count is asserted.
         REQUIRE(destruction_sequence.size() == 2);
     }
 }
 
-// ============================================================================
-// Issue #2: swap() Cross-Arena Test - RESOLVED BY REMOVAL
-// ============================================================================
-
-// Note: swap() method was removed from rtt class because it was inherently
-// unsafe for cross-arena operations. Type-erased containers cannot safely
-// swap between different memory resources because:
-// 1. Memory was allocated by one resource but would be deallocated by another
-// 2. No way to deep-copy type-erased objects (no type info at runtime)
-//
-// Resolution: swap() and free function swap(rtt&, rtt&) have been removed.
-// Use move semantics for transferring rtt objects within same arena.
+// swap() was removed: a type-erased container cannot safely swap across memory resources.
 
 namespace swap_arena_test {
 
-    // Custom memory resource that tracks which resource allocated memory
-    // Kept for use in other cross-arena tests
     class tracking_resource : public std::pmr::memory_resource {
     public:
         explicit tracking_resource(int id) : id_(id) {}
@@ -183,8 +144,7 @@ namespace swap_arena_test {
         }
 
         bool do_is_equal(const memory_resource& other) const noexcept override {
-            // Can't use dynamic_cast with -fno-rtti
-            // Use address comparison as simple check
+            // no dynamic_cast under -fno-rtti
             return this == &other;
         }
 
@@ -210,7 +170,6 @@ TEST_CASE("Issue #2: swap() removed - use move semantics instead") {
         REQUIRE(a.size() == 3);
         REQUIRE(b.size() == 2);
 
-        // Instead of swap, use move semantics for transferring data
         rtt temp(std::move(a));
         a = std::move(b);
         b = std::move(temp);
@@ -218,11 +177,9 @@ TEST_CASE("Issue #2: swap() removed - use move semantics instead") {
         REQUIRE(a.size() == 2);
         REQUIRE(b.size() == 3);
 
-        // Values should be swapped
         REQUIRE(a.get<int>(0) == 4);
         REQUIRE(b.get<int>(0) == 1);
 
-        // All memory operations stay within same arena
         REQUIRE(arena.allocations() == 2);
     }
 
@@ -236,11 +193,7 @@ TEST_CASE("Issue #2: swap() removed - use move semantics instead") {
         REQUIRE(a.memory_resource() == &arena1);
         REQUIRE(b.memory_resource() == &arena2);
 
-        // Note: Cross-arena move assignment is protected by assert
-        // Cannot easily test assertion failure, but API is now safe
-        // a = std::move(b); // Would trigger assert in debug mode
-
-        // Each rtt will deallocate to its own arena correctly
+        // Cross-arena move-assignment is an assert, so nothing more can be exercised here.
     }
 
     SECTION("Proper destruction - each arena deallocates own memory") {
@@ -254,12 +207,10 @@ TEST_CASE("Issue #2: swap() removed - use move semantics instead") {
             REQUIRE(arena1.allocations() == 1);
             REQUIRE(arena2.allocations() == 1);
         }
-        // Without swap(), each rtt correctly deallocates to its own arena
 
         REQUIRE(arena1.deallocations() == 1);
         REQUIRE(arena2.deallocations() == 1);
 
-        // Verify correct deallocation (memory returned to same arena that allocated it)
         if (!arena1.dealloc_log().empty() && !arena1.alloc_log().empty()) {
             REQUIRE(arena1.alloc_log()[0].ptr == arena1.dealloc_log()[0].ptr);
         }
@@ -268,10 +219,6 @@ TEST_CASE("Issue #2: swap() removed - use move semantics instead") {
         }
     }
 }
-
-// ============================================================================
-// Issue #3: dtor_ Counter Test
-// ============================================================================
 
 #ifdef __ENABLE_TESTS_MEASUREMENTS__
 
@@ -288,10 +235,8 @@ TEST_CASE("Issue #3: dtor_ counter should be incremented") {
             REQUIRE(rtt_test::templated_ctor_ == 1);
             REQUIRE(rtt_test::dtor_ == 0);
         }
-        // After destruction:
 
-        // This will FAIL with current implementation because dtor_ is never incremented!
-        REQUIRE(rtt_test::dtor_ == 1); // Expected 1, but is 0
+        REQUIRE(rtt_test::dtor_ == 1);
     }
 
     SECTION("Multiple rtt destructions should increment dtor_ correctly") {
@@ -306,8 +251,7 @@ TEST_CASE("Issue #3: dtor_ counter should be incremented") {
             REQUIRE(rtt_test::templated_ctor_ == 3);
         }
 
-        // This will FAIL - dtor_ stays 0
-        REQUIRE(rtt_test::dtor_ == 3); // Expected 3, but is 0
+        REQUIRE(rtt_test::dtor_ == 3);
     }
 
     SECTION("Move should not double-count destructions") {
@@ -316,15 +260,13 @@ TEST_CASE("Issue #3: dtor_ counter should be incremented") {
         {
             auto* resource = std::pmr::get_default_resource();
             rtt r1(resource, 42);
-            rtt r2(std::move(r1)); // move
+            rtt r2(std::move(r1));
 
             REQUIRE(rtt_test::templated_ctor_ == 1);
             REQUIRE(rtt_test::move_ctor_ == 1);
         }
-        // Two objects destroyed, but only one had data
 
-        // With fix: dtor_ should be 2 (both objects destructed)
-        // The moved-from object still has its destructor called
+        // the moved-from rtt still runs its destructor
         REQUIRE(rtt_test::dtor_ == 2);
     }
 }
@@ -333,14 +275,10 @@ TEST_CASE("Issue #3: dtor_ counter should be incremented") {
 
 TEST_CASE("Issue #3: dtor_ counter test (skipped - measurements disabled)") {
     WARN("__ENABLE_TESTS_MEASUREMENTS__ is not defined. dtor_ counter tests skipped.");
-    REQUIRE(true); // placeholder
+    REQUIRE(true);
 }
 
 #endif
-
-// ============================================================================
-// Issue #5: Bounds Checking Test
-// ============================================================================
 
 TEST_CASE("Issue #5: Bounds checking for get() and offset()") {
     auto* resource = std::pmr::get_default_resource();
@@ -360,12 +298,7 @@ TEST_CASE("Issue #5: Bounds checking for get() and offset()") {
         REQUIRE(r.size() == 0);
         REQUIRE(r.empty());
 
-        // These would be UB without bounds checking:
-        // r.get<int>(0);  // UB - reading past end
-        // r.offset(0);    // UB - reading past end
-
-        // With assert, this should fail in debug mode
-        // Cannot easily test UB, but we document the issue
+        // out-of-range get()/offset() is an assert, not exercisable here
     }
 
     SECTION("Index equal to size is invalid") {
@@ -373,33 +306,13 @@ TEST_CASE("Issue #5: Bounds checking for get() and offset()") {
 
         REQUIRE(r.size() == 3);
 
-        // Index 3 is out of bounds (valid: 0, 1, 2)
-        // r.get<int>(3);  // UB without bounds check
-        // r.offset(3);    // UB without bounds check
-
-        // This test documents the issue but can't safely demonstrate UB
+        // out-of-range get()/offset() is an assert, not exercisable here
     }
 }
 
-// ============================================================================
-// Issue #6: Naming Consistency Test (compile-time only)
-// ============================================================================
-
 TEST_CASE("Issue #6: Member naming consistency") {
-    // This is a style issue - no runtime test needed
-    // Just documenting that 'allocation' should be 'allocation_'
-
-    // The inconsistency is visible in the source:
-    // void* allocation = nullptr;      // no underscore
-    // char* data_ = nullptr;           // has underscore
-    // objects_t* objects_ = nullptr;   // has underscore
-
-    REQUIRE(true); // placeholder
+    REQUIRE(true);
 }
-
-// ============================================================================
-// Additional: Verify alignment calculation
-// ============================================================================
 
 TEST_CASE("Verify alignment calculation with getSize") {
     SECTION("Simple types") {
@@ -407,13 +320,11 @@ TEST_CASE("Verify alignment calculation with getSize") {
         REQUIRE(sz1 == sizeof(int));
 
         constexpr size_t sz2 = actor_zeta::detail::getSize<0, int, double>();
-        // int (4) + padding (4) + double (8) = 16
         REQUIRE(sz2 >= sizeof(int) + sizeof(double));
     }
 
     SECTION("Mixed alignment types") {
         constexpr size_t sz = actor_zeta::detail::getSize<0, char, double, char>();
-        // char (1) + padding (7) + double (8) + char (1) = 17
         REQUIRE(sz >= sizeof(char) + sizeof(double) + sizeof(char));
     }
 
@@ -427,25 +338,18 @@ TEST_CASE("Verify alignment calculation with getSize") {
     }
 }
 
-// ============================================================================
-// Issue #4: force_align() returns nullptr test
-// ============================================================================
-
 TEST_CASE("Issue #4: force_align behavior") {
-    // Note: This issue is hard to test because getSize<>() guarantees
-    // correct capacity at compile time. We can only document the concern.
+    // force_align() cannot fail: getSize<>() fixes the capacity at compile time.
 
     SECTION("Normal usage - alignment always succeeds") {
         auto* resource = std::pmr::get_default_resource();
 
-        // Various alignment requirements
         rtt r1(resource, char('a'), int(42), double(3.14));
         REQUIRE(r1.size() == 3);
         REQUIRE(r1.get<char>(0) == 'a');
         REQUIRE(r1.get<int>(1) == 42);
         REQUIRE(r1.get<double>(2) == Approx(3.14));
 
-        // Stress test with many elements
         rtt r2(resource, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
         REQUIRE(r2.size() == 10);
         for (std::size_t i = 0; i < 10; ++i) {
@@ -453,10 +357,6 @@ TEST_CASE("Issue #4: force_align behavior") {
         }
     }
 }
-
-// ============================================================================
-// Move semantics tests
-// ============================================================================
 
 TEST_CASE("Move semantics correctness") {
     auto* resource = std::pmr::get_default_resource();
@@ -468,14 +368,12 @@ TEST_CASE("Move semantics correctness") {
 
         rtt dest(std::move(source));
 
-        // Source should be empty and valid
         REQUIRE(source.size() == 0);
         REQUIRE(source.empty());
         REQUIRE(source.memory_resource() == nullptr);
         REQUIRE(source.capacity() == 0);
         REQUIRE(source.volume() == 0);
 
-        // Dest should have the data
         REQUIRE(dest.size() == 3);
         REQUIRE(dest.get<int>(0) == 1);
         REQUIRE(dest.memory_resource() == resource);
@@ -490,12 +388,10 @@ TEST_CASE("Move semantics correctness") {
 
         dest = std::move(source);
 
-        // Source should be empty
         REQUIRE(source.size() == 0);
         REQUIRE(source.empty());
         REQUIRE(source.memory_resource() == nullptr);
 
-        // Dest should have source's data
         REQUIRE(dest.size() == 2);
         REQUIRE(dest.get<int>(0) == 100);
         REQUIRE(dest.get<int>(1) == 200);
@@ -504,13 +400,10 @@ TEST_CASE("Move semantics correctness") {
     SECTION("Self-move-assignment is safe") {
         rtt r(resource, 42);
 
-        // Self-assignment should be a no-op
-        // Use intermediate reference to avoid compiler self-move warning
+        // via a reference, to dodge the compiler's self-move warning
         rtt& r_ref = r;
         r = std::move(r_ref);
 
-        // Object should still be valid (implementation-defined state)
-        // At minimum, shouldn't crash
         REQUIRE(true);
     }
 
@@ -525,10 +418,6 @@ TEST_CASE("Move semantics correctness") {
     }
 }
 
-// ============================================================================
-// allocator_arg_t constructor tests
-// ============================================================================
-
 TEST_CASE("allocator_arg_t constructor") {
     SECTION("Same arena move works") {
         auto* resource = std::pmr::get_default_resource();
@@ -542,13 +431,8 @@ TEST_CASE("allocator_arg_t constructor") {
         REQUIRE(dest.memory_resource() == resource);
     }
 
-    // Note: Cross-arena with allocator_arg_t has assert
-    // Cannot easily test without triggering assert
+    // The cross-arena case is an assert, so it is not exercised.
 }
-
-// ============================================================================
-// Move-only types support
-// ============================================================================
 
 TEST_CASE("Move-only types in rtt") {
     auto* resource = std::pmr::get_default_resource();
@@ -561,7 +445,6 @@ TEST_CASE("Move-only types in rtt") {
 
         REQUIRE(r.size() == 1);
 
-        // Get returns by move for value types
         auto& stored = r.get<std::unique_ptr<int>>(0);
         REQUIRE(stored.get() == raw);
         REQUIRE(*stored == 42);
@@ -581,15 +464,11 @@ TEST_CASE("Move-only types in rtt") {
     }
 }
 
-// ============================================================================
-// Mixed types and complex objects
-// ============================================================================
-
 TEST_CASE("Complex objects in rtt") {
     auto* resource = std::pmr::get_default_resource();
 
     SECTION("std::string stored correctly") {
-        std::string long_string(1000, 'x'); // 1000 chars
+        std::string long_string(1000, 'x');
 
         rtt r(resource, long_string, std::string("hello"), std::string("world"));
 
@@ -625,10 +504,6 @@ TEST_CASE("Complex objects in rtt") {
     }
 }
 
-// ============================================================================
-// detail::get<I, List>() function tests
-// ============================================================================
-
 TEST_CASE("detail::get<I, List>() function") {
     using actor_zeta::type_traits::type_list;
     using actor_zeta::detail::get;
@@ -640,7 +515,6 @@ TEST_CASE("detail::get<I, List>() function") {
 
         using List = type_list<int, std::string>;
 
-        // For value types, get<I, List> returns by move
         int val = get<0, List>(r);
         REQUIRE(val == 42);
 
@@ -653,22 +527,16 @@ TEST_CASE("detail::get<I, List>() function") {
 
         using List = type_list<const int&, const std::string&>;
 
-        // For const T&, returns reference without copy
         const int& val_ref = get<0, List>(r);
         REQUIRE(val_ref == 42);
 
         const std::string& str_ref = get<1, List>(r);
         REQUIRE(str_ref == "hello");
 
-        // Verify it's actually the same object (not a copy)
         REQUIRE(&val_ref == &r.get<int>(0));
         REQUIRE(&str_ref == &r.get<std::string>(1));
     }
 }
-
-// ============================================================================
-// Edge cases
-// ============================================================================
 
 TEST_CASE("Edge cases") {
     auto* resource = std::pmr::get_default_resource();
@@ -695,7 +563,6 @@ TEST_CASE("Edge cases") {
         struct Empty {};
         static_assert(sizeof(Empty) == 1, "Empty class has size 1");
 
-        // Empty structs should work
         rtt r(resource, Empty{}, Empty{}, int(42));
         REQUIRE(r.size() == 3);
         REQUIRE(r.get<int>(2) == 42);
@@ -720,19 +587,11 @@ TEST_CASE("Edge cases") {
     }
 }
 
-// ============================================================================
-// Issue #15: Lambda assert pattern duplicated 3x
-// ============================================================================
-
 TEST_CASE("Issue #15: Lambda assert pattern - compile-time verification") {
-    // This test verifies that the lambda pattern works correctly
-    // The issue is code duplication (same lambda in 3 places), not functionality
-
     SECTION("Templated constructor checks resource") {
         auto* resource = std::pmr::get_default_resource();
         REQUIRE(resource != nullptr);
 
-        // Should work with valid resource
         rtt r(resource, 1, 2, 3);
         REQUIRE(r.size() == 3);
         REQUIRE(r.memory_resource() == resource);
@@ -753,22 +612,13 @@ TEST_CASE("Issue #15: Lambda assert pattern - compile-time verification") {
         REQUIRE(dest.memory_resource() == resource);
     }
 
-    // Note: Cannot test nullptr resource - would trigger assert
-    // The duplication issue is about maintainability, not correctness
+    // A null resource is an assert, so it is not exercised.
 }
 
-// ============================================================================
-// Issue #16: try_to_align() unused parameter
-// ============================================================================
-
 TEST_CASE("Issue #16: try_to_align - parameter is unused") {
-    // This test demonstrates that try_to_align only uses the TYPE, not the value
-    // The parameter could be removed and replaced with explicit template argument
-
     auto* resource = std::pmr::get_default_resource();
 
     SECTION("Alignment works for different types") {
-        // Different types with different alignments
         rtt r(resource, char('a'), int(42), double(3.14), char('z'));
 
         REQUIRE(r.size() == 4);
@@ -792,23 +642,17 @@ TEST_CASE("Issue #16: try_to_align - parameter is unused") {
     }
 }
 
-// ============================================================================
-// Issue #17: Public methods missing noexcept
-// ============================================================================
-
 TEST_CASE("Issue #17: Public methods should be noexcept") {
     auto* resource = std::pmr::get_default_resource();
     rtt r(resource, 1, 2, 3);
 
     SECTION("size() noexcept verification") {
-        // These static_asserts verify noexcept specification
         static_assert(noexcept(r.memory_resource()), "memory_resource() should be noexcept");
         static_assert(noexcept(r.size()), "size() should be noexcept");
         static_assert(noexcept(r.volume()), "volume() should be noexcept");
         static_assert(noexcept(r.capacity()), "capacity() should be noexcept");
         static_assert(noexcept(r.empty()), "empty() should be noexcept");
 
-        // Runtime check that methods work
         REQUIRE(r.size() == 3);
         REQUIRE(r.volume() > 0);
         REQUIRE(r.capacity() > 0);
@@ -826,18 +670,8 @@ TEST_CASE("Issue #17: Public methods should be noexcept") {
     }
 }
 
-// ============================================================================
-// Issue #18: destroy() is not namespace-local
-// ============================================================================
-
 TEST_CASE("Issue #18: destroy() visibility") {
-    // This test documents that destroy<T> is currently visible in namespace
-
     SECTION("destroy<T> exists in actor_zeta::detail") {
-        // Currently destroy<T> is accessible (this compiles)
-        // After fix, it should be private static member of rtt
-
-        // We can verify destruction works correctly through rtt
         auto* resource = std::pmr::get_default_resource();
 
         static int destruct_count = 0;
@@ -857,7 +691,6 @@ TEST_CASE("Issue #18: destroy() visibility") {
             rtt r(resource, Tracked{});
             REQUIRE(r.size() == 1);
         }
-        // Destruction happened through destroy<Tracked>
         REQUIRE(destruct_count == 1);
     }
 
@@ -890,14 +723,9 @@ TEST_CASE("Issue #18: destroy() visibility") {
             REQUIRE(r.size() == 3);
         }
 
-        // LIFO destruction order
         REQUIRE(destruction_order == std::vector<int>{3, 2, 1});
     }
 }
-
-// ============================================================================
-// Regression: Ensure basic functionality works
-// ============================================================================
 
 TEST_CASE("Regression: Basic rtt functionality") {
     auto* resource = std::pmr::get_default_resource();
@@ -937,7 +765,7 @@ TEST_CASE("Regression: Basic rtt functionality") {
         rtt r1(resource, 1, 2, 3);
         rtt r2(std::move(r1));
 
-        REQUIRE(r1.empty()); // moved-from
+        REQUIRE(r1.empty());
         REQUIRE(r2.size() == 3);
         REQUIRE(r2.get<int>(0) == 1);
     }
@@ -948,7 +776,7 @@ TEST_CASE("Regression: Basic rtt functionality") {
 
         r2 = std::move(r1);
 
-        REQUIRE(r1.empty()); // moved-from
+        REQUIRE(r1.empty());
         REQUIRE(r2.size() == 3);
         REQUIRE(r2.get<int>(0) == 1);
     }

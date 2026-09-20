@@ -14,7 +14,6 @@ public:
         , call_count3_(0) {
     }
 
-    // All methods must be coroutines (use co_return)
     actor_zeta::unique_future<void> method1(int value) {
         ++call_count1_;
         last_value1_ = value;
@@ -68,7 +67,6 @@ private:
 };
 
 TEST_CASE("dispatch_traits - compile-time msg_id generation") {
-    // Verify that msg_id is a compile-time constant
     constexpr auto id1 = actor_zeta::msg_id<test_actor, &test_actor::method1>;
     constexpr auto id2 = actor_zeta::msg_id<test_actor, &test_actor::method2>;
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
@@ -90,12 +88,10 @@ TEST_CASE("dispatch_traits - unique message IDs") {
 }
 
 TEST_CASE("dispatch_traits - sequential indexing") {
-    // ActionId should be sequential: 0, 1, 2, ...
     constexpr auto id1 = actor_zeta::msg_id<test_actor, &test_actor::method1>;
     constexpr auto id2 = actor_zeta::msg_id<test_actor, &test_actor::method2>;
     constexpr auto id3 = actor_zeta::msg_id<test_actor, &test_actor::method3>;
 
-    // Extract ActionId from lower bits
     constexpr uint64_t action1 = id1 & 0xFFFFFFFF;
     constexpr uint64_t action2 = id2 & 0xFFFFFFFF;
     constexpr uint64_t action3 = id3 & 0xFFFFFFFF;
@@ -117,11 +113,7 @@ TEST_CASE("dispatch_traits - simple one-line syntax") {
     REQUIRE(actor->call_count3() == 0);
 }
 
-// ============================================================================
-// Sync dispatch policy tests
-// ============================================================================
-
-// Sync actor uses actor_mixin (not basic_actor/cooperative_actor which is async)
+// actor_mixin, not basic_actor: enqueue_impl runs behavior() inline.
 class sync_actor final : public actor_zeta::actor::actor_mixin<sync_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
@@ -168,21 +160,16 @@ TEST_CASE("sync actor - actor_mixin processes immediately") {
 
     REQUIRE(actor != nullptr);
 
-    // Send message - actor_mixin::enqueue_impl calls behavior() immediately
     auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &sync_actor::compute,
         21);
 
-    // With actor_mixin, result should be available immediately (no resume needed)
+    // No resume: enqueue_impl already ran behavior().
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).take_ready() == 42);
     REQUIRE(actor->call_count() == 1);
 }
-
-// ============================================================================
-// Optional send tests (send without target - detected by argument count)
-// ============================================================================
 
 class optional_test_actor final : public actor_zeta::basic_actor<optional_test_actor> {
 public:
@@ -219,23 +206,19 @@ TEST_CASE("send via address_t - actor method dispatched correctly") {
 
     REQUIRE(actor != nullptr);
 
-    // Send to actor via address_t (dispatches to actor's queue)
     auto [needs_sched, future] = actor_zeta::send(
         actor->address(),
         &optional_test_actor::process,
         5);
 
-    // Future is not ready until actor processes the message
     REQUIRE(future.valid());
 
-    // Process message through the scheduler: run_once() consumes the resume verdict
-    // and re-queues the job while it keeps asking to be resumed.
     sched.enqueue(actor.get());
     sched.run();
 
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).take_ready() == 15);  // 5 + 10
-    REQUIRE(actor->call_count() == 1);  // Method was called
+    REQUIRE(actor->call_count() == 1);
 }
 
 TEST_CASE("optional send - address_t stores resource from actor") {
@@ -249,10 +232,6 @@ TEST_CASE("optional send - address_t stores resource from actor") {
     REQUIRE(addr.resource() != nullptr);
     REQUIRE(addr.resource() == resource);
 }
-
-// ============================================================================
-// Scheduler type alias tests
-// ============================================================================
 
 #include <actor-zeta/scheduler.hpp>
 
@@ -271,17 +250,13 @@ TEST_CASE("scheduler type aliases") {
 }
 
 
-// ============================================================================
-// make_ready_future tests
-// ============================================================================
-
 TEST_CASE("make_ready_future - void") {
     auto* resource = std::pmr::get_default_resource();
 
     auto future = actor_zeta::make_ready_future(resource);
 
     REQUIRE(future.is_ready());
-    std::move(future).take_ready(); // Should not throw/crash
+    std::move(future).take_ready();
 }
 
 TEST_CASE("make_ready_future - int with value") {
@@ -320,10 +295,6 @@ TEST_CASE("make_ready_future - string default constructed") {
     REQUIRE(std::move(future).take_ready().empty()); // Default string is empty
 }
 
-// ============================================================================
-// make_error tests
-// ============================================================================
-
 TEST_CASE("make_error - int future") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -351,10 +322,6 @@ TEST_CASE("make_error - error code is preserved") {
     REQUIRE(future.error().value() == static_cast<int>(std::errc::invalid_argument));
 }
 
-// ============================================================================
-// address_t copy/move semantics tests
-// ============================================================================
-
 TEST_CASE("address_t - copy preserves resource") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<optional_test_actor>(resource);
@@ -362,7 +329,6 @@ TEST_CASE("address_t - copy preserves resource") {
     auto addr1 = actor->address();
     REQUIRE(addr1.resource() == resource);
 
-    // Copy constructor
     auto addr2 = addr1;
     REQUIRE(addr2.resource() == resource);
     REQUIRE(addr2.get() == addr1.get());
@@ -375,12 +341,10 @@ TEST_CASE("address_t - move transfers resource") {
     auto addr1 = actor->address();
     void* original_ptr = addr1.get();
 
-    // Move constructor
     auto addr2 = std::move(addr1);
     REQUIRE(addr2.resource() == resource);
     REQUIRE(addr2.get() == original_ptr);
 
-    // After move, addr1 should be empty
     REQUIRE(addr1.get() == nullptr);
     REQUIRE(addr1.resource() == nullptr);
 }
@@ -395,7 +359,6 @@ TEST_CASE("address_t - copy assignment preserves resource") {
 
     void* ptr1 = addr1.get();
 
-    // Copy assignment
     addr2 = addr1;
     REQUIRE(addr2.resource() == resource);
     REQUIRE(addr2.get() == ptr1);
@@ -412,11 +375,10 @@ TEST_CASE("address_t - move assignment transfers resource") {
     void* ptr1 = addr1.get();
     void* ptr2 = addr2.get();
 
-    // Move assignment uses swap - addr1 gets old addr2 value
+    // Move assignment is a swap, so addr1 ends up holding addr2's old value.
     addr2 = std::move(addr1);
     REQUIRE(addr2.resource() == resource);
     REQUIRE(addr2.get() == ptr1);
-    // After swap, addr1 has old addr2 value
     REQUIRE(addr1.get() == ptr2);
     REQUIRE(addr1.resource() == resource);
 }
@@ -428,14 +390,9 @@ TEST_CASE("address_t - empty_address has nullptr resource") {
 
     REQUIRE(addr.get() == nullptr);
     REQUIRE(addr.resource() == nullptr);
-    REQUIRE(!addr);  // operator bool returns false
+    REQUIRE(!addr);
 }
 
-// ============================================================================
-// Sync dispatch with multiple methods
-// ============================================================================
-
-// Sync actor uses actor_mixin (not basic_actor/cooperative_actor which is async)
 class sync_multi_actor final : public actor_zeta::actor::actor_mixin<sync_multi_actor> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
@@ -506,7 +463,6 @@ TEST_CASE("sync actor - multiple methods") {
 
     REQUIRE(actor != nullptr);
 
-    // Test add method
     auto [needs_sched1, future1] = actor_zeta::send(
             actor.get(),
             &sync_multi_actor::add,
@@ -516,7 +472,6 @@ TEST_CASE("sync actor - multiple methods") {
     REQUIRE(std::move(future1).take_ready() == 30);
     REQUIRE(actor->add_count() == 1);
 
-    // Test multiply method
     auto [needs_sched2, future2] = actor_zeta::send(
             actor.get(),
             &sync_multi_actor::multiply,
@@ -526,24 +481,21 @@ TEST_CASE("sync actor - multiple methods") {
     REQUIRE(std::move(future2).take_ready() == 42);
     REQUIRE(actor->multiply_count() == 1);
 
-    // Test void method
     auto [needs_sched3, future3] = actor_zeta::send(
             actor.get(),
             &sync_multi_actor::reset);
 
     REQUIRE(future3.is_ready());
-    std::move(future3).take_ready();  // Should not crash
+    std::move(future3).take_ready();
     REQUIRE(actor->add_count() == 0);
     REQUIRE(actor->multiply_count() == 0);
 }
 
 TEST_CASE("sync_dispatch - msg_id sequential for multiple methods") {
-    // Verify msg_ids are sequential even with sync policy
     constexpr auto id1 = actor_zeta::msg_id<sync_multi_actor, &sync_multi_actor::add>;
     constexpr auto id2 = actor_zeta::msg_id<sync_multi_actor, &sync_multi_actor::multiply>;
     constexpr auto id3 = actor_zeta::msg_id<sync_multi_actor, &sync_multi_actor::reset>;
 
-    // Extract ActionId from lower bits
     constexpr uint64_t action1 = id1 & 0xFFFFFFFF;
     constexpr uint64_t action2 = id2 & 0xFFFFFFFF;
     constexpr uint64_t action3 = id3 & 0xFFFFFFFF;
@@ -552,10 +504,6 @@ TEST_CASE("sync_dispatch - msg_id sequential for multiple methods") {
     REQUIRE(action2 == 1);
     REQUIRE(action3 == 2);
 }
-
-// ============================================================================
-// Optional send with different types
-// ============================================================================
 
 class optional_void_actor final : public actor_zeta::basic_actor<optional_void_actor> {
 public:
@@ -612,8 +560,8 @@ TEST_CASE("send via address_t - void return type") {
     sched.run();
 
     REQUIRE(future.is_ready());
-    std::move(future).take_ready();  // Should not crash
-    REQUIRE(actor->called() == true);  // Method was called
+    std::move(future).take_ready();
+    REQUIRE(actor->called() == true);
 }
 
 TEST_CASE("send via address_t - string return type") {
@@ -633,7 +581,7 @@ TEST_CASE("send via address_t - string return type") {
     sched.run();
 
     REQUIRE(future.is_ready());
-    REQUIRE(std::move(future).take_ready() == "test_name");  // Value from coroutine
+    REQUIRE(std::move(future).take_ready() == "test_name");
 }
 
 TEST_CASE("dispatch_traits - empty traits") {

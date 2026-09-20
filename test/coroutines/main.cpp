@@ -7,10 +7,6 @@
 #include <actor-zeta/config.hpp>
 #include <test/tooltestsuites/scheduler_test.hpp>
 
-// ============================================================================
-// Test 1: promise_type exists and can be used for co_return
-// ============================================================================
-
 TEST_CASE("promise_type in unique_future<T>") {
     SECTION("promise_type exists for unique_future<int>") {
         using promise_type = actor_zeta::unique_future<int>::promise_type;
@@ -23,10 +19,6 @@ TEST_CASE("promise_type in unique_future<T>") {
     }
 }
 
-// ============================================================================
-// Test 2: Coroutine with co_return (actor member functions)
-// ============================================================================
-
 // Methods are registered in dispatch_traits and reached through behavior(), so the
 // tests below must go through send() rather than calling actor->method() directly.
 class coroutine_test_actor final : public actor_zeta::basic_actor<coroutine_test_actor> {
@@ -35,7 +27,6 @@ public:
         : actor_zeta::basic_actor<coroutine_test_actor>(res) {
     }
 
-    // Coroutine member functions - resource() extracted from 'this'
     actor_zeta::unique_future<int> coro_int() {
         co_return 42;
     }
@@ -88,8 +79,6 @@ TEST_CASE("simple coroutines with co_return") {
             &coroutine_test_actor::coro_int
         );
 
-        // The scheduler owns the resume verdict: run_once() re-queues the job
-        // while it keeps asking, so nothing is dropped at the call site.
         if (needs_sched) {
             sched.enqueue(actor.get());
         }
@@ -125,13 +114,9 @@ TEST_CASE("simple coroutines with co_return") {
         sched.run();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
-        std::move(future).take_ready();  // Should not throw
+        std::move(future).take_ready();
     }
 }
-
-// ============================================================================
-// Test 12: Coroutine futures (STATE mode)
-// ============================================================================
 
 TEST_CASE("Coroutine futures") {
     auto* resource =std::pmr::get_default_resource();
@@ -170,7 +155,6 @@ TEST_CASE("Coroutine futures") {
     }
 
     SECTION("cancel works on futures") {
-        // Create future via promise (clean API)
         actor_zeta::promise<int> p(resource);
         auto future_state = p.get_future();
 
@@ -184,22 +168,15 @@ TEST_CASE("Coroutine futures") {
     }
 }
 
-// ============================================================================
-// Test 13: All methods must be coroutines via actor (need resource())
-// ============================================================================
-
-// Test actor for arithmetic coroutine tests
 class arithmetic_test_actor final : public actor_zeta::basic_actor<arithmetic_test_actor> {
 public:
     explicit arithmetic_test_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<arithmetic_test_actor>(res) {}
 
-    // Coroutine method returning unique_future<int>
     actor_zeta::unique_future<int> coro_add(int a, int b) {
         co_return a + b;
     }
 
-    // Coroutine method returning unique_future<std::string>
     actor_zeta::unique_future<std::string> coro_concat(std::string a, std::string b) {
         co_return a + b;
     }
@@ -264,32 +241,24 @@ TEST_CASE("coroutine methods with unique_future return type") {
         sched.run();
         REQUIRE(future.is_ready());
 
-        // The future is already resolved, so take_ready() returns without waiting.
         auto start = std::chrono::steady_clock::now();
         int result = std::move(future).take_ready();
         auto elapsed = std::chrono::steady_clock::now() - start;
 
         REQUIRE(result == 12);
-        // Should be near-instant (< 1ms)
         REQUIRE(elapsed < std::chrono::milliseconds(1));
     }
 }
 
-// ============================================================================
-// Test 14: Handler integration - methods returning unique_future<T>
-// ============================================================================
-
 #include <actor-zeta.hpp>
 #include <actor-zeta/send.hpp>
 
-// Test actor with methods returning unique_future<T>
 class future_test_actor final : public actor_zeta::basic_actor<future_test_actor> {
 public:
     explicit future_test_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<future_test_actor>(res) {
     }
 
-    // All methods must be coroutines
     actor_zeta::unique_future<int> sync_add(int a, int b) {
         co_return a + b;
     }
@@ -323,12 +292,10 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         actor_zeta::test::scheduler_test_t sched(1, 100);
         REQUIRE(actor != nullptr);
 
-        // Send message and get result
         auto [needs_sched, result] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 10, 20);
 
         REQUIRE(result.valid());
 
-        // Process the message
         sched.enqueue(actor.get());
         sched.run();
         REQUIRE(result.is_ready());
@@ -341,12 +308,10 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         actor_zeta::test::scheduler_test_t sched(1, 100);
         REQUIRE(actor != nullptr);
 
-        // Send message and get result
         auto [needs_sched, result] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 5, 7);
 
         REQUIRE(result.valid());
 
-        // Process the message
         sched.enqueue(actor.get());
         sched.run();
         REQUIRE(result.is_ready());
@@ -362,7 +327,6 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         auto [ns2, r2] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 3, 4);
         auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 5, 6);
 
-        // Process all messages
         sched.enqueue(actor.get());
         sched.run();
         REQUIRE(std::move(r1).take_ready() == 3);
@@ -378,7 +342,6 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         auto [ns2, r2] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 4, 5);
         auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 6, 7);
 
-        // Process all messages
         sched.enqueue(actor.get());
         sched.run();
         REQUIRE(std::move(r1).take_ready() == 6);
@@ -393,7 +356,6 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
         auto [ns1, sync_result] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 10, 5);
         auto [ns2, async_result] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 3, 4);
 
-        // Process all messages
         sched.enqueue(actor.get());
         sched.run();
         REQUIRE(std::move(sync_result).take_ready() == 15);
@@ -401,19 +363,6 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
     }
 }
 
-// See test/coroutine-threading for current approach using co_await
-
-// Test 17: Recursive coroutines are NOT SUPPORTED
-// Recursive send(this, ...) from within a coroutine will deadlock
-// because the actor is in "running" state and won't reschedule itself.
-// This is a known architectural limitation.
-//
-// If you need recursion, use iterative algorithms instead.
-
-// ============================================================================
-// Test 18: Memory leak detection - coroutine cleanup
-// ============================================================================
-//
 // These sections only prove the lifecycle does not crash. The failure they guard
 // against -- a coroutine frame that is never destroyed, taking its promise_type and
 // locals with it -- is invisible without a sanitizer, so run this target under ASan
@@ -441,7 +390,6 @@ TEST_CASE("coroutine cleanup does not crash") {
     }
 
     SECTION("multiple coroutines") {
-        // Stress test - create/destroy many coroutines
         for (int i = 0; i < 100; ++i) {
             auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
@@ -479,7 +427,7 @@ TEST_CASE("coroutine cleanup does not crash") {
             sched.enqueue(actor.get());
             sched.run();
             REQUIRE(future.valid());
-            std::move(future).take_ready();  // Should not throw
+            std::move(future).take_ready();
         }
         REQUIRE(true);
     }

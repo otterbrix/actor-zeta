@@ -26,7 +26,6 @@ namespace actor_zeta { namespace type_traits {
 
 }} // namespace actor_zeta::type_traits
 
-// Forward declarations for type traits
 namespace actor_zeta {
     template<typename T = void>
     class unique_future;
@@ -63,10 +62,8 @@ namespace actor_zeta { namespace detail {
     template<typename T>
     inline constexpr bool is_valid_rtt_type_v = valid_rtt_type<T>;
 
-    // "This type can hand out a memory resource." Lives here rather than in
-    // future.hpp or behavior_t.hpp because both need it and neither includes the
-    // other: duplicating it once already let behavior_t.hpp reference a name that
-    // only existed if future.hpp happened to be included first.
+    // "This type can hand out a memory resource." Lives here because future.hpp and
+    // behavior_t.hpp both need it and neither includes the other.
     template<typename T>
     concept has_resource_method = requires(T* ptr) {
         { ptr->resource() } -> std::convertible_to<std::pmr::memory_resource*>;

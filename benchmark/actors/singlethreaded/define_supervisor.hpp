@@ -41,10 +41,9 @@ public:
     }
 
 private:
-    // This supervisor is the run queue for its two children: singlethreaded's
-    // ping_pong_actor holds no scheduler and cannot enqueue its partner, so nothing but
-    // this function will ever run them. A `resume` verdict means "put me back in a run
-    // queue", so discharge it here -- keep the child on the CPU for as long as it asks.
+    // This supervisor is the run queue: singlethreaded's ping_pong_actor holds no
+    // scheduler and cannot enqueue its partner, so nothing else will ever run the
+    // children. A `resume` verdict means "put me back in a run queue" -- discharge it here.
     static void drive(Actor* child) {
         while (child->resume(1).result == actor_zeta::scheduler::resume_result::resume) {
         }

@@ -12,21 +12,13 @@
 #include <actor-zeta/detail/state_flags.hpp>
 
 
-// The exception_ptr machinery below is gated on __cpp_exceptions -- the compiler's own
-// answer, which is what actually decides whether a coroutine body gets a catch wrapper
-// at all. __EXCEPTIONS_DISABLE__ is the project's CMake intent; if the two disagree,
-// the build is misconfigured and everything here would be reasoning about the wrong mode.
+// __cpp_exceptions (the compiler's answer) and __EXCEPTIONS_DISABLE__ (the CMake intent) must agree.
 #if defined(__EXCEPTIONS_DISABLE__) && defined(__cpp_exceptions)
 #error "EXCEPTIONS_DISABLE=ON, but the compiler still has exceptions enabled -- check that -fno-exceptions actually reached this translation unit"
 #endif
 
-// ODR REQUIREMENT, accepted deliberately. shared_state carries an exception_ptr only in
-// an -fexceptions build, so sizeof() and several inline bodies differ between the two
-// modes. The library is header-only and the setting is a global compiler flag, so every
-// translation unit in one build already agrees; linking objects compiled with DIFFERENT
-// settings is undefined and nothing here can diagnose it. Both modes are built (CI covers
-// EXCEPTIONS_DISABLE=ON and OFF), but
-// each configuration is uniform -- no build mixes the two within one link.
+// ODR, accepted deliberately: shared_state carries an exception_ptr only under -fexceptions, so its
+// layout differs between modes. Linking objects from DIFFERENT settings is undefined and undiagnosable here.
 
 namespace actor_zeta::detail {
 
@@ -45,16 +37,12 @@ namespace actor_zeta::detail {
 
     template<typename T>
     struct shared_state {
-        std::pmr::memory_resource* resource_;             // first for init order
+        std::pmr::memory_resource* resource_;
         std::atomic<std::uint8_t> flags_{state_flags::empty};
         result_storage<T> value_;
         std::atomic<std::coroutine_handle<>> continuation_{nullptr};   // non-owning
         std::error_code error_{};
 #ifdef __cpp_exceptions
-        // Captured by unhandled_exception() when the coroutine body escapes with an
-        // exception, and rethrown at extraction. Exists ONLY in an -fexceptions build:
-        // with -fno-exceptions the compiler emits no catch wrapper for a coroutine
-        // body, so nothing can ever be stored here. See the ODR note at the top.
         std::exception_ptr exception_{};
 #endif
 
@@ -69,12 +57,7 @@ namespace actor_zeta::detail {
 
         ~shared_state() noexcept = default;
 
-        // Write API (from coroutine). Continuation is resumed only in final_suspend.
-        //
-        // A member template rather than the two overloads it replaces: `void&&` is
-        // ill-formed, and a member DECLARATION is instantiated with the class, so a
-        // requires-clause would not save a non-template one. The argument is forwarded
-        // straight into emplace(), which also drops a move the old T&& overload paid.
+        // Producer side; never resumes the continuation. Template because `void&&` is ill-formed otherwise.
         template<typename U = T>
             requires(!std::is_void_v<T>)
         void set_value(U&& v) noexcept {
@@ -94,31 +77,21 @@ namespace actor_zeta::detail {
         }
 
 #ifdef __cpp_exceptions
-        // Capture an escaped exception. Also stamps an error code so a consumer that
-        // only polls failed()/error() -- never extracting -- still sees a real failure
-        // and can tell it apart from "released without an outcome"
-        // (state_not_recoverable, written by release_promise()'s totality repair).
         void set_exception(std::exception_ptr ep) noexcept {
             exception_ = ep;
             error_ = std::make_error_code(std::errc::interrupted);
             flags_.fetch_or(state_flags::error_set, std::memory_order_release);
         }
 
-        // Rethrow at the extraction point, so the exception surfaces where the value
-        // would have. Called before any has_error() gate, since a captured exception
-        // sets error_set and would otherwise trip it first.
         void rethrow_if_exception() const {
             if ((flags_.load(std::memory_order_acquire) & state_flags::error_set) && exception_) {
                 std::rethrow_exception(exception_);
             }
         }
 #else
-        // No exceptions: nothing can be captured, so this is an empty hook that keeps
-        // the extraction sites free of #ifdef.
         void rethrow_if_exception() const noexcept {}
 #endif
 
-        // Read API (from future).
         [[nodiscard]] bool is_ready() const noexcept {
             return flags_.load(std::memory_order_acquire) & state_flags::promise_released;
         }
@@ -135,8 +108,7 @@ namespace actor_zeta::detail {
             return error_;
         }
 
-        // decltype(auto), because `void&` is ill-formed and the reference-ness has to
-        // come from result_storage<T>::get() rather than from a written-out T&.
+        // decltype(auto): `void&` is ill-formed, so reference-ness must come from result_storage<T>::get().
         [[nodiscard]] decltype(auto) get_value() noexcept {
             return value_.get();
         }
@@ -145,22 +117,14 @@ namespace actor_zeta::detail {
             return value_.get();
         }
 
-        // SETTLED-OUTCOME / I2 -- flags are MONOTONIC. Taking the value SETS a bit
-        // rather than clearing value_set. Clearing it would make release_promise()'s
-        // totality repair fire on a state whose value was legitimately consumed, and
-        // would reintroduce exactly the kind of cross-thread ambiguity this invariant
-        // exists to remove. Nothing in flags_ is ever cleared except promise_finalizing.
+        // I2 -- flags are MONOTONIC (only promise_finalizing is ever cleared): taking SETS
+        // consumed, since clearing value_set would fire release_promise()'s repair on a consumed value.
         decltype(auto) take_value() noexcept {
             flags_.fetch_or(state_flags::consumed, std::memory_order_release);
             return value_.take();
         }
 
-        // SETTLED-OUTCOME / I3 -- the extraction predicate.
-        //
-        // "A value exists and has not been taken yet." Deliberately NOT is_ready():
-        // that is promise_released, which says the producer finished, not that it
-        // produced anything. Reading it as a value gate is the whole bug class this
-        // invariant closes.
+        // I3 -- the extraction predicate. NOT is_ready(): promise_released means finished, not produced.
         [[nodiscard]] bool holds_value() const noexcept {
             const auto bits = flags_.load(std::memory_order_acquire);
             return (bits & (state_flags::value_set | state_flags::error_set | state_flags::consumed))
@@ -168,24 +132,10 @@ namespace actor_zeta::detail {
         }
 
 
-        // Returns true if this call deallocated the state (future already released =>
-        // cancelled; the continuation must NOT be resumed).
-        //
-        // TOTALITY (invariant SETTLED-OUTCOME / I1). This is the ONLY writer of
-        // promise_released in the whole library, and promise_released is what
-        // is_ready() reports. A promise that releases without ever writing a value or
-        // an error therefore produces a future that says "ready", says "not failed",
-        // and has nothing to take -- and take_ready()'s assert, the only thing between
-        // that and a read of unset storage, is compiled out under NDEBUG.
-        //
-        // So repair it here, folding error_set into the SAME release-ordered RMW that
-        // publishes promise_released. No observer can then see the released bit
-        // without a result bit: `is_ready() => has_result()` holds at every instant,
-        // on every thread, in every build mode.
-        //
-        // The plain load is safe: set_value()/set_error() are producer-side and
-        // sequenced before this call on the producer's own thread (final_suspend, or
-        // ~promise), so no other thread can be writing a result bit concurrently.
+        // Returns true if this call deallocated (future already released; do NOT resume).
+        // SETTLED-OUTCOME / I1, TOTALITY: the ONLY writer of promise_released, so error_set rides
+        // the same release-ordered RMW when no result exists: `is_ready() => has_result()` at every
+        // instant, never "ready, not failed, nothing to take". Plain load: set_value()/set_error() precede.
         [[nodiscard]] bool release_promise() noexcept {
             std::uint8_t bits = state_flags::promise_released;
             if ((flags_.load(std::memory_order_acquire) & state_flags::result_set) == 0) {
@@ -204,9 +154,7 @@ namespace actor_zeta::detail {
 
         void release_future() noexcept {
             auto old = flags_.fetch_or(state_flags::future_released, std::memory_order_acq_rel);
-            // Last-One-Out: deallocate only if the promise is fully done; if the producer
-            // is in its final_suspend path (promise_finalizing set), it will deallocate
-            // after its double-check.
+            // Last one out: a producer still finalizing deallocates itself after its double-check.
             bool promise_was_released = old & state_flags::promise_released;
             bool producer_is_finalizing = old & state_flags::promise_finalizing;
             if (promise_was_released && !producer_is_finalizing) {
@@ -214,8 +162,7 @@ namespace actor_zeta::detail {
             }
         }
 
-        // CAS the finalizing flag off; returns false if future_released raced in
-        // (then we deallocate ourselves).
+        // CAS finalizing off; false means future_released raced in and we deallocated ourselves.
         [[nodiscard]] bool try_complete_finalize() noexcept {
             std::uint8_t current  = flags_.load(std::memory_order_acquire);
             std::uint8_t expected = static_cast<std::uint8_t>(current & ~state_flags::future_released);
@@ -230,15 +177,8 @@ namespace actor_zeta::detail {
                 deallocate();
                 return false;
             }
-            // Defensive: clear finalizing on unexpected race.
-            //
-            // `true` here is load-bearing, not a default. The caller reads false as "the
-            // state is gone, stop touching it", and final_awaiter turns that into
-            // `self.destroy(); return noop_coroutine()` -- dropping a continuation it was
-            // holding. Reaching this branch means the CAS failed for a reason OTHER than
-            // future_released, i.e. the consumer is still alive and still waiting: return
-            // false and the awaiting coroutine is never resumed. One character from a real
-            // lost wakeup.
+            // CAS failed for another reason: the consumer is alive and waiting. `true` is load-bearing --
+            // false reads as "state gone" and final_awaiter would destroy the frame and drop the continuation.
             flags_.fetch_and(static_cast<std::uint8_t>(~state_flags::promise_finalizing), std::memory_order_release);
             return true;
         }

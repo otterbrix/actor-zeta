@@ -33,7 +33,6 @@ int main() {
     auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_t>(resource);
 
-    // The two-step form: take the obligation, discharge it, then await.
     auto [needs_sched, future] = send(worker.get(), &worker_t::compute, 21);
     while (!future.is_ready()) {
         auto info = worker->resume(1);

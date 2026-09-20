@@ -8,13 +8,10 @@
 
 #include <actor-zeta.hpp>
 
-// Wait for a future completed elsewhere -- by a scheduler's worker threads, or inline
-// by a synchronous actor_mixin. Nothing is pumped here: this is a bounded spin.
-//
-// is_ready() is NOT a value gate: it is the promise_released bit, which a promise that
-// dies without a value sets too, and take_ready() only ASSERTS that a value is present
-// -- an assert that is gone in the Release builds examples ship as. Hence failed(). The
-// bound turns a producer that never completes into a visible error, not a silent hang.
+// Bounded spin on a future completed elsewhere (scheduler worker or inline actor_mixin).
+// is_ready() is only the promise_released bit -- a promise that dies without a value
+// sets it too -- and take_ready() merely asserts, which Release builds drop. Hence
+// failed(). The bound turns a producer that never completes into a visible error.
 template<typename T>
 T await_from_scheduler(actor_zeta::unique_future<T>& future) {
     constexpr int kSpinCap = 10'000'000;
@@ -175,9 +172,8 @@ int main() {
     std::cerr << "=== Supervisor Example: Manual Scheduling ===" << std::endl;
     std::cerr << std::endl;
 
-    // The supervisor is an actor_mixin and processes each request synchronously, so every
-    // returned future is ready as soon as send() returns. The real scheduler keeps
-    // running while we collect, and is stopped before the actor is destroyed.
+    // The supervisor is an actor_mixin: each request runs inside send(), so the future is
+    // ready on return. The scheduler is stopped before the actors it drives are destroyed.
     auto await_request = [](auto future_pair) {
         auto& future = future_pair.second;
         return await_from_scheduler(future);

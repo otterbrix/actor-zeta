@@ -10,21 +10,15 @@
 #include <vector>
 #include <memory>
 
-// =============================================================================
-// The race between "the future reads as ready" and final_suspend().
-//
-// - is_ready() (the old available()) turns true only AFTER release_promise(),
-//   which final_suspend calls last
-// - the coroutine destroys ITSELF in final_suspend
-// - ~unique_future only releases the state; it never destroys a coroutine handle
-//
-// So destroying a future once is_ready() is true is safe. That is what these
-// tests exercise.
-// =============================================================================
+// Destroying a future the moment is_ready() reads true must be safe, across a
+// dispatcher -> worker chain under a real scheduler. is_ready() is
+// promise_released, which final_awaiter sets only after the value is written and
+// the continuation claimed; a finished producer parks at final_suspend for
+// release() to reclaim, so consumer and producer never race for the frame.
 
 namespace {
-// Drive a cross-actor future to ready without taking — these tests destroy the
-// future untaken to exercise destroy-on-ready safety.
+// Drive a cross-actor future to ready without taking it. The dispatcher ignores
+// the needs_sched its own send() reports, so both actors are re-enqueued here.
 template<typename Fut, typename Sched, typename A1, typename A2>
 inline void drive_until_ready(Fut& fut, Sched& sched, A1* a1, A2* a2) {
     while (!fut.is_ready()) {
@@ -35,7 +29,6 @@ inline void drive_until_ready(Fut& fut, Sched& sched, A1* a1, A2* a2) {
 }
 } // namespace
 
-// Sentinel to track destructions
 class destruction_tracker {
 public:
     static constexpr uint64_t MAGIC = 0xCAFEBABEDEADBEEFULL;
@@ -76,23 +69,16 @@ private:
 std::atomic<int> destruction_tracker::alive_{0};
 std::atomic<int> destruction_tracker::double_destroy_{0};
 
-// Forward declaration
 class worker_actor;
 
-// =============================================================================
-// Worker Actor - executes work and returns result
-// =============================================================================
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
     explicit worker_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<worker_actor>(resource) {}
 
-    // Coroutine that does work with local variable
     actor_zeta::unique_future<int> execute(int value) {
-        // Local variable - will be destroyed when coroutine completes
         destruction_tracker tracker(value);
 
-        // Simulate work
         volatile int sum = 0;
         for (int i = 0; i < 100; ++i) {
             sum += tracker.id();
@@ -111,9 +97,6 @@ public:
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::execute>;
 };
 
-// =============================================================================
-// Dispatcher Actor - sends work to workers and awaits results
-// =============================================================================
 class dispatcher_actor final : public actor_zeta::basic_actor<dispatcher_actor> {
 public:
     explicit dispatcher_actor(std::pmr::memory_resource* resource)
@@ -125,14 +108,11 @@ public:
         worker_address_ = addr;
     }
 
-    // Coroutine that chains to worker
     actor_zeta::unique_future<int> process(int value) {
         destruction_tracker tracker(value + 1000);
 
-        // Send to worker and await result
         auto [_, future] = actor_zeta::send(worker_address_, &worker_actor::execute, value);
 
-        // co_await - suspend here until worker's execute() completes
         int result = co_await std::move(future);
 
         completed_.fetch_add(1, std::memory_order_relaxed);
@@ -155,9 +135,6 @@ private:
     actor_zeta::address_t worker_address_;
 };
 
-// =============================================================================
-// Test 1: Basic chaining - a ready future is safe to destroy
-// =============================================================================
 TEST_CASE("available race chaining: basic chain is safe") {
     destruction_tracker::reset();
 
@@ -179,15 +156,11 @@ TEST_CASE("available race chaining: basic chain is safe") {
             scheduler->enqueue(dispatcher.get());
         }
 
-        // Schedule worker once (it will be scheduled again via message passing)
         scheduler->enqueue(worker.get());
 
-        // Wait for the future to become ready (file-local driver: re-enqueues both
-        // actors to keep the cross-actor messaging moving; never takes — see helper).
         drive_until_ready(future, scheduler, dispatcher.get(), worker.get());
 
-        // Safe to destroy: is_ready() == true means release_promise() ran, and
-        // that happens AFTER self.destroy() in final_suspend.
+        // Destroyed untaken, the instant is_ready() read true.
         { auto temp = std::move(future); }
     }
 
@@ -202,9 +175,6 @@ TEST_CASE("available race chaining: basic chain is safe") {
     REQUIRE(dispatcher->completed() == NUM_ITERATIONS);
 }
 
-// =============================================================================
-// Test 2: poll_pending pattern - sequential polling
-// =============================================================================
 TEST_CASE("available race chaining: poll_pending pattern") {
     destruction_tracker::reset();
 
@@ -220,7 +190,6 @@ TEST_CASE("available race chaining: poll_pending pattern") {
     constexpr int NUM_BATCHES = 5;
 
     for (int batch = 0; batch < NUM_BATCHES; ++batch) {
-        // Accumulate pending futures
         std::vector<actor_zeta::unique_future<int>> pending;
         pending.reserve(BATCH_SIZE);
 
@@ -236,13 +205,12 @@ TEST_CASE("available race chaining: poll_pending pattern") {
             pending.push_back(std::move(future));
         }
 
-        // poll_pending() pattern - drain completed futures
+        // Erase (destroy) each future as soon as it reads ready.
         while (!pending.empty()) {
             scheduler->enqueue(dispatcher.get());
             scheduler->enqueue(worker.get());
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->is_ready()) {
-                    // Safe to destroy - is_ready() is true only after full completion
                     it = pending.erase(it);
                 } else {
                     ++it;
@@ -262,9 +230,6 @@ TEST_CASE("available race chaining: poll_pending pattern") {
     REQUIRE(dispatcher->completed() == BATCH_SIZE * NUM_BATCHES);
 }
 
-// =============================================================================
-// Test 3: Concurrent senders with sequential actor processing
-// =============================================================================
 TEST_CASE("available race chaining: concurrent senders") {
     destruction_tracker::reset();
 
@@ -292,10 +257,8 @@ TEST_CASE("available race chaining: concurrent senders") {
                 }
                 scheduler->enqueue(worker.get());
 
-                // Wait for completion (file-local driver — see helper above).
                 drive_until_ready(future, scheduler, dispatcher.get(), worker.get());
 
-                // Safe to destroy
                 { auto temp = std::move(future); }
             }
         });
@@ -315,30 +278,21 @@ TEST_CASE("available race chaining: concurrent senders") {
     REQUIRE(dispatcher->completed() == NUM_THREADS * OPERATIONS_PER_THREAD);
 }
 
-// =============================================================================
-// Test 4: Verify is_ready vs has_result distinction
-// This tests the core fix - is_ready should only be true after release_promise
-// =============================================================================
 TEST_CASE("available race chaining: is_ready vs has_result") {
     auto* resource = std::pmr::get_default_resource();
 
-    // Direct state test
     auto* state = actor_zeta::detail::allocate_shared_state<int>(resource);
 
-    // Initially both false
     REQUIRE_FALSE(state->has_result());
     REQUIRE_FALSE(state->is_ready());
 
-    // After set_value, has_result is true but is_ready is false
     state->set_value(42);
     REQUIRE(state->has_result());
-    REQUIRE_FALSE(state->is_ready());  // Promise not released!
+    REQUIRE_FALSE(state->is_ready());  // is_ready() is promise_released, not the value
 
-    // After release_promise, is_ready becomes true
     const bool deallocated = state->release_promise();
     REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
-    // Cleanup
     state->release_future();
 }

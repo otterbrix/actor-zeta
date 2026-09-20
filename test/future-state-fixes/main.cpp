@@ -23,30 +23,21 @@ namespace {
 using namespace actor_zeta;
 using namespace actor_zeta::detail;
 
-// =============================================================================
-// Issue #1: race between the old available() and final_suspend.
-// Resolution: is_ready() reports promise_released, not has_result().
-// =============================================================================
-
 TEST_CASE("Issue #1: is_ready vs has_result distinction", "[race][availability]") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
 
-    // Initially both are false
     REQUIRE_FALSE(state->has_result());
     REQUIRE_FALSE(state->is_ready());
 
-    // After set_value, has_result is true but is_ready is still false
     state->set_value(42);
     REQUIRE(state->has_result());
-    REQUIRE_FALSE(state->is_ready());  // Promise not released yet!
+    REQUIRE_FALSE(state->is_ready());  // is_ready() is promise_released, not the value
 
-    // After release_promise, is_ready becomes true
     const bool deallocated = state->release_promise();
     REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
-    // Cleanup
     state->release_future();
 }
 
@@ -54,7 +45,6 @@ TEST_CASE("Issue #1: void specialization", "[race][void]") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<void>(resource);
 
-    // Same pattern for void
     REQUIRE_FALSE(state->has_result());
     REQUIRE_FALSE(state->is_ready());
 
@@ -69,11 +59,7 @@ TEST_CASE("Issue #1: void specialization", "[race][void]") {
     state->release_future();
 }
 
-// =============================================================================
-// Issue #2: data race on the error_code write.
-// Resolution: the atomic flag word orders the write against every reader.
-// =============================================================================
-
+// The atomic flag word orders the error_code write against every reader.
 TEST_CASE("Issue #2: error state is atomic", "[error][atomic]") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
@@ -90,18 +76,13 @@ TEST_CASE("Issue #2: error state is atomic", "[error][atomic]") {
     state->release_future();
 }
 
-// =============================================================================
-// Issue #3: Consistent error handling for void/non-void
-// =============================================================================
-
 TEST_CASE("Issue #3: error state handling is consistent for int type", "[error][consistency]") {
     auto* resource = std::pmr::get_default_resource();
 
     promise<int> p(resource);
-    auto f = p.get_future();  // Get future BEFORE error
+    auto f = p.get_future();  // before the error
     p.error(std::make_error_code(std::errc::invalid_argument));
 
-    // Future should report failed state
     REQUIRE(f.failed());
     REQUIRE(f.error() == std::make_error_code(std::errc::invalid_argument));
 }
@@ -110,10 +91,9 @@ TEST_CASE("Issue #3: error state handling is consistent for void type", "[error]
     auto* resource = std::pmr::get_default_resource();
 
     promise<void> p(resource);
-    auto f = p.get_future();  // Get future BEFORE error
+    auto f = p.get_future();  // before the error
     p.error(std::make_error_code(std::errc::invalid_argument));
 
-    // Future should report failed state
     REQUIRE(f.failed());
     REQUIRE(f.error() == std::make_error_code(std::errc::invalid_argument));
 }
@@ -123,10 +103,9 @@ TEST_CASE("Issue #3: cancelled state handling is consistent for int type", "[can
 
     promise<int> p(resource);
     unique_future<int> f = p.get_future();
-    // Cancellation is now produced via the promise's error channel.
+    // Cancellation is the promise's error channel.
     p.error(std::make_error_code(std::errc::operation_canceled));
 
-    // Future should report cancelled state (observed via failed()/error())
     REQUIRE(f.failed());
     REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
 }
@@ -136,17 +115,11 @@ TEST_CASE("Issue #3: cancelled state handling is consistent for void type", "[ca
 
     promise<void> p(resource);
     unique_future<void> f = p.get_future();
-    // Cancellation is now produced via the promise's error channel.
     p.error(std::make_error_code(std::errc::operation_canceled));
 
-    // Future should report cancelled state (observed via failed()/error())
     REQUIRE(f.failed());
     REQUIRE(f.error() == std::make_error_code(std::errc::operation_canceled));
 }
-
-// =============================================================================
-// Issue #4: Last-One-Out deallocation
-// =============================================================================
 
 TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out]") {
     std::atomic<int> deallocation_count{0};
@@ -201,27 +174,19 @@ TEST_CASE("Issue #4: Last-One-Out deallocates correctly", "[memory][last-one-out
     }
 }
 
-// =============================================================================
-// Issue #5: operator= should not cancel already-completed futures
-// =============================================================================
-
 TEST_CASE("Issue #5: operator= does not overwrite error state", "[operator=][error]") {
     auto* resource = std::pmr::get_default_resource();
 
-    // Create first future with error
     promise<int> p1(resource);
     unique_future<int> f1 = p1.get_future();
     p1.error(std::make_error_code(std::errc::invalid_argument));
 
-    // Create second future
     promise<int> p2(resource);
     unique_future<int> f2 = p2.get_future();
     p2.set_value(42);
 
-    // Move f2 into f1 - old state released, new state acquired
     f1 = std::move(f2);
 
-    // f1 now holds f2's state (which has value 42)
     REQUIRE(f1.is_ready());
     REQUIRE(std::move(f1).take_ready() == 42);
 }
@@ -262,20 +227,14 @@ TEST_CASE("Issue #5: operator= releases old state properly", "[operator=][memory
         p1.set_value(1);
         p2.set_value(2);
 
-        // Move f2 into f1
         f1 = std::move(f2);
 
-        // f1's old state should be deallocated (promise+future both released)
+        // f1's old state: promise and future both released.
         REQUIRE(deallocation_count.load() == 1);
     }
 
-    // All states should be deallocated after scope
     REQUIRE(deallocation_count.load() == 2);
 }
-
-// =============================================================================
-// Concurrent stress tests
-// =============================================================================
 
 TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]") {
     constexpr int NUM_ITERATIONS = 1000;
@@ -346,7 +305,6 @@ TEST_CASE("Concurrent: promise and future release race", "[concurrent][memory]")
         }
     }
 
-    // Exactly one deallocation per iteration
     REQUIRE(deallocation_count.load() == NUM_ITERATIONS);
     REQUIRE(attribution_mismatches == 0);
     REQUIRE(promise_won <= NUM_ITERATIONS);
@@ -374,7 +332,6 @@ TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
         });
 
         std::thread consumer([state, &read_value]() {
-            // Poll is_ready (safe after release_promise)
             while (!state->is_ready()) {
                 std::this_thread::yield();
             }
@@ -390,8 +347,8 @@ TEST_CASE("Concurrent: is_ready polling is safe", "[concurrent][polling]") {
     }
 }
 
-// Once is_ready() returns true (acquire on flags_), the producer's relaxed store
-// must be visible — the release/acquire chain through shared_state is the subject.
+// Once is_ready() returns true (acquire on flags_), a relaxed store the producer
+// made before set_value() must be visible: the release/acquire chain is the subject.
 TEST_CASE("Concurrent: is_ready acquire synchronizes side effect on shared_state",
           "[concurrent][polling][memory-ordering]") {
     constexpr int NUM_ITERATIONS = 1000;
@@ -403,12 +360,10 @@ TEST_CASE("Concurrent: is_ready acquire synchronizes side effect on shared_state
         std::atomic<int> side_effect{0};
         std::atomic<int> read_side_effect{-1};
 
-        // Same shape as above: latch release_promise()'s answer, assert after the
-        // join -- a Catch2 macro fired from inside a thread is itself a data race.
+        // Latched, asserted after the join: a Catch2 macro inside a thread races.
         std::atomic<bool> promise_deallocated{false};
 
         std::thread writer([state, &side_effect, &promise_deallocated]() {
-            // Relaxed store BEFORE the releasing operations on the state.
             side_effect.store(42, std::memory_order_relaxed);
             state->set_value(100);              // release on flags_
             promise_deallocated.store(state->release_promise(),   // acq_rel on flags_
@@ -416,12 +371,9 @@ TEST_CASE("Concurrent: is_ready acquire synchronizes side effect on shared_state
         });
 
         std::thread reader([state, &side_effect, &read_side_effect]() {
-            // Acquire is exercised by is_ready() (loads flags_ acquire).
             while (!state->is_ready()) {
                 std::this_thread::yield();
             }
-            // If is_ready() returned true, the producer's relaxed store must be
-            // visible — that is the release/acquire chain under test.
             read_side_effect.store(side_effect.load(std::memory_order_relaxed),
                                    std::memory_order_relaxed);
         });
@@ -434,10 +386,6 @@ TEST_CASE("Concurrent: is_ready acquire synchronizes side effect on shared_state
         state->release_future();
     }
 }
-
-// =============================================================================
-// Promise/Future integration tests
-// =============================================================================
 
 TEST_CASE("Integration: basic promise-future flow", "[integration]") {
     auto* resource = std::pmr::get_default_resource();
@@ -460,11 +408,9 @@ TEST_CASE("Integration: promise destruction without set_value", "[integration][e
     unique_future<int> future([resource]() {
         promise<int> p(resource);
         auto f = p.get_future();
-        // Promise destroyed without set_value
         return f;
     }());
 
-    // Future should be in failed state with broken_pipe
     REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
@@ -477,12 +423,10 @@ TEST_CASE("Integration: move semantics", "[integration][move]") {
     auto f1 = p1.get_future();
     auto* original_state = f1.internal_state();
 
-    // Move promise
     promise<int> p2(std::move(p1));
     REQUIRE_FALSE(p1.valid());
     REQUIRE(p2.valid());
 
-    // Move future
     unique_future<int> f2(std::move(f1));
     REQUIRE_FALSE(f1.valid());
     REQUIRE(f2.valid());
@@ -492,19 +436,11 @@ TEST_CASE("Integration: move semantics", "[integration][move]") {
     REQUIRE(f2.is_ready());
     REQUIRE(std::move(f2).take_ready() == 123);
 }
-// =============================================================================
-// SETTLED-OUTCOME / I1 -- producer totality.
-//
-// release_promise() is the ONLY writer of promise_released in the library, and
-// promise_released is exactly what is_ready() reports. Before the repair, a
-// promise that released without ever writing an outcome produced a future that
-// answered is_ready()==true, failed()==false, and had nothing to take. The only
-// thing between that and a read of unset storage was take_ready()'s assert --
-// which is compiled out under NDEBUG, i.e. in every Release build that ships.
-//
-// The invariant now: an acquire load that observes promise_released observes a
-// result bit in the same load. `is_ready() => has_result()`, always.
-// =============================================================================
+// SETTLED-OUTCOME / I1 -- producer totality: an acquire load that observes
+// promise_released observes a result bit in the same load, `is_ready() =>
+// has_result()`. Without the repair in release_promise() a promise released
+// without an outcome would answer is_ready()==true, failed()==false, with nothing
+// to take -- and under NDEBUG nothing stands between that and unset storage.
 
 TEST_CASE("SETTLED-OUTCOME: release without an outcome is repaired, not published raw",
           "[invariant][settled-outcome]") {

@@ -7,13 +7,13 @@
 
 namespace actor_zeta {
 
-    // Forward declaration
     template<typename T>
     class unique_future;
 
     namespace detail {
 
-        // Concept for valid future value type
+        // What a coroutine promise_type must provide to back a unique_future<T>, and the
+        // selector that lets an actor supply its own via a member template promise_type<T>.
 
         template<typename T>
         concept valid_future_value_type =
@@ -85,22 +85,16 @@ namespace actor_zeta {
             promise_has_allocation<P> &&
             promise_has_return_void<P>;
 
-        // Check if actor has custom promise_type
-
         template<typename Actor>
         concept has_custom_promise_type = requires {
             typename Actor::template promise_type<int>;
         };
 
-        // Selector for promise_type
-
         template<typename Actor, typename T>
         struct promise_type_selector {
-            // Default: use unique_future<T>::promise_type
             using type = typename unique_future<T>::promise_type;
         };
 
-        // Specialization for actors with custom promise_type
         template<typename Actor, typename T>
             requires has_custom_promise_type<Actor>
         struct promise_type_selector<Actor, T> {

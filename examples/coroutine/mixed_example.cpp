@@ -30,11 +30,9 @@ public:
     actor_zeta::unique_future<int> square(int x) {
         std::cout << "[Calculator] ASYNC square(" << x << ") - START\n";
 
-        // An actor cannot await a message it posted to itself: resume() will not pop the
-        // next message while the current behavior is still suspended, so send(this, ...)
-        // + co_await never completes (see test/coroutines/main.cpp, "Recursive coroutines
-        // are NOT SUPPORTED"). Calling the handler gives back the same unique_future
-        // without going through the mailbox.
+        // Direct call, not send(this, ...): an actor cannot await a message it posted to
+        // itself -- resume() will not pop the next message while this behavior is
+        // suspended (see test/coroutines/main.cpp, "Recursive coroutines are NOT SUPPORTED").
         std::cout << "[Calculator] ASYNC square - awaiting multiply...\n";
         int result = co_await multiply(x, x);
         std::cout << "[Calculator] ASYNC square - multiply completed: " << result << "\n";
@@ -57,7 +55,6 @@ public:
                 co_await actor_zeta::dispatch(this, &calculator_actor::multiply, msg);
                 break;
             case actor_zeta::msg_id<calculator_actor, &calculator_actor::square>: {
-                // dispatch() returns unique_future<void> which forwards to caller's promise
                 co_await actor_zeta::dispatch(this, &calculator_actor::square, msg);
                 break;
             }
@@ -67,19 +64,16 @@ public:
         }
     }
 
-    // A caller cannot resume a suspended coroutine by polling: a method coroutine
-    // parked on co_await is resumed by driving its OWNING actor -- resume() or the
-    // scheduler -- which runs the drain block inside cooperative_actor::resume_impl.
+    // A coroutine suspended on co_await is resumed by driving its OWNING actor
+    // (resume() or the scheduler), never by the caller polling the future.
 };
 
-// Wait for a result the scheduler is producing. The worker owns the resume verdict and
-// re-enqueues the actor for as long as it asks, so this thread only polls.
+// Bounded spin on a result the scheduler's worker is producing; this thread only polls.
 template<typename T>
 T await_result(actor_zeta::unique_future<T>& future) {
-    // is_ready() is the promise_released bit, which a promise dying without a value sets
-    // too, and take_ready() only ASSERTS has_result() -- an assert that is gone in the
-    // Release builds examples ship as. Hence failed(). The bound turns a future that
-    // never completes into a visible error instead of a silent hang.
+    // is_ready() is only the promise_released bit -- a promise that dies without a value
+    // sets it too -- and take_ready() merely asserts, which Release builds drop. Hence
+    // failed(). The bound turns a future that never completes into a visible error.
     constexpr int kAwaitCap = 10'000'000;
     for (int i = 0; i < kAwaitCap && !future.is_ready(); ++i) {
         std::this_thread::yield();
@@ -97,9 +91,8 @@ int main() {
     auto* resource = std::pmr::get_default_resource();
     auto calculator = actor_zeta::spawn<calculator_actor>(resource);
 
-    // Declared after the actor, so stopped explicitly before it is released below:
-    // scheduler_t has no stop() in its destructor, and a worker must never resume an
-    // actor that has already been freed.
+    // stop() is called explicitly before the actor is released below: ~scheduler_t does
+    // not stop the workers, and a worker must never resume a freed actor.
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(1, 100);
     scheduler->start();
 

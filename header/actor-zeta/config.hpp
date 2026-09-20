@@ -45,8 +45,7 @@ namespace actor_zeta {
 
 #define CACHE_LINE_SIZE 64
 
-// RETURNS_NONNULL - marks function as never returning null pointer.
-// Helps GCC/Clang eliminate false positive -Wnull-dereference warnings.
+// Lets GCC/Clang drop false-positive -Wnull-dereference warnings.
 #if defined(__GNUC__) // GCC and Clang
 #define RETURNS_NONNULL [[gnu::returns_nonnull]]
 #else

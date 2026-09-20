@@ -83,7 +83,6 @@ struct dummy {
         } else {
             // was moved
             return;
-            //throw std::runtime_error("Double destruction!");
         }
         --instances_count;
         ++destroyed_times;

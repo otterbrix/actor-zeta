@@ -8,7 +8,6 @@
 
 using namespace actor_zeta;
 
-/// @brief Worker actor - handles requests
 class worker_actor final : public basic_actor<worker_actor> {
 public:
     explicit worker_actor(std::pmr::memory_resource* resource)
@@ -36,8 +35,6 @@ public:
 };
 
 
-/// @brief Client actor - uses only address_t for communication with worker
-/// Resume is controlled by supervisor externally
 class client_actor final : public basic_actor<client_actor> {
 public:
     explicit client_actor(std::pmr::memory_resource* resource, address_t worker_address)
@@ -46,16 +43,11 @@ public:
         , final_result_(0) {
     }
 
-    /// @brief Coroutine - sends request and waits for result
-    /// Suspend/resume is controlled by supervisor
     unique_future<int> process(int x) {
         std::cerr << "[client::process] START x=" << x << std::endl;
 
-        // Send request to worker via address_t (only address!)
         auto [needs_sched, future] = send(worker_address_, &worker_actor::compute, x);
 
-        // co_await - suspend if not ready
-        // Supervisor will resume coroutine when future becomes ready
         int result = co_await std::move(future);
         std::cerr << "[client::process] Got result: " << result << std::endl;
 
@@ -85,9 +77,6 @@ public:
         }
     }
 
-    /// @brief Clean up completed pending futures
-    /// @return true if there are still pending coroutines
-    /// With auto-resume in set_value(), coroutines resume automatically
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
             if (it->is_ready()) {
@@ -99,7 +88,6 @@ public:
         return !pending_.empty();
     }
 
-    /// @brief Check if there are pending coroutines
     bool has_pending() const { return !pending_.empty(); }
 
     ~client_actor() = default;
@@ -107,13 +95,11 @@ public:
 private:
     address_t worker_address_;
     std::atomic<int> final_result_;
-    std::vector<unique_future<void>> pending_;  // Store pending dispatch futures
+    std::vector<unique_future<void>> pending_;
 };
 
 
-/// @brief Simple supervisor - controls resume() of actors
-/// This is a separate entity that knows about all actors
-/// For test: accepts concrete actor types
+/// Drives resume() on both actors from the test thread; there is no scheduler.
 class simple_supervisor {
 public:
     void set_actors(worker_actor* w, client_actor* c = nullptr) {
@@ -121,11 +107,8 @@ public:
         client_ = c;
     }
 
-    /// @brief Runs one resume cycle for all actors.
-    ///
-    /// Returns true while at least one actor still asks to be rescheduled. The
-    /// verdict is not dropped: it IS this function's result, and the caller's
-    /// loop is what discharges the obligation by coming round again.
+    /// Returns true while at least one actor still asks to be rescheduled; the
+    /// caller's loop discharges that verdict by coming round again.
     bool run_once() {
         bool wants_more = false;
         if (client_) {
@@ -147,14 +130,12 @@ TEST_CASE("worker only") {
     auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource);
 
-    // Supervisor controls resume
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get());
 
     auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
 
-    // Drive the supervisor until the future is ready. Bounded so a mis-wired
-    // pump fails the assertion below instead of hanging.
+    // Bounded so a mis-wired pump fails the assertion below instead of hanging.
     constexpr int kPumpCap = 64;
     for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
         supervisor.run_once();
@@ -171,14 +152,12 @@ TEST_CASE("client-worker coroutine with supervisor") {
     auto worker = spawn<worker_actor>(resource);
     auto client = spawn<client_actor>(resource, worker->address());
 
-    // Supervisor knows about all actors and controls their resume
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get(), client.get());
 
     auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
 
-    // Drive the supervisor until the future is ready. Bounded so a mis-wired
-    // pump fails the assertion below instead of hanging.
+    // Bounded so a mis-wired pump fails the assertion below instead of hanging.
     constexpr int kPumpCap = 64;
     for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
         supervisor.run_once();

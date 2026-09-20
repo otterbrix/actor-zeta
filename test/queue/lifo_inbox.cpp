@@ -1,4 +1,4 @@
-#define CATCH_CONFIG_MAIN // This tells Catch to provide a main() - only do this in one cpp file
+#define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
 #define TEST_HAS_NO_EXCEPTIONS
@@ -91,16 +91,13 @@ TEST_CASE("lifo_inbox_tests") {
     }
 }
 
-// A queue must free its leftovers with the element's OWN deleter.
-//
-// mailbox::message lives inside a PMR block behind a BlockHdr, so
-// std::default_delete hands the global allocator a pointer that is not the
-// allocation base. The one reachable path is a push into an already-closed inbox
-// -- what default_mailbox_impl does when a send races shutdown -- where ASan
-// reported "attempting free on address which was not malloc()-ed".
-//
-// The static_assert in lifo_inbox/linked_list makes the wrong instantiation a
-// COMPILE error; this test pins the runtime half, and bites under ASan.
+// A queue must free its leftovers with the element's OWN deleter: mailbox::message
+// lives in a PMR block behind a BlockHdr, so std::default_delete hands the global
+// allocator a pointer that is not the allocation base. The reachable path is a push
+// into an already-closed inbox (a send racing shutdown), where ASan reported "free on
+// address which was not malloc()-ed". The static_assert in lifo_inbox/linked_list makes
+// the wrong instantiation a COMPILE error; this pins the runtime half, and bites under
+// ASan.
 
 TEST_CASE("lifo_inbox: a rejected push frees the message through its own deleter") {
     auto* resource = std::pmr::get_default_resource();

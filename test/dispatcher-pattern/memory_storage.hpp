@@ -1,13 +1,8 @@
 #pragma once
 
 /// @file memory_storage.hpp
-/// @brief Storage actor - bottom level of the actor hierarchy
-///
-/// memory_storage_t simulates a database storage with collections.
-/// It demonstrates:
-/// - Simple coroutine methods returning unique_future<T>
-/// - dispatch_traits for compile-time message ID mapping
-/// - Behavior dispatch using switch + msg_id<Actor, &Actor::method>
+/// Bottom-level actor of the dispatcher-pattern test: a fake database with three
+/// fixed collections, answering size() and execute_plan() without awaiting anyone.
 
 #include <actor-zeta.hpp>
 
@@ -22,30 +17,16 @@ namespace dispatcher_test {
 
 using namespace actor_zeta;
 
-/// @brief Storage actor - simulates database storage
-///
-/// Architecture position: BOTTOM level
-/// Receives: size(), execute_plan() requests from manager_dispatcher_t
-/// Returns: collection sizes, cursors with data
 class memory_storage_t final : public basic_actor<memory_storage_t> {
 public:
     explicit memory_storage_t(std::pmr::memory_resource* mr, const std::string& name)
         : basic_actor<memory_storage_t>(mr)
         , name_(name) {
-        // Initialize "database" with test data
         collections_["test_db.users"] = 100;
         collections_["test_db.orders"] = 250;
         collections_["test_db.products"] = 50;
     }
 
-    // =========================================================================
-    // Public methods (coroutines returning unique_future<T>)
-    // =========================================================================
-
-    /// @brief Get collection size
-    /// @param session Session identifier for logging
-    /// @param name Full collection name (database.collection)
-    /// @return unique_future<std::size_t> with collection size
     unique_future<std::size_t> size(
             session_id_t session,
             collection_full_name_t name) {
@@ -66,10 +47,6 @@ public:
         co_return result;
     }
 
-    /// @brief Execute logical query plan
-    /// @param session Session identifier
-    /// @param plan Query plan to execute
-    /// @return unique_future<cursor_t_ptr> with query results
     unique_future<cursor_t_ptr> execute_plan(
             session_id_t session,
             logical_plan_t plan) {
@@ -90,7 +67,6 @@ public:
             co_return std::move(cursor);
         }
 
-        // Simulate data retrieval
         std::size_t count = it->second;
         for (std::size_t i = 0; i < std::min(count, std::size_t(10)); ++i) {
             cursor->data.push_back("row_" + std::to_string(i) + "_from_" + key);
@@ -100,34 +76,17 @@ public:
         co_return std::move(cursor);
     }
 
-    // =========================================================================
-    // dispatch_traits - compile-time message ID mapping
-    // =========================================================================
-
-    /// @brief Maps method pointers to message IDs at compile time
-    ///
-    /// Usage in behavior():
-    ///   case msg_id<memory_storage_t, &memory_storage_t::size>:
-    ///
-    /// The type system from make_message.hpp validates argument types.
     using dispatch_traits = actor_zeta::dispatch_traits<
         &memory_storage_t::size,
         &memory_storage_t::execute_plan
     >;
 
-    // =========================================================================
-    // behavior() - message dispatch
-    // =========================================================================
-
-    /// @brief Main message handler
     behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
         switch (msg->command()) {
             case msg_id<memory_storage_t, &memory_storage_t::size>: {
-                // dispatch() unpacks message arguments and calls method
-                // Returns future that chains result to sender's result_slot
                 co_await dispatch(this, &memory_storage_t::size, msg);
                 break;
             }

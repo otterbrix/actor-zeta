@@ -1,4 +1,4 @@
-#define CATCH_CONFIG_MAIN // This tells Catch to provide a main() - only do this in one cpp file
+#define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
 #include <actor-zeta/detail/rtt.hpp>
@@ -43,7 +43,7 @@ TEST_CASE("rt_tuple") {
         REQUIRE(std::is_same<decltype(actor_zeta::detail::get<3, args_type_list>(r)), std::string>::value);
     }
 
-    SECTION("actor_zeta::detail::get f2") { // @TODO !!! here is a type_traits mismatch: const type == type !!!
+    SECTION("actor_zeta::detail::get f2") {
         auto* resource =std::pmr::get_default_resource();
         auto f = [](
                      const int8_t a1,
@@ -381,8 +381,8 @@ TEST_CASE("rt_tuple") {
         rtt_test::clear();
 
         {
-            auto default_rtt_ = rtt();            // defaulted (+1)
-            auto copied_rtt_ = rtt(default_rtt_); // non-const lvalue
+            auto default_rtt_ = rtt();
+            auto copied_rtt_ = rtt(default_rtt_);
             REQUIRE(rtt_test::default_ctor_ == 1);
             REQUIRE(rtt_test::templated_ctor_ == 0);
             REQUIRE(rtt_test::move_ctor_ == 0);
@@ -393,8 +393,8 @@ TEST_CASE("rt_tuple") {
         rtt_test::clear();
 
         {
-            const auto default_rtt_ = rtt();            // defaulted (+1)
-            auto const_copied_rtt_ = rtt(default_rtt_); // const lvalue
+            const auto default_rtt_ = rtt();
+            auto const_copied_rtt_ = rtt(default_rtt_);
             REQUIRE(rtt_test::default_ctor_ == 1);
             REQUIRE(rtt_test::templated_ctor_ == 0);
             REQUIRE(rtt_test::move_ctor_ == 0);
@@ -405,8 +405,8 @@ TEST_CASE("rt_tuple") {
         rtt_test::clear();
 
         {
-            auto default_rtt_ = rtt();                      // defaulted (+1)
-            auto moved_rtt_ = rtt(std::move(default_rtt_)); // move rvalue
+            auto default_rtt_ = rtt();
+            auto moved_rtt_ = rtt(std::move(default_rtt_));
             REQUIRE(rtt_test::default_ctor_ == 1);
             REQUIRE(rtt_test::templated_ctor_ == 0);
             REQUIRE(rtt_test::move_ctor_ == 1);
@@ -415,8 +415,6 @@ TEST_CASE("rt_tuple") {
         }
         REQUIRE(rtt_test::dtor_ == 2);
         rtt_test::clear();
-
-        /* many ctors */
 
         {
             auto default_rtt_ = rtt();
@@ -433,12 +431,12 @@ TEST_CASE("rt_tuple") {
         rtt_test::clear();
 
         {
-            auto default_rtt_ = rtt(); // defaulted (+1)
+            auto default_rtt_ = rtt();
             auto templated_1_rtt_ = rtt(nullptr, std::vector<int>{1, 2, 3, 4, 5}, 767, 5);
             auto templated_2_rtt_ = rtt(nullptr, 87645, 1, 3, 356356, "aljehrgiauhg", std::vector<int>{1, 2, 3, 4, 5}, 457, 4567);
-            auto moved_1_rtt_ = rtt(std::move(templated_1_rtt_)); // move rvalue
-            auto moved_2_rtt_ = rtt(std::move(templated_2_rtt_)); // move rvalue
-            auto moved_3_rtt_ = rtt(std::move(default_rtt_));     // move rvalue
+            auto moved_1_rtt_ = rtt(std::move(templated_1_rtt_));
+            auto moved_2_rtt_ = rtt(std::move(templated_2_rtt_));
+            auto moved_3_rtt_ = rtt(std::move(default_rtt_));
 
             REQUIRE(rtt_test::default_ctor_ == 1);
             REQUIRE(rtt_test::templated_ctor_ == 2);
@@ -450,10 +448,10 @@ TEST_CASE("rt_tuple") {
         rtt_test::clear();
 
         {
-            auto default_rtt_ = rtt();                        // defaulted (+1)
-            const auto const_default_rtt_ = rtt();            // const defaulted (+1)
-            auto copied_rtt_ = rtt(default_rtt_);             // non-const lvalue
-            auto const_copied_rtt_ = rtt(const_default_rtt_); // const lvalue
+            auto default_rtt_ = rtt();
+            const auto const_default_rtt_ = rtt();
+            auto copied_rtt_ = rtt(default_rtt_);
+            auto const_copied_rtt_ = rtt(const_default_rtt_);
             auto templated_1_rtt_ = rtt(nullptr, std::vector<int>{1, 2, 3, 4, 5}, 767, 5);
             auto templated_2_rtt_ = rtt(nullptr, 87645, 1, 3, 356356, "aljehrgiauhg", std::vector<int>{1, 2, 3, 4, 5}, 457, 4567);
 
@@ -467,9 +465,9 @@ TEST_CASE("rt_tuple") {
         rtt_test::clear();
 
         {
-            auto default_rtt_ = rtt();                                           // defaulted (+1)
-            auto copied_rtt_ = rtt(default_rtt_);                                // non-const lvalue
-            auto const_copied_rtt_ = rtt(static_cast<const rtt&>(default_rtt_)); // const lvalue
+            auto default_rtt_ = rtt();
+            auto copied_rtt_ = rtt(default_rtt_);
+            auto const_copied_rtt_ = rtt(static_cast<const rtt&>(default_rtt_));
             auto templated_1_rtt_ = rtt(nullptr, std::vector<int>{1, 2, 3, 4, 5}, 767, 5);
             auto templated_2_rtt_ = rtt(nullptr, 87645, 1, 3, 356356, "aljehrgiauhg", std::vector<int>{1, 2, 3, 4, 5}, 457, 4567);
 
@@ -485,11 +483,11 @@ TEST_CASE("rt_tuple") {
         {
             auto templated_1_rtt_ = rtt(nullptr, std::vector<int>{1, 2, 3, 4, 5});
             auto templated_2_rtt_ = rtt(nullptr, 87645, 1, 3, 356356, "aljehrgiauhg", std::vector<int>{1, 2, 3, 4, 5});
-            auto default_rtt_ = rtt();                                           // defaulted (+1)
-            auto copied_rtt_ = rtt(default_rtt_);                                // non-const lvalue
-            auto const_copied_rtt_ = rtt(static_cast<const rtt&>(default_rtt_)); // const lvalue
-            auto moved_1_rtt_ = rtt(std::move(default_rtt_));                    // move rvalue
-            auto moved_2_rtt_ = rtt(std::move(templated_1_rtt_));                // move rvalue
+            auto default_rtt_ = rtt();
+            auto copied_rtt_ = rtt(default_rtt_);
+            auto const_copied_rtt_ = rtt(static_cast<const rtt&>(default_rtt_));
+            auto moved_1_rtt_ = rtt(std::move(default_rtt_));
+            auto moved_2_rtt_ = rtt(std::move(templated_1_rtt_));
 
             REQUIRE(rtt_test::default_ctor_ == 1);
             REQUIRE(rtt_test::templated_ctor_ == 2);
@@ -625,60 +623,6 @@ TEST_CASE("rt_tuple") {
         REQUIRE(kamikaze::instances_count == 0);
     }
 
-    /*SECTION("Exception when moving internal objects does not result in leaks") {
-        const throw_on_move thrower{};
-
-        REQUIRE(dummy::instances_count == 0);
-        {
-            rtt t;
-            t.push_back(dummy{}); // non implemented method
-            t.push_back(thrower); // non implemented method
-            REQUIRE(dummy::instances_count == 1);
-
-            REQUIRE_THROWS_AS(t.reserve(t.capacity() + 1), std::runtime_error);
-            REQUIRE(dummy::instances_count == 1);
-        }
-        REQUIRE(dummy::instances_count == 0);
-    }*/
-    /*
-duckstax/actor-zeta/test/rtt/main.cpp:262:36:   required from here
-duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:55:24: error: no matching function for call to ‘copy<std::unique_ptr<int, std::default_delete<int> > >(const void*&, void*&)’
-   55 |                 copy<T>(source, destination);
-duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: candidate: ‘template<class T> std::enable_if_t<std::is_copy_constructible<_Tp>::value> actor_zeta::detail::management::copy(const void*, void*)’
-   20 |     auto copy(const void* source, void* destination)
-    SECTION("Throws an exception when trying to copy a non-copyable object") {
-        std::unique_ptr<int> uptr(new int(5));
-        rtt initial(std::move(uptr));
-        rtt copied;
-        CHECK_THROWS_AS(copied = initial, std::runtime_error);
-    }
-
-    SECTION("Exception when copying objects stored in the rtt does not lead to leaks") {
-        REQUIRE(dummy::instances_count == 0);
-        {
-            std::unique_ptr<int> uptr(new int(17));
-            rtt t(dummy{}, std::move(uptr), dummy{});
-            REQUIRE(dummy::instances_count == 2);
-            rtt copied;
-            REQUIRE_THROWS_AS(copied = t, std::runtime_error);
-            REQUIRE(dummy::instances_count == 2);
-        }
-        REQUIRE(dummy::instances_count == 0);
-    }
-
-    SECTION("Exception during copy assignment of objects stored in the rtt does not lead to leaks") {
-        REQUIRE(dummy::instances_count == 0);
-        {
-            std::unique_ptr<int> uptr(new int(17));
-            rtt t(dummy{}, std::move(uptr));
-            rtt copy(dummy{});
-            REQUIRE(dummy::instances_count == 2);
-
-            REQUIRE_THROWS_AS(copy = t, std::runtime_error);
-        }
-        REQUIRE(dummy::instances_count == 0);
-    }*/
-
 #endif
 #endif
 
@@ -694,8 +638,6 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
         vector.clear();
         REQUIRE(t.get<std::vector<char>>(1).empty());
     }
-
-    // MOVE RTT
 
     SECTION("The rtt transfer constructor transfers elements of one rtt into another, rather than inserting one rtt inside another rtt") {
         auto* resource = std::pmr::get_default_resource();
@@ -831,7 +773,7 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
         int16_t i16 = 16;
         int16_t* p_i16 = &i16;
 
-        { // scoped in
+        {
             rtt r(resource, std::move(uptr), p_i16);
             REQUIRE(type_t::instances_count == 1);
             REQUIRE(type_t::created_times == 1);
@@ -852,19 +794,16 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
 
             REQUIRE(std::is_same<decltype(actor_zeta::detail::get<0, args_type_list>(r)), type_ptr&&>::value);
             REQUIRE(std::is_same<decltype(actor_zeta::detail::get<1, args_type_list>(r)), const int16_t*>::value);
-        } // scoped out
+        }
 
         REQUIRE(type_t::instances_count == 0);
         REQUIRE(type_t::created_times == 1);
         REQUIRE(type_t::destroyed_times == 1);
     }
 
-    // REFERENCES
-
     SECTION("Knows how to give references to immutable values by index") {
         auto* resource = std::pmr::get_default_resource();
         const rtt t(resource, std::string("123"), 42, true);
-        // Use public get<T>(index) API instead of internal offset/get_by_offset
         REQUIRE(t.get<int>(1) == 42);
     }
 
@@ -876,29 +815,24 @@ duckstax/actor-zeta/header/actor-zeta/detail/rtt_management.hpp:20:10: note: can
         rtt t(resource, std::string("123"), old_value, true);
 
         REQUIRE(t.get<int>(1) == old_value);
-        // Use public get<T>(index) API for mutation
         t.get<int>(1) = new_value;
 
         REQUIRE(t.get<int>(1) == new_value);
     }
 
     SECTION("move semantics instead of swap") {
-        // Note: swap() was removed due to cross-arena safety issues
-        // Use move semantics within same arena instead
+        // swap() was removed: a type-erased container cannot safely swap across memory resources.
         auto* resource = std::pmr::get_default_resource();
         auto t = rtt(resource, 1, 3.14);
         auto u = rtt(resource, std::string("qwe"), true);
 
-        // Verify initial state
         REQUIRE(t.get<int>(0) == 1);
         REQUIRE(u.get<std::string>(0) == "qwe");
 
-        // Swap using move semantics
         rtt temp(std::move(t));
         t = std::move(u);
         u = std::move(temp);
 
-        // Verify swapped state
         REQUIRE(t.get<std::string>(0) == "qwe");
         REQUIRE(u.get<int>(0) == 1);
     }

@@ -9,37 +9,13 @@
 #include <thread>
 #include <vector>
 
-// =============================================================================
-// needs_sched is sufficient on its own: honouring it, and nothing else, must
-// deliver every message.
-//
-// This file used to claim a race between ~resume_guard() and
-// try_schedule_after_enqueue(), with this timeline:
-//
-//   A: resume() finishes, mailbox empty, try_block() succeeds -> awaiting
-//   A: ~resume_guard() reads state_ -> running
-//   B: send() unblocks the mailbox, try_schedule_after_enqueue() sees running
-//      and "returns false WITHOUT setting the scheduled flag"
-//   A: ~resume_guard() CAS(running -> idle)
-//   => message in the mailbox, actor idle and unscheduled -> lost
-//
-// Step B is not what the code does. try_schedule_after_enqueue() ALWAYS sets the
-// bit and only suppresses the RETURN VALUE (cooperative_actor.hpp, the CAS then
-// `return !is_running(current)`). Both sides read-modify-write the same atomic,
-// so its modification order totally orders them and only two outcomes exist:
-//
-//   sender's CAS first  -> ~resume_guard() observes the bit, preserves it, sets
-//                          scheduled_while_running, and resume()'s fix-up turns
-//                          `awaiting` into `resume` -> the worker re-enqueues
-//   guard's CAS first   -> sender reads {scheduled=0, running=0}, its CAS wins,
-//                          and it returns TRUE -> the sender enqueues
-//
-// So the tests below are guards, not repros. Their point is that a sender which
-// honours needs_sched and does NOTHING ELSE is enough. They used to rescue the
-// actor with an unconditional scheduler->enqueue() on timeout and then assert
-// against a count that subtracted those rescues out -- which made a real strand
-// print a WARN and pass. No rescues now: a timeout fails the test.
-// =============================================================================
+// Guards, not repros: a sender that honours needs_sched and does NOTHING ELSE
+// must deliver every message. The sender's leave_and_maybe_schedule() and the
+// runner's ~resume_guard read-modify-write the same state word, so only two
+// orders exist: the sender's CAS lands first and the guard sees the scheduled bit
+// and upgrades awaiting -> resume, or the guard's lands first and the sender's
+// CAS returns needs_sched == true. No rescue enqueues on timeout: a rescue would
+// hide exactly the strand these tests exist to catch.
 
 class scheduling_race_actor final : public actor_zeta::basic_actor<scheduling_race_actor> {
 public:
@@ -51,8 +27,7 @@ public:
     actor_zeta::unique_future<int> process(int value) {
         processed_count_.fetch_add(1, std::memory_order_relaxed);
         last_value_.store(value, std::memory_order_relaxed);
-        // Small delay to increase race window
-        std::this_thread::yield();
+        std::this_thread::yield(); // widen the window
         co_return value;
     }
 
@@ -72,10 +47,6 @@ private:
     std::atomic<std::size_t> processed_count_;
     std::atomic<int> last_value_;
 };
-
-// =============================================================================
-// Guard 1: sequential sender, one message at a time.
-// =============================================================================
 
 TEST_CASE("needs_scheduling race: every message is delivered") {
     auto* resource = std::pmr::get_default_resource();
@@ -120,11 +91,6 @@ TEST_CASE("needs_scheduling race: every message is delivered") {
     REQUIRE(stranded == 0);
     REQUIRE(delivered == NUM_ITERATIONS);
 }
-
-// =============================================================================
-// Guard 2: four senders against a two-worker scheduler, maximum contention on
-// the state word.
-// =============================================================================
 
 TEST_CASE("needs_scheduling race: high contention stress", "[stress]") {
     auto* resource = std::pmr::get_default_resource();
@@ -175,11 +141,7 @@ TEST_CASE("needs_scheduling race: high contention stress", "[stress]") {
     REQUIRE(actor->processed_count() == static_cast<std::size_t>(TOTAL));
 }
 
-// =============================================================================
-// Guard 3: a second message aimed at the window while the actor is finishing the
-// first -- the interleaving the disproved timeline described.
-// =============================================================================
-
+// A second message aimed at the window while the actor is finishing the first.
 TEST_CASE("needs_scheduling race: second message lands mid-teardown") {
     auto* resource = std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(1, 1);

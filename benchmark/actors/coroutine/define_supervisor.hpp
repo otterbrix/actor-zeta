@@ -42,9 +42,8 @@ public:
         co_return;
     }
 
-    // The scheduler is the only driver in this chain: coro_ping_pong_actor enqueues its
-    // own partner and the worker discharges every `resume` verdict, so this supervisor
-    // only has to report the initial unblock. There is no hand-driven fallback -- the
+    // Only the initial enqueue is needed: coro_ping_pong_actor enqueues its own partner
+    // and the worker discharges every resume verdict. No hand-driven fallback -- the
     // children's start()/ping() are guarded on scheduler_.
     actor_zeta::unique_future<void> send() {
         if (actor_0_ && scheduler_) {

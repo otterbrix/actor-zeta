@@ -7,13 +7,10 @@
 
 #include <actor-zeta.hpp>
 
-// Wait for a future completed elsewhere -- by a scheduler's worker threads, or inline
-// by a synchronous actor_mixin. Nothing is pumped here: this is a bounded spin.
-//
-// is_ready() is NOT a value gate: it is the promise_released bit, which a promise that
-// dies without a value sets too, and take_ready() only ASSERTS that a value is present
-// -- an assert that is gone in the Release builds examples ship as. Hence failed(). The
-// bound turns a producer that never completes into a visible error, not a silent hang.
+// Bounded spin on a future completed elsewhere (scheduler worker or inline actor_mixin).
+// is_ready() is only the promise_released bit -- a promise that dies without a value
+// sets it too -- and take_ready() merely asserts, which Release builds drop. Hence
+// failed(). The bound turns a producer that never completes into a visible error.
 template<typename T>
 T await_from_scheduler(actor_zeta::unique_future<T>& future) {
     constexpr int kSpinCap = 10'000'000;
@@ -144,10 +141,8 @@ int main() {
 
     int const actors = 5;
 
-    // The supervisor (an actor_mixin) processes create requests synchronously; the worker
-    // download results below are produced on its internal scheduler (e_), so both are
-    // collected by the same poll. The supervisor owns and stops e_ in its destructor, so
-    // the actors and their scheduler outlive this collection.
+    // create() runs inline (actor_mixin); the download results below come from the
+    // supervisor's own scheduler e_, which it stops in its destructor -- after this loop.
     for (auto i = actors; i > 0; --i) {
         auto sent = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
         // A synchronous actor_mixin runs the handler inside send(): nothing to schedule.
@@ -170,7 +165,6 @@ int main() {
             if (needs_sched) {
                 supervisor->schedule_worker(i);
             }
-            // Worker runs on the supervisor's internal scheduler (cross-thread).
             total_size += await_from_scheduler(future);
         }
     }

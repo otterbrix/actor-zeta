@@ -19,7 +19,6 @@ add_test(
         COMMAND tests_coroutine_threading
 )
 
-# Simple single-threaded test
 add_executable(
         tests_coroutine_simple
         simple_test.cpp
@@ -58,9 +57,8 @@ add_test(
         COMMAND tests_coroutine_lost_wakeup ~[stress]
 )
 
-# Multi-threaded soak, the only coverage of this route under contention. Decides
-# pass/fail by progress rather than elapsed time, so it is safe to run by
-# default; exclude it with `ctest -LE stress` when a run must stay short.
+# Multi-threaded soak, the only coverage of this route under contention. Pass/fail is
+# by progress, not elapsed time, so it runs by default; `ctest -LE stress` skips it.
 add_test(
         NAME tests_coroutine_lost_wakeup_stress
         COMMAND tests_coroutine_lost_wakeup [stress]

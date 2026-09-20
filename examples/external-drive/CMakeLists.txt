@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 
-# Driving a unique_future from outside an actor - requires C++20
 if(CMAKE_CXX_STANDARD GREATER_EQUAL 20)
     add_executable(external-drive main.cpp)
 

@@ -87,7 +87,6 @@ namespace actor_zeta::detail {
     template<typename... Args>
     inline constexpr bool all_args_storable_v = all_args_storable<Args...>;
 
-    // Creates message + shared_state, returns pair<message_ptr, unique_future<R>>
     template<typename R = void, typename Name>
         requires valid_message_name<Name>
     std::pair<mailbox::message_ptr, actor_zeta::unique_future<R>>

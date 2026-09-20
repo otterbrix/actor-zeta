@@ -89,15 +89,13 @@ private:
 
 
 
-// The balancer's behavior() runs on the caller's thread -- collection_t is an
-// actor_mixin, so enqueue_impl dispatches inline -- while a scheduler worker drives the
-// child that does the work and re-enqueues it; this side only polls for the answer.
+// collection_t is an actor_mixin, so its behavior() runs inline on the caller's thread
+// while a scheduler worker drives the child; this side only polls for the answer.
 template<typename T>
 T await_child(actor_zeta::unique_future<T>& future) {
-    // is_ready() is the promise_released bit, which a promise dying without a value sets
-    // too, and take_ready() only ASSERTS has_result() -- an assert that is gone in the
-    // Release builds examples ship as. Hence failed(). The bound turns a future that
-    // never completes into a visible error instead of a silent hang.
+    // is_ready() is only the promise_released bit -- a promise that dies without a value
+    // sets it too -- and take_ready() merely asserts, which Release builds drop. Hence
+    // failed(). The bound turns a future that never completes into a visible error.
     constexpr int kAwaitCap = 10'000'000;
     for (int i = 0; i < kAwaitCap && !future.is_ready(); ++i) {
         std::this_thread::yield();
@@ -133,7 +131,7 @@ public:
         actors_.emplace_back(std::move(ptr));
     }
 
-    // Interface methods - signatures define the contract
+    // Bodies never run -- behavior() forwards every message itself; only the signatures matter.
     actor_zeta::unique_future<void> insert(std::string, std::string) { co_return; }
     actor_zeta::unique_future<void> remove(std::string) { co_return; }
     actor_zeta::unique_future<void> update(std::string, std::string) { co_return; }
@@ -146,7 +144,6 @@ public:
         &collection_t::find
     >;
 
-    // Balancer behavior: forwards messages to child actors
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
@@ -166,7 +163,6 @@ public:
         using update_args = actor_zeta::type_traits::type_list<std::string, std::string>;
         using find_args = actor_zeta::type_traits::type_list<std::string>;
 
-        // Forward based on command
         switch (cmd) {
             case actor_zeta::msg_id<collection_t, &collection_t::insert>: {
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
@@ -238,9 +234,8 @@ int main() {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
-    // The workers have to be running before the first message is forwarded: the child
-    // actors are driven only by the scheduler now, so nothing would resume them.
-    // scheduler->stop() below still runs before `collection` (and its children) die.
+    // Workers must be running before the first forward: only the scheduler drives the
+    // children. stop() below runs before `collection` (and its children) are destroyed.
     scheduler->start();
     auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());
 

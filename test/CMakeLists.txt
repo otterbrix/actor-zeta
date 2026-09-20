@@ -1,5 +1,3 @@
-#available tests
-
 add_subdirectory(tooltestsuites)
 
 add_subdirectory(actor-id)

@@ -13,48 +13,14 @@
 #include <thread>
 #include <vector>
 
-// ===========================================================================
-// Regression guard for the lost wakeup in cooperative_actor::resume_impl.
-//
-// THE ROUTE (described structurally; do not pin it to line numbers, they rot)
-//
-//   A behavior suspended on co_await publishes its awaited chain, so the entry
-//   path of resume_impl sees is_busy(). When the awaited future goes ready, the
-//   Q6 block drains the continuation, the coroutine advances -- and if it issues
-//   another request it re-suspends immediately, republishing a fresh awaited
-//   chain.
-//
-//   The bug had two halves:
-//
-//     (a) the entry path did not re-check is_busy() after cont.resume(), so
-//         control fell through to the empty-mailbox branch, try_block()
-//         succeeded, and a behavior suspended on a PENDING await was parked
-//         (verdict `awaiting`, keep_scheduled = false -> the worker drops the
-//         job);
-//     (b) the entry blocked-check sat ABOVE the Q6 block, so once an actor was
-//         parked its ready continuation could never be drained: every later
-//         resume died at the blocked-check before reaching Q6.
-//
-//   Future completion is flag-only -- release_promise sets promise_released, it
-//   does not push to the awaiting actor's mailbox and does not enqueue it. So a
-//   bare scheduler->enqueue() (a watchdog poke, a re-enqueue pump) is exactly
-//   the wake-up that does NOT unblock the inbox, and (b) made it a no-op.
-//
-//   The fix is both halves: Q6 hoisted above the blocked-check, and an
-//   unconditional is_busy() re-check after cont.resume().
-//
-// WHAT THIS FILE PINS
-//
-//   1. the deterministic route, driven by hand with resume(1) -- no threads, no
-//      sleeps, no wall clock. The load-bearing assertion is on the VERDICT of
-//      the drain step: it must be `resume`, not `awaiting`. Against the pre-fix
-//      implementation that step parks the actor and the assertion fails.
-//   2. the needs_sched contract that the route depends on.
-//   3. a multi-threaded soak through the real scheduler ([stress]) -- the only
-//      coverage of this route under contention. Its pass/fail is decided by
-//      PROGRESS, never by a wall-clock budget: a slow or sanitized machine just
-//      takes longer, it does not turn red.
-// ===========================================================================
+// Guard for the lost wakeup in cooperative_actor::resume_impl. A behavior that
+// re-suspends on a fresh await from inside the Q6 drain is kept off the park path by
+// two lines: the is_busy() re-check after cont.resume() (else try_block() parks a
+// PENDING await -- verdict `awaiting`, job dropped) and Q6 sitting ABOVE the
+// blocked-check (completion is flag-only and a bare enqueue does not unblock the
+// inbox, so a parked actor's ready continuation would never drain). Pinned by hand with
+// resume(1), no threads or clocks, on the VERDICT of the drain step; plus a [stress]
+// soak decided by progress, never by a clock.
 
 using namespace actor_zeta;
 
@@ -74,9 +40,7 @@ namespace {
         return "unknown";
     }
 
-    // Plain cross-actor request/response worker, shared by every test below. Its
-    // future is completed flag-only, so completing it never touches the
-    // consumer's mailbox and never schedules the consumer.
+    // Shared request/response worker; its future completes flag-only, never scheduling the consumer.
     class producer_actor final : public basic_actor<producer_actor> {
     public:
         explicit producer_actor(std::pmr::memory_resource* resource)
@@ -101,18 +65,8 @@ namespace {
         ~producer_actor() = default;
     };
 
-    // ---- needs_sched: record-and-discharge -----------------------------------
-    //
-    // send() returns {needs_sched, future} and NOTHING inside the library
-    // consumes that flag -- the SENDER owns the obligation to schedule the
-    // target. A handler cannot discharge it itself: a coroutine has an address_t
-    // and no scheduler. So the handler RECORDS the obligation and the driver
-    // (a test loop below, or a real dispatcher in production) DISCHARGES it.
-    // -------------------------------------------------------------------------
-
-    // Consumer whose handler awaits the producer TWICE in sequence. The second
-    // await is the one that gets stranded: it is published after the first
-    // continuation has already been drained inside the entry path.
+    // Awaits the producer TWICE. The second await, published after the first
+    // continuation was drained inside the entry path, is the one that gets stranded.
     class chained_consumer final : public basic_actor<chained_consumer> {
     public:
         chained_consumer(std::pmr::memory_resource* resource, address_t producer)
@@ -124,6 +78,9 @@ namespace {
             , first_send_needs_sched_(-1)
             , second_send_needs_sched_(-1) {}
 
+        // Nothing inside the library consumes needs_sched, and a handler holds an
+        // address_t and no scheduler -- so it records the obligation here and the
+        // driver discharges it.
         unique_future<int> chain(int x) {
             auto [needs_sched_first, first_future] = send(producer_, &producer_actor::produce, x);
             first_send_needs_sched_.store(needs_sched_first ? 1 : 0, std::memory_order_release);
@@ -131,9 +88,7 @@ namespace {
             const int first = co_await std::move(first_future);
             first_await_done_.store(true, std::memory_order_release);
 
-            // Issued from INSIDE the entry-path cont.resume(): by the time control
-            // returns to resume_impl the behavior is suspended again with a freshly
-            // published awaited chain.
+            // Issued from INSIDE the entry-path cont.resume(): resume_impl regains control on a fresh chain.
             auto [needs_sched_second, second_future] = send(producer_, &producer_actor::produce, first);
             second_send_needs_sched_.store(needs_sched_second ? 1 : 0, std::memory_order_release);
 
@@ -160,7 +115,6 @@ namespace {
             return first_await_done_.load(std::memory_order_acquire);
         }
 
-        // -1 = the send has not been issued yet, 0/1 = the reported obligation.
         int first_send_needs_sched() const noexcept {
             return first_send_needs_sched_.load(std::memory_order_acquire);
         }
@@ -184,13 +138,11 @@ namespace {
         std::atomic<bool> first_await_done_;
         std::atomic<int> completed_count_;
         std::atomic<int> result_;
-        std::atomic<int> first_send_needs_sched_;
+        std::atomic<int> first_send_needs_sched_;  // -1 = not sent yet, else the reported obligation
         std::atomic<int> second_send_needs_sched_;
     };
 
-    // Single-await consumer for the soak test. Records every scheduling
-    // obligation its handler incurs so the driver can discharge them, instead of
-    // the driver blind-poking the producer on a timer.
+    // Soak consumer: records each scheduling obligation for the driver to discharge.
     class soak_consumer final : public basic_actor<soak_consumer> {
     public:
         soak_consumer(std::pmr::memory_resource* resource, address_t producer)
@@ -227,7 +179,6 @@ namespace {
             return completed_count_.load(std::memory_order_acquire);
         }
 
-        // Claims the outstanding obligations, resetting the counter.
         int take_producer_obligations() noexcept {
             return producer_obligations_.exchange(0, std::memory_order_acq_rel);
         }
@@ -240,10 +191,7 @@ namespace {
         std::atomic<int> producer_obligations_;
     };
 
-    // Resume an actor exactly `times` times, recording each verdict, and return
-    // the LAST one. This is what a worker thread does per dequeued job -- and,
-    // when the actor is parked, what a bare scheduler->enqueue() amounts to: a
-    // resume with no message push.
+    // `times` worker turns, returning the LAST verdict; on a parked actor, a bare enqueue().
     template<typename Actor>
     scheduler::resume_result resume_n(Actor* actor,
                                       int times,
@@ -280,58 +228,40 @@ TEST_CASE("lost-wakeup: a second sequential co_await must not strand the behavio
     auto [needs_sched, request] = send(consumer.get(), &chained_consumer::chain, 21);
     request.detach(); // progress is observed through the consumer's counters
 
-    // A freshly spawned actor is already parked -- the constructor blocks the
-    // inbox -- so the very first message must report the scheduling obligation.
-    REQUIRE(needs_sched == true);
+    REQUIRE(needs_sched == true); // born parked: the constructor blocks the inbox
 
-    // --- (1) Drive the consumer to its FIRST co_await. -----------------------
-    // Discharging the obligation: resume() stands in for
-    // `scheduler->enqueue(consumer)` plus a worker picking the job up. One resume
-    // pops the request, starts the behavior, sends to the producer and suspends.
+    // (1) Drive to the FIRST co_await; resume() stands in for enqueue + a worker.
     if (needs_sched) {
         resume_n(consumer.get(), 1, trace, "consumer");
     }
     REQUIRE(consumer->first_await_done() == false);
     REQUIRE(consumer->completed_count() == 0);
 
-    // --- (2) Complete the FIRST future (flag-only). --------------------------
-    // The producer is resumed only if the handler's send actually reported the
-    // obligation -- record-and-discharge, with the driver in the discharging role.
+    // (2) Complete the FIRST future (flag-only), discharging the recorded obligation.
     trace.emplace_back(std::string("first_send_needs_sched=") +
                        std::to_string(consumer->first_send_needs_sched()));
     if (consumer->first_send_needs_sched() == 1) {
         resume_n(producer.get(), 2, trace, "producer");
     }
 
-    // --- (3) The critical step: drain await #1, re-suspend on await #2. ------
-    // THE load-bearing assertion of this file. Pre-fix, this resume drains the
-    // first continuation, falls through to try_block() and PARKS a behavior that
-    // is suspended on a pending await -> verdict `awaiting`, job dropped. With
-    // the re-check in place the still-busy behavior stays schedulable ->
-    // verdict `resume`.
+    // (3) Drain await #1, re-suspend on #2. THE load-bearing assertion: without
+    // the is_busy() re-check this parks a pending await (`awaiting`, job dropped).
     const auto drain_verdict = resume_n(consumer.get(), 1, trace, "consumer");
     INFO("trace: " << render(trace));
     REQUIRE(drain_verdict == scheduler::resume_result::resume);
 
-    // Route guard: proves the test reached the interesting state instead of
-    // passing vacuously. The behavior got past await #1 and is now suspended on
-    // await #2, with its own mailbox empty.
-    REQUIRE(consumer->first_await_done() == true);
+    REQUIRE(consumer->first_await_done() == true); // past #1, on #2: not a vacuous pass
     REQUIRE(consumer->completed_count() == 0);
 
-    // --- (4) Complete the SECOND future (flag-only again). -------------------
+    // (4) Complete the SECOND future (flag-only again).
     trace.emplace_back(std::string("second_send_needs_sched=") +
                        std::to_string(consumer->second_send_needs_sched()));
     if (consumer->second_send_needs_sched() == 1) {
         resume_n(producer.get(), 2, trace, "producer");
     }
 
-    // --- (5) The payload invariant. ------------------------------------------
-    // The consumer's awaited future is ready. Resuming the actor MUST make
-    // progress -- whether or not its inbox happens to be blocked, because future
-    // readiness is not delivered through the inbox. No message is pushed here on
-    // purpose: this models a bare enqueue (watchdog poke / re-enqueue pump),
-    // which is the only wake-up available once the actor is parked.
+    // (5) No message pushed on purpose -- the bare enqueue is the only wake-up once
+    // parked -- and it must make progress whether or not the inbox is blocked.
     constexpr int kDrainCap = 64;
     for (int i = 0; i < kDrainCap && consumer->completed_count() == 0; ++i) {
         resume_n(consumer.get(), 1, trace, "consumer");
@@ -344,34 +274,22 @@ TEST_CASE("lost-wakeup: a second sequential co_await must not strand the behavio
     REQUIRE(consumer->result() == 84); // 21 * 2 = 42, then 42 * 2 = 84
 }
 
-// ===========================================================================
-// The needs_sched contract itself.
-//
-// send() returns {needs_sched, future} and NOTHING inside the library consumes
-// that flag. This pins down what the framework reports in the two states that
-// matter: a freshly spawned actor (never resumed) and an actor that parked
-// itself on an empty inbox. Both are recorded, so a future change to the
-// inbox's initial state or to enqueue_impl's mapping shows up here instead of
-// silently altering who must schedule whom.
-// ===========================================================================
+// What send() reports for a fresh actor and for one parked on an empty inbox, so a
+// change to the inbox's initial state or enqueue_impl's mapping shows up here.
 TEST_CASE("needs_sched contract: fresh actor and parked actor both report the obligation") {
     auto* resource = std::pmr::get_default_resource();
     auto producer = spawn<producer_actor>(resource);
 
     std::vector<std::string> trace;
 
-    // (a) First message ever sent to a freshly spawned, never-resumed actor.
     auto [needs_sched_fresh, fresh_future] = send(producer.get(), &producer_actor::produce, 1);
     fresh_future.detach();
     trace.emplace_back(std::string("fresh=") + (needs_sched_fresh ? "true" : "false"));
 
-    // Discharge the obligation the way a scheduler would, and let the actor park
-    // itself once its inbox runs dry.
     if (needs_sched_fresh) {
-        resume_n(producer.get(), 1, trace, "producer");
+        resume_n(producer.get(), 1, trace, "producer"); // discharge; it parks once the inbox runs dry
     }
 
-    // (b) Message sent to an actor that has parked itself (inbox blocked).
     auto [needs_sched_parked, parked_future] = send(producer.get(), &producer_actor::produce, 2);
     parked_future.detach();
     trace.emplace_back(std::string("parked=") + (needs_sched_parked ? "true" : "false"));
@@ -381,21 +299,12 @@ TEST_CASE("needs_sched contract: fresh actor and parked actor both report the ob
     }
 
     INFO("trace: " << render(trace));
-    // Recorded, not assumed: an unscheduled target must always be reported,
-    // otherwise a sender honouring the contract would strand the message.
-    REQUIRE(needs_sched_fresh == true);
+    REQUIRE(needs_sched_fresh == true); // an unreported unscheduled target strands the message
     REQUIRE(needs_sched_parked == true);
 }
 
-// ===========================================================================
-// scheduler_test_t must terminate against a legitimately spinning actor.
-//
-// A behavior suspended on a pending co_await returns `resume` with zero
-// messages handled, for as long as the await stays pending. "queue non-empty"
-// is therefore not a termination condition, and re-queueing such a job at the
-// FRONT lets it monopolise the deque. Both used to be true, so stop() looped
-// forever the moment anything in the queue was waiting on a future.
-// ===========================================================================
+// A behavior suspended on a pending co_await returns `resume` with zero messages
+// handled indefinitely, so stop() cannot use "queue non-empty" as its exit condition.
 TEST_CASE("scheduler_test_t::stop() terminates against a pending await") {
     auto* resource = std::pmr::get_default_resource();
     auto producer = spawn<producer_actor>(resource);
@@ -410,39 +319,21 @@ TEST_CASE("scheduler_test_t::stop() terminates against a pending await") {
         sched.enqueue(consumer.get());
     }
 
-    // Drive the consumer to its co_await. The producer is deliberately never
-    // scheduled, so the awaited future stays pending forever and the consumer
-    // keeps reporting `resume` with nothing handled.
+    // The producer is never scheduled, so the await stays pending: `resume`, nothing handled.
     for (int i = 0; i < 4; ++i) {
         sched.run_once();
     }
     REQUIRE(consumer->completed_count() == 0);
 
-    // The assertion IS termination: if this returns, stop() no longer hangs.
-    sched.stop();
+    sched.stop(); // the assertion IS termination: returning means stop() no longer hangs
 
     REQUIRE(consumer->completed_count() == 0);
 }
 
-// ===========================================================================
-// Multi-threaded soak through the real scheduler. Tagged [stress] so it can be
-// excluded with `ctest -LE stress`.
-//
-// This is the only coverage of the route under contention, which is why it is
-// kept rather than deleted. The previous incarnation decided pass/fail with a
-// 15-second wall-clock budget, so a loaded CI runner or a sanitizer build
-// reported a lost wakeup that never happened. Two changes fix that:
-//
-//   * pass/fail is decided by PROGRESS, not elapsed time. As long as completions
-//     keep arriving the test keeps waiting, however slow the machine. Only a
-//     genuine stall -- no progress at all across kStallPolls consecutive polls --
-//     is a failure. The absolute cap exists solely so a hang cannot wedge CI,
-//     and is reported distinctly from a stall.
-//   * the producer is enqueued because the consumer RECORDED a scheduling
-//     obligation, not on a blind timer, so the driver discharges the real
-//     contract instead of masking it. The slow heartbeat is a safety net for
-//     obligations racing the drain, and is documented as such.
-// ===========================================================================
+// Soak through the real scheduler: the only coverage under contention. Tagged [stress]
+// (`ctest -LE stress` excludes it). Pass/fail is decided by PROGRESS, not elapsed time:
+// only kStallPolls polls with no progress fail; the absolute cap exists solely so a hang
+// cannot wedge CI. The producer is enqueued on a RECORDED obligation, never a blind timer.
 TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stress]") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -451,8 +342,7 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
     auto scheduler = std::make_unique<scheduler::sharing_scheduler>(num_workers, 1);
     scheduler->start();
 
-    // Long-lived actors: created before the senders, destroyed only after stop().
-    auto producer = spawn<producer_actor>(resource);
+    auto producer = spawn<producer_actor>(resource); // outlives the senders; destroyed only after stop()
     auto consumer = spawn<soak_consumer>(resource, producer->address());
 
     constexpr int kSenderThreads = 4;
@@ -462,16 +352,13 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
     std::atomic<int> submitted{0};
     std::atomic<bool> stop_pump{false};
 
-    // Discharges the consumer's recorded obligations. A coroutine cannot schedule
-    // its target itself (it holds an address_t, not a scheduler), so this thread
-    // stands in for the dispatcher that owns that job in production.
+    // A coroutine holds an address_t, not a scheduler: this thread discharges its obligations.
     std::thread producer_pump([&]() {
         while (!stop_pump.load(std::memory_order_acquire)) {
             if (consumer->take_producer_obligations() > 0) {
                 scheduler->enqueue(producer.get());
             } else {
-                // Safety net for an obligation recorded just after we claimed the
-                // counter: keep the producer drainable without busy-spinning.
+                // Safety net for an obligation recorded just after the counter was claimed.
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
                 scheduler->enqueue(producer.get());
             }
@@ -499,9 +386,7 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
 
     REQUIRE(submitted.load() == kTotalRequests);
 
-    // Progress-based wait. kStallPolls * kPollInterval is how long we insist on
-    // seeing zero progress before calling it a stall; kHangGuard only prevents a
-    // wedged CI job and is reported separately.
+    // kStallPolls of zero progress is a stall; kHangGuard only keeps CI from wedging.
     constexpr int kStallPolls = 400;
     constexpr auto kPollInterval = std::chrono::milliseconds(5);
     constexpr auto kHangGuard = std::chrono::minutes(3);
@@ -528,9 +413,7 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
         }
     }
 
-    // Tear down the pump, then stop the scheduler BEFORE destroying any actor.
-    // stop() drains work still in flight, so the count is only final afterwards --
-    // reading it before would report completions that did arrive as missing.
+    // Stop the scheduler BEFORE any actor dies; stop() drains in flight, so the count is final only after.
     stop_pump.store(true, std::memory_order_release);
     producer_pump.join();
     scheduler->stop();
@@ -544,7 +427,6 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
          << " stalled_polls=" << stall_polls
          << " hit_hang_guard=" << (hit_hang_guard ? "yes" : "no"));
 
-    // Any shortfall after a full drain is a parked-while-pending consumer that
-    // the producer's flag-only completion could not wake: the lost wakeup.
+    // Any shortfall after a full drain is the lost wakeup: a consumer parked while pending.
     REQUIRE(completed == kTotalRequests);
 }

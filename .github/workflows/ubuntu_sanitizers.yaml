@@ -1,22 +1,19 @@
 name: Ubuntu Sanitizers CI
 
-# Four configurations the main matrix does not cover, each of which catches a class
-# of defect an ordinary build is blind to:
+# Four configurations the main matrix does not cover, each catching a class of defect
+# an ordinary build is blind to:
 #
-#   asan       -- use-after-free and bad-free: a unique_future handing out a freed
-#                 coroutine frame, or lifo_inbox freeing PMR memory with the global
-#                 allocator.
+#   asan       -- use-after-free and bad-free (a freed coroutine frame handed out
+#                 through a unique_future, PMR memory freed with the global allocator).
 #   tsan       -- data races, including Catch2 assertion macros called from worker
 #                 threads, which are a race in Catch2 v2 itself.
-#   ubsan      -- undefined behaviour that neither of the above sees. Added after
-#                 exponential_backoff() was found shifting by 32 on every run of the
-#                 shutdown-sender-race test: asan and tsan were green throughout.
-#                 -fno-sanitize-recover=all so a report fails the job rather than
-#                 being printed and walked past.
-#   exceptions -- EXCEPTIONS_DISABLE=OFF. The whole exception_ptr capture/rethrow path
-#                 in unique_future exists ONLY in this mode (with -fno-exceptions the
-#                 compiler emits no catch wrapper for a coroutine body at all), and it
-#                 is the mode consumers that enable exceptions build in.
+#   ubsan      -- undefined behaviour neither of the above sees (an over-wide shift in
+#                 exponential_backoff() once passed both). -fno-sanitize-recover=all so
+#                 a report fails the job instead of being printed and walked past.
+#   exceptions -- EXCEPTIONS_DISABLE=OFF. The exception_ptr capture/rethrow path in
+#                 unique_future exists ONLY in this mode (with -fno-exceptions the
+#                 compiler emits no catch wrapper for a coroutine body), and it is the
+#                 mode consumers that enable exceptions build in.
 
 on:
   pull_request:
@@ -115,14 +112,12 @@ jobs:
       - name: Test
         working-directory: build/Debug
         env:
-          # detect_leaks=0: two leaks are already known -- a future abandoned while
-          # its producer is still suspended never releases its coroutine frame. Leak
-          # checking would make this job red and hide the memory-safety signal it
-          # exists for.
-          #
-          # halt_on_error makes the job fail on the FIRST report instead of letting
-          # the run continue past corrupted state; second_deadlock_stack gives both
-          # stacks for a lock-order inversion.
+          # detect_leaks=0: a future abandoned while its producer is still suspended
+          # never releases its coroutine frame -- a known leak that would make this job
+          # red and hide the memory-safety signal it exists for.
+          # halt_on_error fails the job on the FIRST report instead of running on past
+          # corrupted state; second_deadlock_stack gives both stacks for a lock-order
+          # inversion.
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1
           TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

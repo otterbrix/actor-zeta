@@ -185,10 +185,8 @@ namespace actor_zeta { namespace detail {
         void get() const noexcept {}
     };
 
-    // The merge is only free if this stays true: shared_state<void> holds one of these
-    // by value, and an empty member lands in the padding after flags_ rather than
-    // growing the allocation. allocate()/deallocate() both pass sizeof() to PMR, so a
-    // growth here would be a real cost on every void future.
+    // shared_state<void> holds one of these by value; an empty member lands in the
+    // padding after flags_, a non-empty one grows every void future's allocation.
     static_assert(std::is_empty_v<result_storage<void>>,
                   "result_storage<void> must stay empty");
 

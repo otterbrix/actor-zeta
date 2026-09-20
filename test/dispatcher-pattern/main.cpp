@@ -1,20 +1,4 @@
 /// @file main.cpp
-/// @brief Dispatcher pattern tests with coroutines
-///
-/// This file contains tests demonstrating various coroutine patterns:
-/// 1. Single co_await - simple request-response
-/// 2. Sequential co_await - transaction with multiple steps
-/// 3. Parallel requests + await all - aggregation
-/// 4. Nested coroutines - depth
-/// 5. Lambda INSIDE actor method - lambdas defined in class methods
-///
-/// File structure:
-/// - common_types.hpp - Domain types
-/// - test_logger.hpp - Thread-safe logging
-/// - memory_storage.hpp - Storage actor (bottom level)
-/// - manager_dispatcher.hpp - Dispatcher actor (middle level)
-/// - client.hpp - Client actor (top level)
-///
 /// Driving the actors: resume() hands back a verdict the caller is obliged to act
 /// on, so the tests never call it directly. Every step enqueues the actor into a
 /// scheduler_test_t, which owns the verdict -- run_once() re-queues a job that
@@ -39,36 +23,20 @@
 using namespace actor_zeta;
 using namespace dispatcher_test;
 
-// Drive steps below follow one shape:
+// Drive steps follow one shape: `send(...).second.detach(); sched.enqueue(target);`.
+// The future is detached because these messages carry no result the test reads,
+// and the enqueue is unconditional because a manual driver runs the actor
+// regardless of what send() reports -- the actors hold no scheduler, so these
+// enqueues ARE the discharge of the obligation.
 //
-//     send(target, &Actor::method, ...).second.detach();
-//     sched.enqueue(target);
-//
-// send() is [[nodiscard]] on BOTH halves -- the bool is a scheduling obligation
-// and the future owns the result slot. These messages carry no result the test
-// consumes, so the future is detached rather than dropped on the floor. The
-// enqueue is unconditional on purpose: a manual driver runs the actor regardless
-// of what send() reports, so needs_sched carries no decision here. That is why
-// the pair is consumed in place instead of being bound and half-ignored.
-//
-// The actors below cannot discharge the obligation themselves -- none of them
-// holds a scheduler -- so these enqueues ARE the discharge, not a workaround for
-// one that went missing. They used to cover for `co_await send(...)`, which
-// suspended without ever scheduling the target; that shape no longer compiles.
-
-
-
-
-// ============================================================================
-// Basic flow tests
-// ============================================================================
+// `poll` is a no-op message: it exists so the scheduler resumes the actor, and the
+// resume entry path drains a handler whose awaited future has since become ready.
 
 TEST_CASE("dispatcher-pattern: single-thread basic flow") {
     auto* resource = std::pmr::get_default_resource();
 
     g_log.log("\n========== TEST: dispatcher-pattern: single-thread basic flow ==========");
 
-    // Create actor chain: client -> dispatcher -> storage
     auto storage = spawn<memory_storage_t>(resource, "Storage");
     auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher");
     auto client = spawn<client_t>(resource, dispatcher->address(), "Client");
@@ -84,27 +52,23 @@ TEST_CASE("dispatcher-pattern: single-thread basic flow") {
         std::string("test_db"),
         std::string("users"));
 
-    // Manual execution (single-threaded):
-    // poll_pending() is called inside behavior() automatically
-
-    // 1. Client behavior -> starts coroutine, suspends on co_await send(dispatcher)
+    // Five stages: client suspends on the dispatcher; dispatcher suspends on
+    // storage; storage answers (flag-only, nobody is woken); a poll resumes the
+    // dispatcher, which drains its await and answers the client; a poll resumes
+    // the client.
     sched.enqueue(client.get());
     sched.stop();
 
-    // 2. Dispatcher behavior -> starts coroutine, suspends on co_await send(storage)
     sched.enqueue(dispatcher.get());
     sched.stop();
 
-    // 3. Storage behavior -> executes size(), returns ready future
     sched.enqueue(storage.get());
     sched.stop();
 
-    // 4. Send poll to dispatcher to trigger behavior() and poll_pending()
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
 
-    // 5. Send poll to client to trigger behavior() and poll_pending()
     send(client.get(), &client_t::poll).second.detach();
     sched.enqueue(client.get());
     sched.stop();
@@ -131,7 +95,6 @@ TEST_CASE("dispatcher-pattern: error handling") {
 
     session_id_t session("session-002");
 
-    // Send request with empty database name (should trigger error)
     auto [needs_sched, future] = send(
         client.get(),
         &client_t::request_collection_size,
@@ -142,11 +105,10 @@ TEST_CASE("dispatcher-pattern: error handling") {
     sched.enqueue(client.get());
     sched.stop();
 
-    // Dispatcher returns error immediately (co_return before co_await)
+    // The dispatcher co_returns the error before any co_await, so no storage stage.
     sched.enqueue(dispatcher.get());
     sched.stop();
 
-    // Send poll to client to trigger poll_pending()
     send(client.get(), &client_t::poll).second.detach();
     sched.enqueue(client.get());
     sched.stop();
@@ -171,7 +133,6 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
 
     actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Request 1: users
     auto [needs_sched1, future1] = send(
         client.get(),
         &client_t::request_collection_size,
@@ -196,7 +157,6 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     auto result1 = std::move(future1).take_ready();
     REQUIRE(result1.size == 100);
 
-    // Request 2: orders
     auto [needs_sched2, future2] = send(
         client.get(),
         &client_t::request_collection_size,
@@ -221,7 +181,6 @@ TEST_CASE("dispatcher-pattern: multiple requests") {
     auto result2 = std::move(future2).take_ready();
     REQUIRE(result2.size == 250);
 
-    // Request 3: products
     auto [needs_sched3, future3] = send(
         client.get(),
         &client_t::request_collection_size,
@@ -262,7 +221,6 @@ TEST_CASE("dispatcher-pattern: non-existent collection") {
 
     session_id_t session("session-006");
 
-    // Request non-existent collection
     auto [needs_sched, future] = send(
         client.get(),
         &client_t::request_collection_size,
@@ -322,7 +280,6 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
             std::string("test_db"),
             std::string("orders"));
 
-        // Execute entire chain in this thread
         sched.enqueue(client.get());
         sched.stop();
         sched.enqueue(dispatcher.get());
@@ -356,10 +313,6 @@ TEST_CASE("dispatcher-pattern: multi-thread execution") {
 
     g_log.log("========== TEST PASSED ==========");
 }
-
-// ============================================================================
-// Execute plan tests
-// ============================================================================
 
 TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
     auto* resource = std::pmr::get_default_resource();
@@ -399,7 +352,6 @@ TEST_CASE("dispatcher-pattern: execute_plan with cursor") {
     REQUIRE(cursor->get_row(0) == "row_0_from_test_db.users");
     REQUIRE(cursor->is_open);
 
-    // Cleanup
     send(dispatcher.get(), &manager_dispatcher_t::close_cursor, session).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
@@ -480,10 +432,6 @@ TEST_CASE("dispatcher-pattern: execute_plan non-existent collection") {
     g_log.log("========== TEST PASSED ==========");
 }
 
-// ============================================================================
-// Transaction tests (sequential co_await)
-// ============================================================================
-
 TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -503,22 +451,20 @@ TEST_CASE("dispatcher-pattern: transaction - sequential co_await") {
         std::string("users"),
         std::string("orders"));
 
-    // Execute: dispatcher -> storage (step 1)
+    // Step 1: dispatcher -> storage, then a poll to drain the first await.
     sched.enqueue(dispatcher.get());
     sched.stop();
     sched.enqueue(storage.get());
     sched.stop();
 
-    // Poll to resume after first co_await
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
 
-    // Step 2
+    // Step 2: the second request is only sent after the first came back.
     sched.enqueue(storage.get());
     sched.stop();
 
-    // Poll to complete
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
@@ -570,10 +516,6 @@ TEST_CASE("dispatcher-pattern: transaction - error in step 1") {
     g_log.log("========== TEST PASSED ==========");
 }
 
-// ============================================================================
-// Aggregation tests (parallel + nested coroutine)
-// ============================================================================
-
 TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -604,23 +546,20 @@ TEST_CASE("dispatcher-pattern: aggregate - parallel requests + nested coroutine"
         REQUIRE(info.messages_processed == 1);
     }
 
-    // Poll - first co_await ready
+    // One poll per awaited future, in order.
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
 
-    // Poll - second co_await
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
 
-    // Poll - third co_await
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
 
-    // Nested coroutine get_aggregate_detail
-    // total = 400 > 200, so extra co_await
+    // total = 400 > 200, so get_aggregate_detail() makes one more request.
     {
         const auto info = storage->resume(1);
         REQUIRE(info.messages_processed == 1);
@@ -654,7 +593,7 @@ TEST_CASE("dispatcher-pattern: aggregate - small dataset (no extra request)") {
 
     session_id_t session("session-agg-002");
 
-    // Only products (50) - small dataset, total < 200
+    // products alone is 50 < 200, so no extra request from get_aggregate_detail().
     auto [needs_sched, future] = send(
         dispatcher.get(),
         &manager_dispatcher_t::aggregate_sizes,
@@ -711,10 +650,6 @@ TEST_CASE("dispatcher-pattern: aggregate - empty collection list") {
     g_log.log("========== TEST PASSED ==========");
 }
 
-// ============================================================================
-// Parallel clients test
-// ============================================================================
-
 TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -737,7 +672,6 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
             auto tid = thread_id_str();
             g_log.log("[THREAD %] Started, thread=%", i, tid);
 
-            // Each thread creates its own actor chain
             auto storage = spawn<memory_storage_t>(resource, "Storage" + std::to_string(i));
             auto dispatcher = spawn<manager_dispatcher_t>(resource, storage->address(), "Dispatcher" + std::to_string(i));
             auto client = spawn<client_t>(resource, dispatcher->address(), "Client" + std::to_string(i));
@@ -804,13 +738,6 @@ TEST_CASE("dispatcher-pattern: parallel clients (separate chains)") {
     g_log.log("========== TEST PASSED ==========");
 }
 
-// ============================================================================
-// LAMBDA EXAMPLE - Using lambdas INSIDE existing actor methods
-// Tests for manager_dispatcher_t::transform_with_lambda,
-//              manager_dispatcher_t::compute_with_lambda_and_state,
-//              manager_dispatcher_t::async_transform_with_lambda
-// ============================================================================
-
 TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -821,12 +748,10 @@ TEST_CASE("lambda-inside: simple lambda in method (transform_with_lambda)") {
 
     actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Test transform_with_lambda(int value, int factor)
-    // result = value * factor + 100
     auto [needs_sched, future] = send(
         dispatcher.get(),
         &manager_dispatcher_t::transform_with_lambda,
-        5, 10);  // value=5, factor=10
+        5, 10);
 
     sched.enqueue(dispatcher.get());
     sched.stop();
@@ -848,8 +773,6 @@ TEST_CASE("lambda-inside: lambda capturing this and state (compute_with_lambda_a
 
     actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Test compute_with_lambda_and_state(const std::string& prefix)
-    // result = prefix + "_from_" + name_
     auto [needs_sched, future] = send(
         dispatcher.get(),
         &manager_dispatcher_t::compute_with_lambda_and_state,
@@ -877,21 +800,17 @@ TEST_CASE("lambda-inside: lambda + coroutine (async_transform_with_lambda)") {
 
     session_id_t session("lambda-session");
 
-    // Test async_transform_with_lambda - calls storage, then uses lambda to format
-    // result = "Collection " + coll + " in " + name_ + " has " + size + " items"
     auto [needs_sched, future] = send(
         dispatcher.get(),
         &manager_dispatcher_t::async_transform_with_lambda,
         session,
         std::string("users"));
 
-    // Dispatcher suspends on co_await, storage processes
     sched.enqueue(dispatcher.get());
     sched.stop();
     sched.enqueue(storage.get());
     sched.stop();
 
-    // Poll to resume dispatcher after storage returns
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
@@ -915,7 +834,6 @@ TEST_CASE("lambda-inside: lambda + coroutine with different collection") {
 
     session_id_t session("orders-session");
 
-    // Test with 'orders' collection which has 250 items
     auto [needs_sched, future] = send(
         dispatcher.get(),
         &manager_dispatcher_t::async_transform_with_lambda,
@@ -949,23 +867,19 @@ TEST_CASE("lambda-inside: coroutine lambda (execute_with_coroutine_lambda)") {
 
     session_id_t session("coroutine-lambda-session");
 
-    // Test execute_with_coroutine_lambda
-    // Lambda INSIDE has co_await -> sends to storage -> gets size -> multiplies
-    // users collection has 100 items, multiplier = 3 -> result = 300
     auto [needs_sched, future] = send(
         dispatcher.get(),
         &manager_dispatcher_t::execute_with_coroutine_lambda,
         session,
         std::string("users"),
-        3);  // multiplier
+        3);
 
-    // Dispatcher suspends on co_await (outer), then lambda suspends on co_await (inner)
     sched.enqueue(dispatcher.get());
     sched.stop();
     sched.enqueue(storage.get());
     sched.stop();
 
-    // Poll to resume lambda-coroutine, then outer coroutine
+    // One poll drains the inner lambda-coroutine and, through it, the outer one.
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
@@ -989,7 +903,6 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
 
     session_id_t session("orders-lambda-session");
 
-    // orders collection has 250 items, multiplier = 2 -> result = 500
     auto [needs_sched, future] = send(
         dispatcher.get(),
         &manager_dispatcher_t::execute_with_coroutine_lambda,
@@ -1011,10 +924,6 @@ TEST_CASE("lambda-inside: coroutine lambda with orders") {
 
     g_log.log("========== TEST PASSED ==========");
 }
-
-// ============================================================================
-// Extended database operations tests
-// ============================================================================
 
 TEST_CASE("database: create_cursor_from_query - lambda-coroutine returns unique_ptr") {
     auto* resource = std::pmr::get_default_resource();
@@ -1119,14 +1028,12 @@ TEST_CASE("database: get_database_statistics - parallel lambda-coroutines") {
 
     sched.enqueue(dispatcher.get());
     sched.stop();
-    // Process 3 parallel storage requests
     sched.enqueue(storage.get());
     sched.stop();
     sched.enqueue(storage.get());
     sched.stop();
     sched.enqueue(storage.get());
     sched.stop();
-    // Poll after each storage completes to resume lambda-coroutines
     send(dispatcher.get(), &manager_dispatcher_t::poll).second.detach();
     sched.enqueue(dispatcher.get());
     sched.stop();
@@ -1214,7 +1121,6 @@ TEST_CASE("database: get_cached_value - promise direct manipulation") {
 
     session_id_t session("cache-session");
 
-    // Test cached values for different collections
     auto [needs_sched1, future1] = send(dispatcher.get(),
         &manager_dispatcher_t::get_cached_value, session, std::string("users"));
     sched.enqueue(dispatcher.get());
@@ -1249,7 +1155,7 @@ TEST_CASE("database: execute_with_retry - success without retry") {
     actor_zeta::test::scheduler_test_t sched(1, 100);
 
     session_id_t session("retry-session");
-    // max_retries=0 -> no simulated error, direct success
+    // max_retries=0: no simulated failure.
     auto [needs_sched, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("users"), 0);
 
@@ -1279,7 +1185,7 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
     actor_zeta::test::scheduler_test_t sched(1, 100);
 
     session_id_t session("retry-session");
-    // max_retries=1 -> first attempt fails, retry succeeds
+    // max_retries=1: the first attempt is made to fail, the retry succeeds.
     auto [needs_sched2, future] = send(dispatcher.get(),
         &manager_dispatcher_t::execute_with_retry, session, std::string("orders"), 1);
 
@@ -1298,13 +1204,8 @@ TEST_CASE("database: execute_with_retry - retry after failure") {
 
     g_log.log("========== TEST PASSED ==========");
 }
-// =============================================================================
-// PATTERN 6: Two-actor row forwarding (client -> manager -> storage)
-//
 // The rows themselves are asserted, manager prefix included, so the forwarding
-// hop is actually covered rather than merely reaching a handle.
-// =============================================================================
-
+// hop is covered rather than merely reaching a handle.
 TEST_CASE("dispatcher-pattern: fetch_row_batch forwards prefixed rows") {
     auto* resource = std::pmr::get_default_resource();
 

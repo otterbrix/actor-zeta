@@ -71,11 +71,10 @@ namespace actor_zeta { namespace scheduler {
                 policy_.after_resume(this, *node);
                 switch (res) {
                     case resume_result::resume: {
-                        // A `resume` that handled nothing is a spin: the actor is waiting
-                        // on something the mailbox cannot deliver. Re-enqueueing has no
-                        // yield of its own (mutex, push_back, notify_one), so without this
-                        // one job can peg a core. Throughput exhaustion always reports
-                        // messages_processed > 0 and pays nothing here.
+                        // A `resume` that handled nothing is a spin on something the
+                        // mailbox cannot deliver; re-enqueueing has no yield of its own,
+                        // so without this one job can peg a core. Throughput exhaustion
+                        // reports messages_processed > 0 and pays nothing here.
                         if (res.messages_processed == 0) {
                             std::this_thread::yield();
                         }

@@ -1,36 +1,13 @@
 /// @file
-/// The window between park()'s try_block() and ~resume_guard's CAS.
-///
-/// A sender that lands exactly there gets `unblocked_reader` from a mailbox the
-/// runner has just parked, while the runner still holds `running`. Everything then
-/// depends on one line: leave_and_maybe_schedule() must set the `scheduled` bit and
-/// report needs_sched == FALSE, so that ~resume_guard sees the bit, reports
-/// scheduled_while_running, and resume() upgrades the verdict awaiting -> resume.
-/// One job node either way -- never zero (message stranded) and never two.
-///
-/// The stress tests next door cannot reach this: the window is a handful of
-/// instructions and they hit it only by luck, so a mutation that breaks exactly this
-/// line leaves them green. Here the runner is parked inside try_block_impl() by a
-/// mailbox supplied for the purpose, which makes the interleaving certain.
-///
-/// Two checks, and both matter:
-///   - the sender is told it owes nothing (a `true` here would be a second job node);
-///   - the verdict comes back `resume`, not `awaiting` (an `awaiting` here drops the
-///     only node and strands the message forever).
-///
-/// The window is guarded twice over, so the test runs both halves separately or it
-/// would only ever exercise the first:
-///
-///   phase A -- park inside try_block_impl(). The sender's push unblocks the inbox,
-///     so check_race_window() sees a non-empty non-blocked mailbox and downgrades
-///     awaiting -> resume on its own. This pins check_race_window().
-///
-///   phase B -- park inside blocked_impl() during check_race_window(), and hand back
-///     the value read BEFORE the sender arrived. check_race_window() then
-///     short-circuits to false and park() commits to `awaiting`, so nothing is left
-///     but the `scheduled` bit the sender set and the upgrade in ~resume_guard. This
-///     pins that. Without phase B a mutation that stops setting the bit for a running
-///     actor leaves the whole file green.
+/// The window between park()'s try_block() and ~resume_guard's CAS. A sender landing
+/// there gets `unblocked_reader` while the runner still holds `running`, so
+/// leave_and_maybe_schedule() must set the `scheduled` bit and report needs_sched ==
+/// FALSE; ~resume_guard then upgrades awaiting -> resume: one job node, never zero
+/// (stranded), never two. Deterministic, not stress: a probe mailbox parks the runner
+/// inside the window, once per guard. Phase A parks in try_block_impl(), where
+/// check_race_window() downgrades on its own. Phase B parks in blocked_impl() and
+/// returns the pre-sender value, so park() commits to `awaiting` and only the
+/// `scheduled` bit can rescue the message; without B, dropping the bit stays green.
 
 #include <atomic>
 #include <cstdio>
@@ -78,9 +55,7 @@ namespace {
             // Only the call check_race_window() makes right after try_block() succeeded.
             if (g_phase.load(std::memory_order_acquire) == phase::after_race_window &&
                 g_just_blocked.exchange(false, std::memory_order_acq_rel)) {
-                park_runner_until_sender_is_done();
-                // Deliberately stale: check_race_window() must commit to `awaiting` so
-                // that only the scheduled bit can rescue the message.
+                park_runner_until_sender_is_done(); // then return the stale value: park() must commit to awaiting
             }
             return value;
         }
@@ -127,8 +102,7 @@ namespace {
         auto actor = spawn<worker_t>(resource);
         auto* raw = actor.get();
 
-        // Born parked, so the first send owes the scheduling. The resume below drains
-        // it and then parks again -- that park is the window.
+        // Born parked: the first send owes the scheduling; the resume drains it and parks again -- the window.
         auto first = send(raw, &worker_t::ping);
         if (!first.first) {
             std::printf("[%s] HARNESS BROKEN: first send to a fresh actor must report "

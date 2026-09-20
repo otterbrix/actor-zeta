@@ -1,13 +1,3 @@
-/**
- * @file main.cpp
- * @brief Tests for coroutine frame allocation with custom memory resources
- *
- * These tests verify that:
- * 1. Coroutine frames are allocated using actor's memory_resource
- * 2. All allocations are properly balanced with deallocations
- * 3. Custom allocators work correctly with coroutines
- */
-
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
@@ -17,10 +7,6 @@
 #include <atomic>
 #include <mutex>
 #include <vector>
-
-// =============================================================================
-// Tracking Memory Resource - monitors all allocations
-// =============================================================================
 
 class tracking_resource : public std::pmr::memory_resource {
 public:
@@ -61,7 +47,6 @@ public:
             total_freed_ += bytes;
             current_allocated_ -= bytes;
 
-            // Mark as freed
             for (auto& rec : records_) {
                 if (rec.ptr == ptr && !rec.freed) {
                     rec.freed = true;
@@ -77,7 +62,6 @@ public:
         return this == &other;
     }
 
-    // Statistics
     std::size_t alloc_count() const { return alloc_count_.load(); }
     std::size_t dealloc_count() const { return dealloc_count_.load(); }
     std::size_t total_allocated() const { return total_allocated_.load(); }
@@ -122,10 +106,6 @@ private:
     std::vector<allocation_record> records_;
 };
 
-// =============================================================================
-// Test Actor
-// =============================================================================
-
 class TestActor : public actor_zeta::basic_actor<TestActor> {
 public:
     using base_type = actor_zeta::basic_actor<TestActor>;
@@ -133,24 +113,19 @@ public:
     explicit TestActor(std::pmr::memory_resource* res)
         : base_type(res) {}
 
-    // Simple void coroutine
     actor_zeta::unique_future<void> void_coro() {
         co_return;
     }
 
-    // Coroutine with int result
     actor_zeta::unique_future<int> int_coro(int x) {
         co_return x * 2;
     }
 
-    // Coroutine with string result (by value - required for coroutines)
     actor_zeta::unique_future<std::string> string_coro(std::string s) {
         co_return s + "_processed";
     }
 
-    // Coroutine that stores local variables (larger frame)
     actor_zeta::unique_future<int> large_frame_coro(int x) {
-        // Local variables increase frame size
         int a = x + 1;
         int b = a + 2;
         int c = b + 3;
@@ -159,7 +134,6 @@ public:
     }
 
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message*) {
-        // Empty behavior - actor methods are called directly in tests
         co_return;
     }
 
@@ -170,10 +144,6 @@ public:
         &TestActor::large_frame_coro
     >;
 };
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 TEST_CASE("Coroutine allocation tracking - baseline") {
     tracking_resource tracker;
@@ -206,7 +176,6 @@ TEST_CASE("Void coroutine allocation") {
     SECTION("Single void coroutine") {
         {
             auto future = actor->void_coro();
-            // Coroutine should allocate: future_state + coroutine_frame
             CHECK(tracker.alloc_count() > baseline_allocs);
         }
 
@@ -221,11 +190,8 @@ TEST_CASE("Void coroutine allocation") {
         constexpr int N = 100;
         for (int i = 0; i < N; ++i) {
             auto future = actor2->void_coro();
-            // Future goes out of scope, coroutine should be cleaned up
         }
 
-        // All coroutine allocations should be freed
-        // Only actor allocation remains
         CHECK(tracker.alloc_count() > actor_allocs);
         INFO("Total allocations: " << tracker.alloc_count());
         INFO("Total deallocations: " << tracker.dealloc_count());
@@ -237,7 +203,6 @@ TEST_CASE("Typed coroutine allocation") {
     auto actor = actor_zeta::spawn<TestActor>(&tracker);
 
     tracker.reset();
-    // Re-spawn to get clean tracking
     actor = actor_zeta::spawn<TestActor>(&tracker);
     std::size_t actor_bytes = tracker.total_allocated();
 
@@ -278,7 +243,6 @@ TEST_CASE("Coroutine allocation patterns") {
     SECTION("Sequential coroutines reuse memory pattern") {
         auto actor = actor_zeta::spawn<TestActor>(&tracker);
 
-        // Track peak memory across multiple calls
         std::size_t first_peak = 0;
         std::size_t second_peak = 0;
 
@@ -297,7 +261,6 @@ TEST_CASE("Coroutine allocation patterns") {
             actor_zeta::detail::ignore_unused(std::move(future).take_ready());
         }
 
-        // Memory pattern should be similar
         INFO("First call peak: " << first_peak);
         INFO("Second call peak: " << second_peak);
     }
@@ -308,14 +271,12 @@ TEST_CASE("Coroutine allocation patterns") {
         std::vector<actor_zeta::unique_future<int>> futures;
         futures.reserve(10);
 
-        // Create multiple futures before consuming
         for (int i = 0; i < 10; ++i) {
             futures.push_back(actor->int_coro(i));
         }
 
         INFO("Peak with 10 concurrent futures: " << tracker.peak_allocated() << " bytes");
 
-        // Consume all
         int sum = 0;
         for (auto& f : futures) {
             sum += std::move(f).take_ready();
@@ -361,10 +322,6 @@ TEST_CASE("promise/future allocation") {
     }
 }
 
-// =============================================================================
-// Stress test
-// =============================================================================
-
 TEST_CASE("Stress test - many coroutines") {
     tracking_resource tracker;
     auto actor = actor_zeta::spawn<TestActor>(&tracker);
@@ -383,8 +340,6 @@ TEST_CASE("Stress test - many coroutines") {
     INFO("  Peak memory: " << tracker.peak_allocated() << " bytes");
     INFO("  Current memory: " << tracker.current_allocated() << " bytes");
 
-    // Should not have accumulated memory
     auto leaked = tracker.leaked_allocations();
-    // Note: actor itself is still allocated
     CHECK(leaked.size() <= 1);  // Only actor allocation remains
 }

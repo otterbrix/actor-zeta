@@ -1,20 +1,8 @@
 #pragma once
 
 /// @file client.hpp
-/// @brief Client actor - top level in the actor hierarchy
-///
-/// client_t demonstrates:
-/// - Simple client that sends requests to dispatcher
-/// - Single co_await for request-response pattern
-/// - Pending coroutine management
-///
-/// OLD (session-based) pattern:
-///   - request_size() sends request with sender address
-///   - size_finish() callback receives result
-///
-/// NEW (promise/future) pattern:
-///   - request_collection_size() returns result via co_await
-///   - No callback needed!
+/// Top-level actor of the dispatcher-pattern test: sends to the dispatcher and
+/// co_awaits the reply.
 
 #include <actor-zeta.hpp>
 
@@ -29,11 +17,6 @@ namespace dispatcher_test {
 
 using namespace actor_zeta;
 
-/// @brief Client actor - top level, sends requests to dispatcher
-///
-/// Architecture position: TOP level
-/// Sends: requests to manager_dispatcher_t
-/// Receives: responses via unique_future
 class client_t final : public basic_actor<client_t> {
 public:
     explicit client_t(
@@ -45,26 +28,13 @@ public:
         , name_(name) {
     }
 
-    // =========================================================================
-    // Simple methods
-    // =========================================================================
-
-    /// @brief Trigger behavior() to process pending coroutines
+    /// No-op message: gives the actor a turn so a suspended handler can drain a
+    /// ready await.
     unique_future<void> poll() {
         g_log.log("[%::poll] called", name_);
         co_return;
     }
 
-    // =========================================================================
-    // Client methods
-    // =========================================================================
-
-    /// @brief Request collection size from dispatcher
-    ///
-    /// Demonstrates: Simple request-response with co_await
-    /// - Send request to dispatcher
-    /// - co_await response
-    /// - Store result for test verification
     unique_future<size_result_t> request_collection_size(
             session_id_t session,
             std::string database,
@@ -74,7 +44,6 @@ public:
         g_log.log("[%::request_collection_size] thread=% session=% db=% coll=%",
                   name_, tid, session.data(), database, collection);
 
-        // Send request to dispatcher, wait for response
         auto sent_result = send(
             dispatcher_,
             &manager_dispatcher_t::size,
@@ -86,24 +55,15 @@ public:
         g_log.log("[%::request_collection_size] Got result: size=% error=%",
                   name_, result.size, result.has_error);
 
-        // Store for test verification
         last_result_ = result;
 
         co_return result;
     }
 
-    // =========================================================================
-    // dispatch_traits
-    // =========================================================================
-
     using dispatch_traits = actor_zeta::dispatch_traits<
         &client_t::poll,
         &client_t::request_collection_size
     >;
-
-    // =========================================================================
-    // behavior()
-    // =========================================================================
 
     behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
@@ -122,16 +82,10 @@ public:
         }
     }
 
-    // =========================================================================
-    // Pending coroutine management
-    // =========================================================================
-
     bool has_pending() const {
         return !pending_.empty();
     }
 
-    /// @brief Clean up completed pending futures
-    /// With auto-resume in set_value(), coroutines resume automatically
     void poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
             if (it->is_ready()) {
@@ -142,10 +96,6 @@ public:
             }
         }
     }
-
-    // =========================================================================
-    // Accessors
-    // =========================================================================
 
     const size_result_t& last_result() const { return last_result_; }
     const std::string& name() const { return name_; }

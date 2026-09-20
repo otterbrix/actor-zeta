@@ -1,20 +1,12 @@
 /// @file
-/// An exception escaping a coroutine body must reach the consumer.
-///
-/// This target is deliberately built with -fexceptions while the rest of the suite
-/// is -fno-exceptions, because the machinery under test EXISTS only in that mode:
-/// with -fno-exceptions the compiler emits no catch wrapper for a coroutine body at
-/// all, so unhandled_exception() is dead code there.
-///
-/// What used to happen: unhandled_exception() contained only assert(false) and
-/// RETURNED. Returning is not undefined -- it is specified to mean "handled, carry
-/// on to final_suspend" -- so the exception was swallowed and the future reported
-/// is_ready()==1, failed()==0 and a garbage value. Under NDEBUG (every Release
-/// build) there was no diagnostic at all.
-///
-/// No Catch2 here on purpose: Catch2 is header-only, and pulling it into a
-/// -fexceptions translation unit alongside a -fno-exceptions library would mix two
-/// compilation modes. This target compiles the library source itself instead.
+/// An exception escaping a coroutine body must reach the consumer. Built with
+/// -fexceptions while the rest of the suite is -fno-exceptions: without exceptions
+/// the compiler emits no catch wrapper for a coroutine body, so unhandled_exception()
+/// is dead code. An unhandled_exception() that RETURNS means "handled, carry on", so a
+/// swallowed exception shows as is_ready()==1, failed()==0 and a garbage value --
+/// silently under NDEBUG. Every case asserts a poller sees the failure and extraction
+/// rethrows the ORIGINAL exception. No Catch2: a -fexceptions TU next to a
+/// -fno-exceptions library would mix two compilation modes.
 
 #include <cstdio>
 #include <memory_resource>
@@ -70,9 +62,8 @@ namespace {
         }
     };
 
-    // Suspends on a pending future first, then throws after being resumed. Every
-    // case above throws BEFORE its first co_await, so await_ready() is true, the
-    // continuation is never parked, and the resume path is never exercised.
+    // Suspends on a pending future, then throws after resume. Every other case throws
+    // BEFORE its first co_await (await_ready() true), never exercising the resume path.
     class late_thrower final : public basic_actor<late_thrower> {
     public:
         explicit late_thrower(std::pmr::memory_resource* ptr)
@@ -112,8 +103,7 @@ namespace {
         unique_future<void> gate_;
     };
 
-    // Throws from behavior() itself, past dispatch(). Nothing downstream can catch
-    // this: behavior_t is the root of the chain and its future is read by nobody.
+    // Throws from behavior() itself: behavior_t is the chain root, its future read by nobody.
     class rude_actor final : public basic_actor<rude_actor> {
     public:
         explicit rude_actor(std::pmr::memory_resource* ptr)
@@ -135,10 +125,8 @@ int main() {
     auto* resource = std::pmr::get_default_resource();
     auto actor = spawn<thrower_actor>(resource);
 
-    // A consumer that only polls never extracts,
-    // so it never sees the exception. It must still see a failure, and one whose
-    // code is distinguishable from "producer released without an outcome"
-    // (state_not_recoverable, written by release_promise()'s totality repair).
+    // A poller never extracts, so it never sees the exception. It must still see a
+    // failure, with a code distinct from "released without an outcome" (state_not_recoverable).
     {
         auto future = actor->inner(-1);
         check(future.is_ready(), "poller: a thrown body still completes the future");
@@ -164,9 +152,7 @@ int main() {
         check(what == "inner said no", "take_ready(): the original exception, not a stand-in");
     }
 
-    // The same across a co_await boundary: inner's exception surfaces in outer's
-    // await_resume, is captured by outer's own unhandled_exception, and is rethrown
-    // when outer's future is extracted.
+    // Across a co_await: inner's exception surfaces in outer's await_resume and is re-captured there.
     {
         auto future = actor->outer(-1);
         bool rethrown = false;
@@ -182,9 +168,8 @@ int main() {
         check(what == "inner said no", "co_await chain: the original exception survives");
     }
 
-    // Filling a promise by hand is a supported pattern: a router takes
-    // msg->get_result_promise<T>() and completes it itself. One that catches
-    // something needs a channel that is not error(), which would flatten it to a code.
+    // Filling a promise by hand (a router taking msg->get_result_promise<T>()) is
+    // supported; a caught exception needs a channel error() would flatten to a code.
     {
         promise<int> p(resource);
         auto future = p.get_future();
@@ -231,10 +216,8 @@ int main() {
         check(rethrown, "promise<void>::exception(): extraction rethrows");
     }
 
-    // Through send() and dispatch(), which is how every caller actually reaches a
-    // method. The exception has to cross into the CALLER's state: dispatch's
-    // co_await rethrows, and without a catch there the caller's promise is only ever
-    // settled by ~promise, with broken_pipe and no exception.
+    // Through send()/dispatch(): the exception must cross into the CALLER's state. Without
+    // a catch there, the caller's promise is settled only by ~promise: broken_pipe, no exception.
     {
         auto driven = spawn<thrower_actor>(resource);
         auto sent = send(driven.get(), &thrower_actor::inner, -1);
@@ -259,9 +242,7 @@ int main() {
         check(what == "inner said no", "send(): the original exception crossed actors");
     }
 
-    // A throw from behavior() itself. There is no caller to hand it to -- behavior_t
-    // is the chain root and its future is read by nobody -- so the only question is
-    // whether the actor survives to handle the next message.
+    // A throw from behavior(): no caller to hand it to, so the only question is whether the actor survives.
     {
         auto rude = spawn<rude_actor>(resource);
         auto sent = send(rude.get(), &rude_actor::ping);
@@ -270,16 +251,14 @@ int main() {
         const auto verdict = rude->resume(4);
         check(verdict.messages_processed == 1, "behavior() throw: the message was taken");
 
-        // Still usable afterwards.
         auto again = send(rude.get(), &rude_actor::ping);
         again.second.detach();
         const auto second = rude->resume(4);
         check(second.messages_processed == 1, "behavior() throw: the actor survives it");
     }
 
-    // A throw AFTER a real suspension. The method parks on a pending gate, the gate
-    // is settled by hand, and only the resume that follows throws -- so the exception
-    // travels through the drain path rather than through an await_ready() shortcut.
+    // A throw AFTER a real suspension: parked on a pending gate settled by hand, so the
+    // exception travels the drain path rather than an await_ready() shortcut.
     {
         auto actor2 = spawn<late_thrower>(resource);
         promise<void> gate(resource);
@@ -309,8 +288,7 @@ int main() {
         check(what == "threw after resuming", "late throw: the exception from the resumed body");
     }
 
-    // void all the way: unique_future<void> awaited by another unique_future<void>,
-    // which is the branch of owning_awaiter::await_resume with nothing to return.
+    // void awaited by void: the owning_awaiter::await_resume branch with nothing to return.
     {
         auto actor3 = spawn<late_thrower>(resource);
         auto sent = send(actor3.get(), &late_thrower::void_outer);

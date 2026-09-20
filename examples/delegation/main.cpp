@@ -1,7 +1,6 @@
-// Non-blocking delegation pattern: an actor_mixin router restamps the message's
-// command via message::set_command and forwards it to one of a pool of
-// cooperative-actor workers. The caller's future is filled by the worker through
-// the message's type-erased result_slot; the router itself never waits.
+// Non-blocking delegation: an actor_mixin router restamps the message's command via
+// message::set_command and forwards it to a pool of cooperative workers. The worker
+// fills the caller's future through the message's type-erased result_slot; the router never waits.
 
 #include <cassert>
 #include <cstdlib>
@@ -16,13 +15,9 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
 
-// Wait for a future completed elsewhere -- by a scheduler's worker threads, or inline
-// by a synchronous actor_mixin. Nothing is pumped here: this is a bounded spin.
-//
-// is_ready() is NOT a value gate: it is the promise_released bit, which a promise that
-// dies without a value sets too, and take_ready() only ASSERTS that a value is present
-// -- an assert that is gone in the Release builds examples ship as. Hence failed(). The
-// bound turns a producer that never completes into a visible error, not a silent hang.
+// Bounded spin on a future completed elsewhere. is_ready() is only the promise_released
+// bit (set by a promise dying without a value too) and take_ready() merely asserts, which
+// Release drops -- hence failed(). The bound turns a stuck producer into a visible error.
 template<typename T>
 T await_from_scheduler(actor_zeta::unique_future<T>& future) {
     constexpr int kSpinCap = 10'000'000;
@@ -59,9 +54,8 @@ class router_t final : public actor::actor_mixin<router_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    // The body never runs: enqueue_impl below intercepts every message. The
-    // signature must match worker_t::compute (same value_type + parameter types)
-    // because result_slot_ is reinterpreted as shared_state<value_type>*.
+    // Never runs: enqueue_impl intercepts every message. The signature must match
+    // worker_t::compute because result_slot_ is reinterpreted as shared_state<value_type>*.
     unique_future<int> compute(int) { co_return 0; }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&router_t::compute>;
@@ -111,8 +105,7 @@ int main() {
     futs.reserve(N);
     for (int i = 0; i < N; ++i) {
         auto sent = send(router.get(), &router_t::compute, i);
-        // The router is a synchronous actor_mixin: it restamps the message and hands it
-        // to a worker inside send(), so the caller has nothing to schedule.
+        // A synchronous actor_mixin restamps and forwards inside send(): nothing to schedule.
         assert(!sent.first);
         futs.push_back(std::move(sent.second));
     }
@@ -128,6 +121,6 @@ int main() {
     std::cout << "delegation example: sum = " << sum
               << " (expected " << expected << ")" << std::endl;
 
-    sched->stop();   // before actors are destroyed (CLAUDE.md shutdown order)
+    sched->stop();   // before the actors it can resume are destroyed
     return sum == expected ? 0 : 1;
 }
