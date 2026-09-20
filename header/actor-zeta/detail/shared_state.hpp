@@ -25,7 +25,7 @@
 // modes. The library is header-only and the setting is a global compiler flag, so every
 // translation unit in one build already agrees; linking objects compiled with DIFFERENT
 // settings is undefined and nothing here can diagnose it. Both modes are built (CI covers
-// EXCEPTIONS_DISABLE=ON and OFF, and downstream build with exceptions on), but
+// EXCEPTIONS_DISABLE=ON and OFF), but
 // each configuration is uniform -- no build mixes the two within one link.
 
 namespace actor_zeta::detail {

@@ -335,7 +335,7 @@ TEST_CASE("available race: high concurrency stress") {
 }
 
 // =============================================================================
-// Test 4: poll_pending() pattern from downstream
+// Test 4: the poll_pending() pattern
 // Simulates the exact pattern that triggers the bug in production
 // =============================================================================
 

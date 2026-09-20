@@ -269,7 +269,7 @@ namespace actor_zeta {
         // Access to the producing coroutine's handle.
         //
         // Used internally by propagate_awaited_state(), and RELIED ON BY DOWNSTREAM:
-        // a downstream driver's index tests and a downstream driver's drive_future.hpp hand-roll the Q6
+        // external drivers hand-roll the Q6
         // drain with it (read promise().awaited_flags_ / awaited_continuation_, then
         // resume the continuation) to drive a future from a non-actor thread.
         //

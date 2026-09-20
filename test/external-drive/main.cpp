@@ -18,7 +18,7 @@
 //
 //   1. POLLING: is_ready() / failed() / take_ready(). Works for every future,
 //      including the promise<T>-backed ones send() returns. This is what
-//      examples/asio does and what a downstream driver's asio_future_bridge does.
+//      examples/asio does.
 //
 //   2. MANUAL DRAIN via coroutine_handle(): for a COROUTINE-BACKED future --
 //      one obtained by calling a method coroutine directly rather than through
@@ -30,7 +30,7 @@
 // an internal leak and it is the one way to resume an actor's frame outside the
 // `running`-bit critical section -- so the caller owns the serialization -- but
 // it is a supported extension point, not an accident. Deleting it silently
-// breaks a downstream driver's index tests and a downstream driver's drive_future.hpp.
+// breaks every external driver built on it.
 // ===========================================================================
 
 using namespace actor_zeta;
@@ -103,7 +103,7 @@ namespace {
         std::atomic<int> producer_needs_sched_;
     };
 
-    // Verbatim shape of a downstream driver's `resume_awaited` (services/index/tests):
+    // The shape an external driver hand-rolls to drain an awaited chain:
     // claim the deepest awaited continuation atomically and run it. Returns
     // false when nothing is suspended.
     template<typename T>
@@ -124,7 +124,7 @@ namespace {
         return true;
     }
 
-    // Verbatim shape of a downstream driver's `drive_until_ready` (tests/system/drive_future.hpp):
+    // The same, wrapped in a bounded drive-until-ready loop:
     // poll, and whenever the deepest awaited future reports promise_released,
     // drain its continuation from this (non-actor) thread.
     template<typename T>
@@ -177,7 +177,7 @@ TEST_CASE("external drive: coroutine_handle() exposes the awaited chain of a met
     // does NOT check readiness. The continuation is installed for as long as the
     // coroutine is suspended, so calling it here would resume the consumer past
     // a co_await whose value was never set -- await_resume then takes from empty
-    // storage and aborts. The caller owns the gate; a downstream driver's call sites gate
+    // storage and aborts. The caller owns the gate; external drivers gate
     // on exactly this flag.
     REQUIRE(awaited_is_ready(fut) == false);
 
@@ -209,7 +209,7 @@ TEST_CASE("external drive: a send()-backed future has no coroutine handle") {
 
     // send() hands back a promise<T>-backed future. There is no producing
     // coroutine to reach, so route 2 does not apply and route 1 is the only
-    // option. Downstream drivers must handle this case -- a downstream driver's
+    // option. An external driver must handle this case -- its
     // drive_until_ready guards on `if (handle && !handle.done())` for exactly
     // this reason.
     REQUIRE(!fut.coroutine_handle());
@@ -230,7 +230,7 @@ TEST_CASE("external drive: polling from a foreign thread never resumes an actor 
     REQUIRE(needs_sched == true);
 
     // The actor is driven on one thread while a foreign thread only polls. This
-    // is the supported integration shape (examples/asio, a downstream driver's
+    // is the supported integration shape (examples/asio and the
     // asio_future_bridge): the poller never touches a coroutine handle, so it
     // cannot pull an actor's frame onto its own thread.
     // The spin is bounded, and that bound IS the hang guard -- no stop flag. A
@@ -268,8 +268,8 @@ TEST_CASE("external drive: polling from a foreign thread never resumes an actor 
 // and the next handle.done() is a heap-use-after-free -- ASan reports a READ
 // of size 8 there.
 //
-// That is not theoretical: downstream carries a hand-rolled guard in four index
-// test files whose comment names the ASan run that caught it, and a downstream driver's
+// That is not theoretical: external drivers that hand-roll this carry a guard
+// for exactly this case, and the
 // drive_until_ready survives only because its loop gate happens to be the same
 // bit that triggers the destruction.
 //
@@ -295,8 +295,8 @@ TEST_CASE("external drive: coroutine_handle() is empty once a driven future comp
     REQUIRE(fut.is_ready());
     REQUIRE(!fut.coroutine_handle());
 
-    // The same thing through the driver helper, which is what downstream and
-    // downstream actually run: it re-reads the handle and calls done() on it.
+    // The same thing through the driver helper, which is what an external driver
+    // actually runs: it re-reads the handle and calls done() on it.
     // Without the getter's guard that done() is a heap-use-after-free; with it
     // the helper simply reports "nothing to drain".
     REQUIRE(resume_awaited(fut) == false);

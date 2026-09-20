@@ -135,7 +135,7 @@ int main() {
     auto* resource = std::pmr::get_default_resource();
     auto actor = spawn<thrower_actor>(resource);
 
-    // A consumer that only polls -- downstream does exactly this -- never extracts,
+    // A consumer that only polls never extracts,
     // so it never sees the exception. It must still see a failure, and one whose
     // code is distinguishable from "producer released without an outcome"
     // (state_not_recoverable, written by release_promise()'s totality repair).

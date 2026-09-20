@@ -11,7 +11,7 @@ name: Ubuntu Sanitizers CI
 #   exceptions -- EXCEPTIONS_DISABLE=OFF. The whole exception_ptr capture/rethrow path
 #                 in unique_future exists ONLY in this mode (with -fno-exceptions the
 #                 compiler emits no catch wrapper for a coroutine body at all), and it
-#                 is the mode downstream consumers build in.
+#                 is the mode consumers that enable exceptions build in.
 
 on:
   pull_request:
