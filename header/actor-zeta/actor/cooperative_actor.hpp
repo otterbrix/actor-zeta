@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cassert>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 #include <actor-zeta/actor/actor_mixin.hpp>
@@ -140,6 +143,31 @@ namespace actor_zeta { namespace actor {
         }
     }
 
+    // One backoff step plus the bound, written once instead of at all six CAS loops.
+    // They each repeated the same six lines, differing only in the message.
+    //
+    // The bound is not a retry budget to survive: every one of these loops CASes a
+    // single word whose flags only ever move forward, so a thousand consecutive
+    // failures means the state machine is broken, not that the machine is busy.
+    //
+    // No #ifndef NDEBUG, deliberately. The two branches this replaces both stopped
+    // the process -- assert in debug, a bare std::terminate() in release -- so it was
+    // never a debug-only check, just the same refusal written twice, silently the
+    // second time. Release is where you least want it silent. One comparison against
+    // a constant, on a path that has just done an atomic read-modify-write.
+    inline void cas_attempt(int& attempts, const char* context) noexcept {
+        exponential_backoff(attempts);
+        if (++attempts >= kMaxCasAttempts) {
+            std::fprintf(stderr,
+                         "actor-zeta: %s spun %d times on one compare-exchange.\n"
+                         "  The flags in the state word only ever move forward, so this is a\n"
+                         "  broken state machine rather than contention -- something is writing\n"
+                         "  the word outside the transitions in this file.\n",
+                         context, attempts);
+            std::abort();
+        }
+    }
+
     template<class Actor, class MailBox>
     class cooperative_actor
         : public actor_mixin<Actor> {
@@ -185,15 +213,7 @@ namespace actor_zeta { namespace actor {
                 int cas_attempts = 0;
 
                 while (true) {
-                    exponential_backoff(cas_attempts);
-                    ++cas_attempts;
-#ifndef NDEBUG
-                    assert(cas_attempts < kMaxCasAttempts && "enqueue_impl: CAS livelock!");
-#else
-                    if (cas_attempts >= kMaxCasAttempts) {
-                        std::terminate();
-                    }
-#endif
+                    cas_attempt(cas_attempts, "enqueue_impl");
                     if (is_destroying(current)) {
                         // Only loads touched *this, so the actor may already be gone the
                         // instant we return.
@@ -240,16 +260,7 @@ namespace actor_zeta { namespace actor {
                 int cas_attempts = 0;
 
                 while (true) {
-                    exponential_backoff(cas_attempts);
-                    ++cas_attempts;
-
-#ifndef NDEBUG
-                    assert(cas_attempts < kMaxCasAttempts && "try_acquire_running: CAS livelock!");
-#else
-                    if (cas_attempts >= kMaxCasAttempts) {
-                        std::terminate();
-                    }
-#endif
+                    cas_attempt(cas_attempts, "try_acquire_running");
 
                     // If already running, mark as scheduled so the running actor will re-run
                     if (is_running(current)) {
@@ -315,16 +326,7 @@ namespace actor_zeta { namespace actor {
                     *scheduled_while_running_ = is_scheduled(current);
 
                     while (true) {
-                        exponential_backoff(cas_attempts);
-                        ++cas_attempts;
-
-#ifndef NDEBUG
-                        assert(cas_attempts < kMaxCasAttempts && "~resume_guard: CAS livelock!");
-#else
-                        if (cas_attempts >= kMaxCasAttempts) {
-                            std::terminate();
-                        }
-#endif
+                        cas_attempt(cas_attempts, "~resume_guard");
 
                         assert(is_running(current) && "resume_guard: not running!");
                         desired = set_running(current, false);
@@ -578,15 +580,7 @@ namespace actor_zeta { namespace actor {
             int cas_attempts = 0;
 
             while (!is_destroying(current)) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && "~cooperative_actor: CAS livelock (1)!");
-#else
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
-                }
-#endif
+                cas_attempt(cas_attempts, "~cooperative_actor (publish destroying)");
                 auto desired = set_destroying(current);
                 if (state_.compare_exchange_weak(current, desired,
                                                  std::memory_order_acq_rel,
@@ -600,15 +594,7 @@ namespace actor_zeta { namespace actor {
             current = state_.load(std::memory_order_acquire);
             cas_attempts = 0;
             while (true) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && "~cooperative_actor: CAS livelock (2)!");
-#else
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
-                }
-#endif
+                cas_attempt(cas_attempts, "~cooperative_actor (terminal state)");
                 assert(!is_running(current) && "Destructor: still running!");
                 // make_state() rebuilds the word, so it would erase a sender count.
                 // wait_for_activity_to_drain() above guarantees there is none left.
@@ -649,17 +635,7 @@ namespace actor_zeta { namespace actor {
             int cas_attempts = 0;
 
             while (true) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
-
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && context);
-#else
-                detail::ignore_unused(context);
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
-                }
-#endif
+                cas_attempt(cas_attempts, context);
                 assert(sender_count(current) > 0 && "leave_and_maybe_schedule: not registered!");
 
                 auto desired = sub_sender(current);
