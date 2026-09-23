@@ -83,7 +83,6 @@ struct dummy {
         } else {
             // was moved
             return;
-            //throw std::runtime_error(u8"Double destruction!");
         }
         --instances_count;
         ++destroyed_times;
@@ -111,7 +110,7 @@ struct kamikaze {
 
     kamikaze(kamikaze&&) {
         if (instances_count > 4) {
-            throw std::runtime_error(u8"Hello!");
+            throw std::runtime_error("Hello!");
         }
         ++instances_count;
     }
@@ -130,7 +129,7 @@ struct throw_on_move {
     throw_on_move(const throw_on_move&) = default;
     throw_on_move& operator=(const throw_on_move&) = default;
     throw_on_move(throw_on_move&&) {
-        throw std::runtime_error(u8"Goodbye!");
+        throw std::runtime_error("Goodbye!");
     }
     throw_on_move& operator=(throw_on_move&&) = default;
     ~throw_on_move() = default;

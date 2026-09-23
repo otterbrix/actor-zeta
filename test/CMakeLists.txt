@@ -1,5 +1,3 @@
-#available tests
-
 add_subdirectory(tooltestsuites)
 
 add_subdirectory(actor-id)
@@ -24,8 +22,16 @@ add_subdirectory(shutdown)
 add_subdirectory(coroutine-allocation)
 add_subdirectory(future-state-fixes)
 add_subdirectory(rtt-issues)
-add_subdirectory(generator)
 add_subdirectory(implements)
 add_subdirectory(crtp-enqueue)
 add_subdirectory(custom-promise)
 add_subdirectory(task)
+add_subdirectory(external-drive)
+add_subdirectory(exception-propagation)
+add_subdirectory(cancelled-extraction)
+add_subdirectory(header-selfsufficiency)
+add_subdirectory(co-await-send-prohibited)
+add_subdirectory(shutdown-sender-race)
+add_subdirectory(park-window)
+add_subdirectory(contended-resume)
+add_subdirectory(foreign-awaitable-prohibited)

@@ -15,13 +15,17 @@ namespace actor_zeta::detail {
 
 namespace actor_zeta {
     template<typename T> class promise;
-    template<typename T> class generator;
 }
 
 namespace actor_zeta { namespace mailbox {
 
     class message final : public actor_zeta::detail::singly_linked<message> {
     public:
+        // A message lives inside a PMR block behind a BlockHdr, so `delete p` would
+        // hand the global allocator a pointer that is not the allocation base.
+        // Declaring this makes the queues refuse std::default_delete at compile time.
+        using deleter_type = message_deleter;
+
         message() = delete;
         message(const message&) = delete;
         message& operator=(const message&) = delete;
@@ -32,7 +36,6 @@ namespace actor_zeta { namespace mailbox {
         message(std::pmr::memory_resource* /* resource */, message_id /*name*/);
         message(std::pmr::memory_resource* /* resource */, message_id /*name*/, actor_zeta::detail::rtt&& /*body*/);
 
-        // Allocator-extended move constructor (PMR migration)
         message(std::allocator_arg_t, std::pmr::memory_resource* resource, message&& other) noexcept;
 
         ~message() noexcept;
@@ -48,8 +51,8 @@ namespace actor_zeta { namespace mailbox {
         void swap(message& other) noexcept;
         bool is_high_priority() const;
 
-        // Type-erased result slot: shared_state<T>* for unique_future, generator_state<T>*
-        // for generator. cleanup_fn_ runs in ~message() unless transfer_ownership() was called.
+        // Type-erased result slot: shared_state<T>* for unique_future.
+        // cleanup_fn_ runs in ~message() unless transfer_ownership() was called.
 
         template<typename T>
         void init_future_slot(::actor_zeta::detail::shared_state<T>* state) noexcept {
@@ -61,24 +64,9 @@ namespace actor_zeta { namespace mailbox {
             };
         }
 
-        template<typename T>
-        void init_generator_slot(::actor_zeta::detail::generator_state<T>* state) noexcept {
-            result_slot_ = state;
-            state->add_ref();   // message holds a refcount for the duration
-            cleanup_fn_ = [](void* p) {
-                auto* s = static_cast<::actor_zeta::detail::generator_state<T>*>(p);
-                s->release();
-            };
-        }
-
         // Non-owning promise view onto the slot (for dispatch).
         template<typename T>
         [[nodiscard]] actor_zeta::promise<T> get_result_promise() const noexcept;
-
-        template<typename T>
-        [[nodiscard]] ::actor_zeta::detail::generator_state<T>* get_generator_state() const noexcept {
-            return static_cast<::actor_zeta::detail::generator_state<T>*>(result_slot_);
-        }
 
         // After this call ~message() will NOT run cleanup_fn_ (the dispatch coroutine owns it).
         void transfer_ownership() noexcept {
@@ -141,7 +129,6 @@ namespace actor_zeta { namespace mailbox {
 
     static_assert(std::is_empty_v<message_deleter>, "EBO expected");
 
-    // PMR factory for heap-allocated messages.
     template<class... Args>
     message_ptr pmr_make_message(std::pmr::memory_resource* resource, Args&&... args) {
         constexpr std::size_t front = detail::kFront;

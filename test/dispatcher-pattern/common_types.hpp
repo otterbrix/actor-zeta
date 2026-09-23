@@ -1,15 +1,5 @@
 #pragma once
 
-/// @file common_types.hpp
-/// @brief Domain types for dispatcher-pattern tests
-///
-/// This file contains domain types used across the test actors:
-/// - session_id_t: Session identification
-/// - collection_full_name_t: Database.collection naming
-/// - size_result_t, cursor_t: Operation results
-/// - logical_plan_t: Query plan representation
-/// - transaction_result_t, aggregate_result_t: Complex operation results
-
 #include <string>
 #include <vector>
 #include <memory>
@@ -17,11 +7,6 @@
 
 namespace dispatcher_test {
 
-// ============================================================================
-// Session identification
-// ============================================================================
-
-/// @brief Session identifier for tracking requests
 struct session_id_t {
     std::string id_;
 
@@ -33,18 +18,12 @@ struct session_id_t {
     bool operator==(const session_id_t& other) const { return id_ == other.id_; }
 };
 
-/// @brief Hash functor for session_id_t (for use in unordered containers)
 struct session_id_hash {
     std::size_t operator()(const session_id_t& s) const {
         return std::hash<std::string>{}(s.data());
     }
 };
 
-// ============================================================================
-// Collection naming
-// ============================================================================
-
-/// @brief Full name of a database collection
 struct collection_full_name_t {
     std::string database;
     std::string collection;
@@ -58,11 +37,6 @@ struct collection_full_name_t {
     }
 };
 
-// ============================================================================
-// Operation results
-// ============================================================================
-
-/// @brief Result of size operation with error handling
 struct size_result_t {
     std::size_t size{0};
     bool has_error{false};
@@ -79,13 +53,8 @@ struct size_result_t {
     }
 };
 
-// ============================================================================
-// Cursor - query execution result
-// ============================================================================
-
-/// @brief Cursor holding query results
 struct cursor_t {
-    std::vector<std::string> data;  // Result rows
+    std::vector<std::string> data;
     bool has_error{false};
     std::string error_message;
     bool is_open{true};
@@ -107,15 +76,10 @@ struct cursor_t {
 
 using cursor_t_ptr = std::unique_ptr<cursor_t>;
 
-// ============================================================================
-// Logical plan - query representation
-// ============================================================================
-
-/// @brief Logical query plan (simplified)
 struct logical_plan_t {
-    std::string operation;  // "select", "insert", "update", "delete"
+    std::string operation;
     collection_full_name_t collection;
-    std::string filter;     // Filter condition
+    std::string filter;
 
     logical_plan_t() = default;
     logical_plan_t(std::string op, collection_full_name_t coll, std::string flt = "")
@@ -130,11 +94,6 @@ struct logical_plan_t {
 
 using logical_plan_ptr = std::unique_ptr<logical_plan_t>;
 
-// ============================================================================
-// Transaction result
-// ============================================================================
-
-/// @brief Result of transaction (sequential queries)
 struct transaction_result_t {
     std::size_t total_rows{0};
     bool committed{false};
@@ -153,11 +112,6 @@ struct transaction_result_t {
     }
 };
 
-// ============================================================================
-// Aggregate result
-// ============================================================================
-
-/// @brief Result of aggregation (parallel queries + nested coroutines)
 struct aggregate_result_t {
     std::size_t total_size{0};
     std::size_t collection_count{0};

@@ -6,13 +6,34 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 
 std::atomic<int> ping_pong_counter{0};
 std::atomic<bool> ping_pong_done{false};
 
+// The round trip must close; if it does not, the benchmark is timing nothing.
+// The fixture owns the actors, so discharging what they recorded is its job.
+template<typename Actor>
+inline void await_ping_pong(Actor* sender, Actor* target,
+                            actor_zeta::scheduler::sharing_scheduler* sched) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ping_pong_done.load(std::memory_order_acquire)) {
+        if (sender->take_partner_obligations() > 0) {
+            sched->enqueue(target);
+        }
+        if (std::chrono::steady_clock::now() > deadline) {
+            std::fprintf(stderr, "ping-pong did not complete: a needs_sched was dropped\n");
+            std::abort();
+        }
+        std::this_thread::yield();
+    }
+}
+
 template<typename... Args>
 class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Args...>> {
     ping_pong_actor* partner_;
+    std::atomic<std::size_t> partner_owed_{0};
 
 public:
     explicit ping_pong_actor(std::pmr::memory_resource* res)
@@ -22,11 +43,22 @@ public:
 
     void set_partner(ping_pong_actor* p) { partner_ = p; }
 
+    /// Claimed by the fixture, which owns the actors and therefore schedules them.
+    std::size_t take_partner_obligations() {
+        return partner_owed_.exchange(0, std::memory_order_acq_rel);
+    }
+
     actor_zeta::unique_future<void> ping(Args...) {
         ++ping_pong_counter;
         if (partner_) {
             auto [needs_sched, future] = actor_zeta::send(partner_, &ping_pong_actor::pong, Args{}...);
             actor_zeta::detail::ignore_unused(future);
+            // Dropping this strands the partner: it holds the scheduled bit with no
+            // job anywhere, and every later send reports needs_sched == false. This
+            // actor has no scheduler, so it records and the owner claims.
+            if (needs_sched) {
+                partner_owed_.fetch_add(1, std::memory_order_release);
+            }
         }
         co_return;
     }
@@ -90,8 +122,11 @@ public:
         ping_pong_done.store(false, std::memory_order_release);
         auto [needs_sched, future] = actor_zeta::send(actor0_.get(), &Actor::ping);
         actor_zeta::detail::ignore_unused(future);
-        scheduler_->enqueue(actor0_.get());
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        if (needs_sched) {
+            scheduler_->enqueue(actor0_.get());
+        }
+        // Measure the round trip, not a fixed sleep.
+        await_ping_pong(actor0_.get(), actor1_.get(), scheduler_.get());
     }
 };
 
@@ -130,8 +165,11 @@ public:
         ping_pong_done.store(false, std::memory_order_release);
         auto [needs_sched, future] = actor_zeta::send(actor0_.get(), &Actor::ping, int64_t{});
         actor_zeta::detail::ignore_unused(future);
-        scheduler_->enqueue(actor0_.get());
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        if (needs_sched) {
+            scheduler_->enqueue(actor0_.get());
+        }
+        // Measure the round trip, not a fixed sleep.
+        await_ping_pong(actor0_.get(), actor1_.get(), scheduler_.get());
     }
 };
 

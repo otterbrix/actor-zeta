@@ -1,6 +1,10 @@
 #pragma once
 
+#include <memory>
+#include <cassert>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 #include <actor-zeta/actor/actor_mixin.hpp>
@@ -11,7 +15,11 @@
 
 namespace actor_zeta { namespace actor {
 
-    enum class actor_state : uint8_t {
+    // Three flags in the low bits, in-flight senders counted above them. One word, not
+    // two atomics: two would let a sender and the destructor each miss the other's write
+    // short of seq_cst fences on both sides; one word has one modification order. uint32_t:
+    // in a uint8_t the 32nd sender would carry out of the word and read as zero senders.
+    enum class actor_state : uint32_t {
         idle = 0b000,
         scheduled = 0b001,
         running = 0b010,
@@ -23,43 +31,64 @@ namespace actor_zeta { namespace actor {
     };
 
     constexpr bool is_scheduled(actor_state s) noexcept {
-        return (static_cast<uint8_t>(s) & 0b001) != 0;
+        return (static_cast<uint32_t>(s) & 0b001) != 0;
     }
 
     constexpr bool is_running(actor_state s) noexcept {
-        return (static_cast<uint8_t>(s) & 0b010) != 0;
+        return (static_cast<uint32_t>(s) & 0b010) != 0;
     }
 
     constexpr bool is_destroying(actor_state s) noexcept {
-        return (static_cast<uint8_t>(s) & 0b100) != 0;
+        return (static_cast<uint32_t>(s) & 0b100) != 0;
     }
 
     constexpr actor_state set_scheduled(actor_state s, bool value) noexcept {
-        auto bits = static_cast<uint8_t>(s);
+        auto bits = static_cast<uint32_t>(s);
         if (value) {
             bits |= 0b001;
         } else {
-            bits &= static_cast<uint8_t>(~0b001);
+            bits &= ~static_cast<uint32_t>(0b001);
         }
         return static_cast<actor_state>(bits);
     }
 
     constexpr actor_state set_running(actor_state s, bool value) noexcept {
-        auto bits = static_cast<uint8_t>(s);
+        auto bits = static_cast<uint32_t>(s);
         if (value) {
             bits |= 0b010;
         } else {
-            bits &= static_cast<uint8_t>(~0b010);
+            bits &= ~static_cast<uint32_t>(0b010);
         }
         return static_cast<actor_state>(bits);
     }
 
     constexpr actor_state set_destroying(actor_state s) noexcept {
-        return static_cast<actor_state>(static_cast<uint8_t>(s) | 0b100);
+        return static_cast<actor_state>(static_cast<uint32_t>(s) | 0b100);
     }
 
+    // A sender stays registered until its last touch of the actor; the destructor waits the count out.
+    inline constexpr uint32_t kSenderStep = 0b1000;
+
+    constexpr uint32_t sender_count(actor_state s) noexcept {
+        return static_cast<uint32_t>(s) / kSenderStep;
+    }
+
+    // The flags alone, for comparisons that must not see the count.
+    constexpr actor_state flags_of(actor_state s) noexcept {
+        return static_cast<actor_state>(static_cast<uint32_t>(s) % kSenderStep);
+    }
+
+    constexpr actor_state add_sender(actor_state s) noexcept {
+        return static_cast<actor_state>(static_cast<uint32_t>(s) + kSenderStep);
+    }
+
+    constexpr actor_state sub_sender(actor_state s) noexcept {
+        return static_cast<actor_state>(static_cast<uint32_t>(s) - kSenderStep);
+    }
+
+    // Rebuilds the word from scratch: only valid where the sender count is known to be zero.
     constexpr actor_state make_state(bool scheduled, bool running, bool destroying) noexcept {
-        uint8_t bits = 0;
+        uint32_t bits = 0;
         if (scheduled)
             bits |= 0b001;
         if (running)
@@ -86,9 +115,28 @@ namespace actor_zeta { namespace actor {
         } else if (attempt < kYieldPhaseEnd) {
             std::this_thread::yield();
         } else {
-            int computed = 1 << (attempt - kYieldPhaseEnd);
-            auto sleep_us = computed < kMaxSleepMicroseconds ? computed : kMaxSleepMicroseconds;
+            // Cap the EXPONENT: `1 << 31` is INT_MIN and past it the shift is UB. Reachable via wait_for_activity_to_drain().
+            constexpr int kMaxShift = 10;
+            const int exponent = attempt - kYieldPhaseEnd;
+            const int computed = exponent >= kMaxShift ? kMaxSleepMicroseconds : (1 << exponent);
+            const auto sleep_us = computed < kMaxSleepMicroseconds ? computed : kMaxSleepMicroseconds;
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
+        }
+    }
+
+    // Backoff plus the bound for every CAS loop here. Not a retry budget: the flags
+    // only ever move forward, so a thousand failures on one word is a broken state
+    // machine, not contention -- hence abort, in release too, where silent refusal is worst.
+    inline void cas_attempt(int& attempts, const char* context) noexcept {
+        exponential_backoff(attempts);
+        if (++attempts >= kMaxCasAttempts) {
+            std::fprintf(stderr,
+                         "actor-zeta: %s spun %d times on one compare-exchange.\n"
+                         "  The flags in the state word only ever move forward, so this is a\n"
+                         "  broken state machine rather than contention -- something is writing\n"
+                         "  the word outside the transitions in this file.\n",
+                         context, attempts);
+            std::abort();
         }
     }
 
@@ -103,7 +151,6 @@ namespace actor_zeta { namespace actor {
         }
 
     public:
-        /// Marker type to identify cooperative actors (for concept detection)
         using is_cooperative_actor_type = void;
 
         using typename actor_mixin<Actor>::id_t;
@@ -118,58 +165,55 @@ namespace actor_zeta { namespace actor {
         template<typename T>
         using unique_future = actor_zeta::unique_future<T>;
 
-        /// Type-erased enqueue for address_t polymorphism.
         [[nodiscard]]
         std::pair<bool, detail::enqueue_result> enqueue_impl(mailbox::message_ptr msg) {
-            if (is_destroying(state_.load(std::memory_order_acquire))) {
-                return {false, detail::enqueue_result::queue_closed};
+            // Read `destroying` and register as a sender in ONE RMW: in the word's order
+            // either our registration precedes the destructor's drain (it waits for us) or
+            // `destroying` precedes us (we never touch the mailbox; it may be gone the instant
+            // we return). A bare check could not make it wait for a sender already in push_back.
+            {
+                auto current = state_.load(std::memory_order_acquire);
+                int cas_attempts = 0;
+
+                while (true) {
+                    cas_attempt(cas_attempts, "enqueue_impl");
+                    if (is_destroying(current)) {
+                        return {false, detail::enqueue_result::queue_closed};
+                    }
+
+                    assert(sender_count(current) < (1u << 29) - 1 && "enqueue_impl: sender count overflow!");
+
+                    if (state_.compare_exchange_weak(current, add_sender(current),
+                                                     std::memory_order_acq_rel,
+                                                     std::memory_order_acquire)) {
+                        break;
+                    }
+                }
             }
 
             auto result = mailbox().push_back(std::move(msg));
-            bool needs_sched = false;
 
-            switch (result) {
-                case detail::enqueue_result::unblocked_reader:
-                    needs_sched = try_schedule_after_enqueue("enqueue_impl");
-                    break;
-
-                case detail::enqueue_result::success:
-                case detail::enqueue_result::queue_closed:
-                    needs_sched = false;
-                    break;
-
-                default:
-                    assert(false && "enqueue_result: unreachable");
-                    needs_sched = false;
-                    break;
-            }
+            // Deregister and claim `scheduled` in one RMW: between two, we would be
+            // uncounted but unclaimed, and the destructor may proceed in that gap.
+            const bool needs_sched = leave_and_maybe_schedule(
+                "enqueue_impl", result == detail::enqueue_result::unblocked_reader);
 
             return {needs_sched, result};
         }
 
-        scheduler::resume_info resume(size_t max_throughput) noexcept {
+        // The verdict is an obligation: on `resume` the caller must re-enqueue this actor; nobody
+        // else will (future completion is flag-only; send() says needs_sched only when blocked).
+        [[nodiscard]] scheduler::resume_info resume(size_t max_throughput) noexcept {
             assert(max_throughput > 0 && "max_throughput must be greater than 0");
 
-            // Try to acquire running state. If actor is already running,
-            // mark it as scheduled so it will re-run, and return early.
             auto try_acquire_running = [this]() -> bool {
                 auto current = state_.load(std::memory_order_acquire);
                 actor_state desired;
                 int cas_attempts = 0;
 
                 while (true) {
-                    exponential_backoff(cas_attempts);
-                    ++cas_attempts;
+                    cas_attempt(cas_attempts, "try_acquire_running");
 
-#ifndef NDEBUG
-                    assert(cas_attempts < kMaxCasAttempts && "try_acquire_running: CAS livelock!");
-#else
-                    if (cas_attempts >= kMaxCasAttempts) {
-                        std::terminate();
-                    }
-#endif
-
-                    // If already running, mark as scheduled so the running actor will re-run
                     if (is_running(current)) {
                         desired = set_scheduled(current, true);
                         if (state_.compare_exchange_weak(current, desired,
@@ -181,10 +225,11 @@ namespace actor_zeta { namespace actor {
                     }
 
 #ifndef NDEBUG
-                    assert((current == actor_state::idle ||
-                            current == actor_state::scheduled ||
-                            current == actor_state::idle_destroying ||
-                            current == actor_state::scheduled_destroying) &&
+                    // flags_of: a live sender count would make every enumerator compare unequal.
+                    assert((flags_of(current) == actor_state::idle ||
+                            flags_of(current) == actor_state::scheduled ||
+                            flags_of(current) == actor_state::idle_destroying ||
+                            flags_of(current) == actor_state::scheduled_destroying) &&
                            "try_acquire_running: unexpected state!");
 #endif
 
@@ -199,7 +244,9 @@ namespace actor_zeta { namespace actor {
             };
 
             if (!try_acquire_running()) {
-                return scheduler::resume_info(scheduler::resume_result::done, 0);
+                // `awaiting`, not `done`: the `running` holder has the scheduled bit now and
+                // returns `resume` itself; `done` would let a driver retire a contended actor.
+                return scheduler::resume_info(scheduler::resume_result::awaiting, 0);
             }
 
             struct resume_guard {
@@ -221,16 +268,7 @@ namespace actor_zeta { namespace actor {
                     *scheduled_while_running_ = is_scheduled(current);
 
                     while (true) {
-                        exponential_backoff(cas_attempts);
-                        ++cas_attempts;
-
-#ifndef NDEBUG
-                        assert(cas_attempts < kMaxCasAttempts && "~resume_guard: CAS livelock!");
-#else
-                        if (cas_attempts >= kMaxCasAttempts) {
-                            std::terminate();
-                        }
-#endif
+                        cas_attempt(cas_attempts, "~resume_guard");
 
                         assert(is_running(current) && "resume_guard: not running!");
                         desired = set_running(current, false);
@@ -289,34 +327,40 @@ namespace actor_zeta { namespace actor {
                 return finalize(scheduler::resume_result::done, 0, false);
             }
 
-            if (mailbox().blocked()) {
-                return finalize(scheduler::resume_result::awaiting, 0, false);
-            }
+            // Un-park on the way in -- the counterpart of park()'s try_block(). blocked()
+            // means "no job exists and the next producer owes the scheduling"; under
+            // `running` neither holds (we drain; scheduled_while_running catches a late
+            // arrival), and left blocked a concurrent send() would be handed needs_sched
+            // for a running actor -- a second job node. Reached when something other than
+            // send() drives the actor. Needs `running`: without it, clearing the tag strands
+            // the next message (needs_sched == false, nobody committed to draining).
+            assert(is_running(state_.load(std::memory_order_acquire)) &&
+                   "resume_impl: un-parking without holding `running`");
+            mailbox().try_unblock();
 
-            // Q6: behavior suspended on co_await — if its deepest awaited future is
-            // ready, take the continuation and unwind the chain via symmetric transfer
-            // in final_suspend; otherwise spin and keep the actor scheduled.
+            // Drain a suspended behavior BEFORE park() below; the order is the point. A behavior on
+            // a co_await must report `resume`, never `awaiting` (awaiting pairs with keep_scheduled
+            // = false: nothing would ever wake it). Readiness is flag-only -- release_promise()
+            // touches neither mailbox nor scheduler -- so the mailbox cannot speak for it.
             if (current_behavior_.is_busy()) {
                 if (current_behavior_.is_awaited_ready()) {
                     auto cont = current_behavior_.take_awaited_continuation();
                     if (cont) {
                         cont.resume();
                     }
-                } else {
+                }
+                // Re-check: not ready, or re-suspended inside cont.resume(); falling through would strand it.
+                if (current_behavior_.is_busy()) {
                     return finalize(scheduler::resume_result::resume, 0, true);
                 }
             }
 
+            if (mailbox().blocked()) {
+                return finalize(scheduler::resume_result::awaiting, 0, false);
+            }
+
             if (mailbox().empty()) {
-                auto result = mailbox().try_block()
-                                  ? scheduler::resume_result::awaiting
-                                  : scheduler::resume_result::resume;
-                bool keep_scheduled = (result == scheduler::resume_result::resume) ||
-                                      (result == scheduler::resume_result::awaiting && check_race_window());
-                if (keep_scheduled && result == scheduler::resume_result::awaiting) {
-                    result = scheduler::resume_result::resume;
-                }
-                return finalize(result, 0, keep_scheduled);
+                return park(finalize, check_race_window, 0);
             }
 
             while (handled < max_throughput) {
@@ -332,8 +376,7 @@ namespace actor_zeta { namespace actor {
                     return finalize(scheduler::resume_result::awaiting, handled, false);
                 }
 
-                // Q6 (see resume_impl entry above): if the awaited future is ready,
-                // unwind via symmetric transfer; otherwise spin.
+                // Same drain as at entry: ready, unwind; not ready, stay scheduled.
                 if (current_behavior_.is_busy()) {
                     if (current_behavior_.is_awaited_ready()) {
                         auto cont = current_behavior_.take_awaited_continuation();
@@ -385,15 +428,7 @@ namespace actor_zeta { namespace actor {
                     if (mailbox().closed()) {
                         return finalize(scheduler::resume_result::done, handled, false);
                     }
-                    auto result = mailbox().try_block()
-                                      ? scheduler::resume_result::awaiting
-                                      : scheduler::resume_result::resume;
-                    bool keep_scheduled = (result == scheduler::resume_result::resume) ||
-                                          (result == scheduler::resume_result::awaiting && check_race_window());
-                    if (keep_scheduled && result == scheduler::resume_result::awaiting) {
-                        result = scheduler::resume_result::resume;
-                    }
-                    return finalize(result, handled, keep_scheduled);
+                    return park(finalize, check_race_window, handled);
                 }
             }
 
@@ -404,6 +439,22 @@ namespace actor_zeta { namespace actor {
             if (current_behavior_.is_busy()) {
                 return finalize(scheduler::resume_result::resume, handled, true);
             }
+
+            return park(finalize, check_race_window, handled);
+        }
+
+        // Park on an empty inbox. NEVER returns (awaiting, keep_scheduled = true): ~resume_guard
+        // would set `scheduled` with no job in any queue, and leave_and_maybe_schedule() never
+        // claims a set bit -- needs_sched false forever; the verdict becomes `resume` instead.
+        // check_race_window() runs only after try_block() succeeded; its `!blocked() &&` keeps
+        // empty() away from a blocked inbox.
+        template<typename Finalize, typename CheckRaceWindow>
+        scheduler::resume_info park(Finalize& finalize,
+                                    CheckRaceWindow& check_race_window,
+                                    size_t handled) noexcept {
+            // A live behavior here is the lost wakeup the drain ordering prevents; every
+            // caller is dominated by is_busy(). done(): no behavior, or one at final_suspend.
+            assert(current_behavior_.done() && "park() with a live behavior -- lost wakeup");
 
             auto result = mailbox().try_block()
                               ? scheduler::resume_result::awaiting
@@ -434,15 +485,7 @@ namespace actor_zeta { namespace actor {
             int cas_attempts = 0;
 
             while (!is_destroying(current)) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && "~cooperative_actor: CAS livelock (1)!");
-#else
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
-                }
-#endif
+                cas_attempt(cas_attempts, "~cooperative_actor (publish destroying)");
                 auto desired = set_destroying(current);
                 if (state_.compare_exchange_weak(current, desired,
                                                  std::memory_order_acq_rel,
@@ -451,21 +494,15 @@ namespace actor_zeta { namespace actor {
                 }
             }
 
-            wait_for_resume_to_complete();
+            wait_for_activity_to_drain();
 
             current = state_.load(std::memory_order_acquire);
             cas_attempts = 0;
             while (true) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && "~cooperative_actor: CAS livelock (2)!");
-#else
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
-                }
-#endif
+                cas_attempt(cas_attempts, "~cooperative_actor (terminal state)");
                 assert(!is_running(current) && "Destructor: still running!");
+                // make_state() would erase a sender count; the drain above guarantees none is left.
+                assert(sender_count(current) == 0 && "Destructor: sender still in flight!");
                 auto desired = make_state(false, false, true);
                 if (state_.compare_exchange_weak(current, desired,
                                                  std::memory_order_release,
@@ -478,7 +515,6 @@ namespace actor_zeta { namespace actor {
     protected:
         explicit cooperative_actor(std::pmr::memory_resource* in_resource)
             : actor_mixin<Actor>()
-            , shutdown_guard_(this)
             , resource_(check_ptr(in_resource))
             , current_message_(nullptr)
             , mailbox_()
@@ -492,85 +528,37 @@ namespace actor_zeta { namespace actor {
         }
 
     private:
-        bool try_schedule_after_enqueue(const char* context) noexcept {
+        // Deregister and, if we unblocked the mailbox, claim `scheduled` in the same RMW;
+        // returns the obligation to enqueue. Branches, not early exits: always deregister.
+        [[nodiscard]] bool leave_and_maybe_schedule(const char* context, bool unblocked_us) noexcept {
             auto current = state_.load(std::memory_order_acquire);
-            actor_state desired;
             int cas_attempts = 0;
 
             while (true) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
+                cas_attempt(cas_attempts, context);
+                assert(sender_count(current) > 0 && "leave_and_maybe_schedule: not registered!");
 
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && context);
-#else
-                detail::ignore_unused(context);
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
+                auto desired = sub_sender(current);
+                bool owes_enqueue = false;
+
+                // Never schedule a dying actor or claim a held bit. A RUNNING actor discharges
+                // the obligation itself via scheduled_while_running -- read from the pre-CAS value.
+                if (unblocked_us && !is_destroying(current) && !is_scheduled(current)) {
+                    desired = set_scheduled(desired, true);
+                    owes_enqueue = !is_running(current);
                 }
-#endif
-
-                if (is_destroying(current)) {
-                    return false;
-                }
-
-                if (is_scheduled(current)) {
-                    return false;
-                }
-
-                desired = set_scheduled(current, true);
 
                 if (state_.compare_exchange_weak(current, desired,
                                                  std::memory_order_acq_rel,
                                                  std::memory_order_acquire)) {
-                    return !is_running(current);
+                    return owes_enqueue;
                 }
             }
         }
 
-        void begin_shutdown() noexcept {
-            auto current = state_.load(std::memory_order_acquire);
-            int cas_attempts = 0;
-
-            while (!is_destroying(current)) {
-                exponential_backoff(cas_attempts);
-                ++cas_attempts;
-#ifndef NDEBUG
-                assert(cas_attempts < kMaxCasAttempts && "begin_shutdown: CAS livelock!");
-#else
-                if (cas_attempts >= kMaxCasAttempts) {
-                    std::terminate();
-                }
-#endif
-                auto desired = set_destroying(current);
-                if (state_.compare_exchange_weak(current, desired,
-                                                 std::memory_order_release,
-                                                 std::memory_order_acquire)) {
-                    break;
-                }
-            }
-
-            wait_for_resume_to_complete();
-        }
-
-        struct shutdown_guard_t {
-            cooperative_actor* self_;
-
-            explicit shutdown_guard_t(cooperative_actor* self) noexcept
-                : self_(self) {}
-
-            ~shutdown_guard_t() noexcept {
-                self_->begin_shutdown();
-            }
-
-            shutdown_guard_t(const shutdown_guard_t&) = delete;
-            shutdown_guard_t& operator=(const shutdown_guard_t&) = delete;
-            shutdown_guard_t(shutdown_guard_t&&) = delete;
-            shutdown_guard_t& operator=(shutdown_guard_t&&) = delete;
-        };
-
-        void wait_for_resume_to_complete() noexcept {
-            std::atomic_thread_fence(std::memory_order_seq_cst);
+        // Waits out the `running` holder and any sender past enqueue_impl's gate.
+        // `destroying` must already be published, or a sender can slip in behind us.
+        void wait_for_activity_to_drain() noexcept {
 
             auto start_time = std::chrono::steady_clock::now();
 #ifndef NDEBUG
@@ -580,21 +568,24 @@ namespace actor_zeta { namespace actor {
 #endif
 
             int wait_attempts = 0;
-            while (is_running(state_.load(std::memory_order_acquire))) {
+            auto busy = [this]() noexcept {
+                const auto current = state_.load(std::memory_order_acquire);
+                return is_running(current) || sender_count(current) != 0;
+            };
+
+            while (busy()) {
                 exponential_backoff(wait_attempts);
                 ++wait_attempts;
 
                 auto elapsed = std::chrono::steady_clock::now() - start_time;
                 if (elapsed > timeout) {
 #ifndef NDEBUG
-                    assert(false && "wait_for_resume_to_complete: timeout!");
+                    assert(false && "wait_for_activity_to_drain: timeout!");
 #else
                     std::terminate();
 #endif
                 }
             }
-
-            std::atomic_thread_fence(std::memory_order_seq_cst);
         }
 
         mailbox::message* current_message() noexcept { return current_message_; }
@@ -611,12 +602,12 @@ namespace actor_zeta { namespace actor {
             return mailbox_;
         }
 
-        shutdown_guard_t shutdown_guard_;
-
         std::pmr::memory_resource* resource_;
         mailbox::message* current_message_;
         MailBox mailbox_;
-        behavior_t current_behavior_;  // ONE coroutine per actor for behavior()
+        // ONE coroutine per actor, deliberately unreachable from outside: an accessor
+        // would be a public way to advance the chain off the thread holding `running`.
+        behavior_t current_behavior_;
         std::atomic<actor_state> state_{actor_state::idle};
 
 #ifndef NDEBUG

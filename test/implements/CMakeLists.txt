@@ -18,7 +18,7 @@ add_executable(${PROJECT_NAME}
     ${${PROJECT_NAME}_HEADERS})
 
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC actor-zeta
+    PUBLIC tooltestsuites   # links actor-zeta PUBLIC, so it propagates
     PUBLIC Catch2::Catch2
 )
 

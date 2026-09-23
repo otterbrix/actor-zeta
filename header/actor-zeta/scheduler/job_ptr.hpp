@@ -48,7 +48,7 @@ namespace actor_zeta { namespace scheduler {
             assert((fn != nullptr || p == nullptr) && "Non-null pointer requires non-null function");
         }
 
-        resume_info resume(size_t max_throughput) const {
+        [[nodiscard]] resume_info resume(size_t max_throughput) const {
             assert(ptr != nullptr && "Cannot resume null job");
             assert(resume_fn != nullptr && "Resume function is null");
             return resume_fn(ptr, max_throughput);

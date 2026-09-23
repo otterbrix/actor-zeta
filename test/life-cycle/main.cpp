@@ -1,23 +1,24 @@
-#define CATCH_CONFIG_MAIN // This tells Catch to provide a main() - only do this in one cpp file
+#define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
 #include "classes.hpp"
 #include <actor-zeta.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 TEST_CASE("life-cycle") {
     std::unique_ptr<std::pmr::memory_resource> resource = std::unique_ptr<std::pmr::memory_resource>(std::pmr::get_default_resource());
     {
-        // singal actor
         {
             REQUIRE(test_handlers::ptr_0_counter == 0);
             auto actor = actor_zeta::spawn<test_handlers>(resource.get());
+            actor_zeta::test::scheduler_test_t sched(1, 100);
             auto [needs_sched, fut] = actor_zeta::send(actor.get(), &test_handlers::ptr_0);
-            actor->resume(10);
+            sched.enqueue(actor.get());
+            sched.run();
             std::move(fut).take_ready();
             REQUIRE(test_handlers::ptr_0_counter == 1);
             REQUIRE(test_handlers::ptr_1_counter == 0);
         }
-        // singal supervisor
         {
             auto supervisor = actor_zeta::spawn<dummy_supervisor>(resource.get(), 1ULL, 100ULL);
             REQUIRE(dummy_supervisor::constructor_counter == 1);

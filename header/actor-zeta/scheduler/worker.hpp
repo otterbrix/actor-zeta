@@ -41,12 +41,6 @@ namespace actor_zeta { namespace scheduler {
             policy_.external_enqueue(this, resumable);
         }
 
-        template<typename Resumable>
-        void execute_later(Resumable* resumable) {
-            assert(resumable && "Cannot enqueue null job");
-            policy_.internal_enqueue(this, resumable);
-        }
-
         scheduler_ptr parent() {
             return parent_;
         }
@@ -77,6 +71,13 @@ namespace actor_zeta { namespace scheduler {
                 policy_.after_resume(this, *node);
                 switch (res) {
                     case resume_result::resume: {
+                        // A `resume` that handled nothing is a spin on something the
+                        // mailbox cannot deliver; re-enqueueing has no yield of its own,
+                        // so without this one job can peg a core. Throughput exhaustion
+                        // reports messages_processed > 0 and pays nothing here.
+                        if (res.messages_processed == 0) {
+                            std::this_thread::yield();
+                        }
                         policy_.resume_job_later(this, std::move(node));
                         break;
                     }

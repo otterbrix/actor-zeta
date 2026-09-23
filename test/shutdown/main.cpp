@@ -5,6 +5,7 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/scheduler.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -16,8 +17,11 @@ public:
     }
 
     actor_zeta::unique_future<void> ping() {
+        handled_.fetch_add(1, std::memory_order_relaxed);
         co_return;
     }
+
+    std::size_t handled() const noexcept { return handled_.load(std::memory_order_acquire); }
 
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (msg->command() == actor_zeta::msg_id<worker_actor, &worker_actor::ping>) {
@@ -26,6 +30,9 @@ public:
     }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&worker_actor::ping>;
+
+private:
+    std::atomic<std::size_t> handled_{0};
 };
 
 class balancer_actor final : public actor_zeta::actor::actor_mixin<balancer_actor> {
@@ -67,14 +74,33 @@ TEST_CASE("shutdown - basic test") {
     std::vector<actor_zeta::unique_future<void>> futures;
     for (int i = 0; i < 3; ++i) {
         auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+        if (needs_sched) { scheduler->enqueue(actor.get()); }
         futures.push_back(std::move(future));
     }
 
     scheduler->start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Wait for progress, not a fixed nap: a dropped needs_sched must reach the
+    // assertion below instead of being hidden by the sleep.
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (actor->handled() < futures.size()
+               && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+    }
     scheduler->stop();
 
-    REQUIRE(true);
+    const std::size_t handled = actor->handled();
+    actor.reset();   // cancels whatever never ran
+
+    // Undisturbed shutdown: every message runs. handled + failed == size would
+    // also hold with nothing handled at all, so require the stronger form here.
+    std::size_t settled = 0;
+    for (auto& f : futures) {
+        if (f.is_ready()) { ++settled; }
+    }
+    REQUIRE(settled == futures.size());
+    REQUIRE(handled == futures.size());
 }
 
 TEST_CASE("shutdown - multiple actors") {
@@ -91,15 +117,35 @@ TEST_CASE("shutdown - multiple actors") {
     for (auto& actor : actors) {
         for (int i = 0; i < 2; ++i) {
             auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+            if (needs_sched) { scheduler->enqueue(actor.get()); }
             futures.push_back(std::move(future));
         }
     }
 
     scheduler->start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto total_handled = [&actors]() {
+        std::size_t n = 0;
+        for (auto& a : actors) { n += a->handled(); }
+        return n;
+    };
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (total_handled() < futures.size()
+               && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+    }
     scheduler->stop();
 
-    REQUIRE(true);
+    const std::size_t handled = total_handled();
+    actors.clear();   // cancels whatever never ran
+
+    std::size_t settled = 0;
+    for (auto& f : futures) {
+        if (f.is_ready()) { ++settled; }
+    }
+    REQUIRE(settled == futures.size());
+    REQUIRE(handled == futures.size());
 }
 
 TEST_CASE("shutdown - immediate stop") {
@@ -112,6 +158,7 @@ TEST_CASE("shutdown - immediate stop") {
     std::vector<actor_zeta::unique_future<void>> futures;
     for (int i = 0; i < 10; ++i) {
         auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+        if (needs_sched) { scheduler->enqueue(actor.get()); }
         futures.push_back(std::move(future));
     }
 
@@ -119,7 +166,18 @@ TEST_CASE("shutdown - immediate stop") {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     scheduler->stop();
 
-    REQUIRE(true);
+    const std::size_t handled = actor->handled();
+    actor.reset();   // cancels whatever never ran
+
+    // Nothing is lost: every message either ran or was cancelled at teardown.
+    std::size_t settled = 0;
+    std::size_t failed = 0;
+    for (auto& f : futures) {
+        if (f.is_ready()) { ++settled; }
+        if (f.failed()) { ++failed; }
+    }
+    REQUIRE(settled == futures.size());
+    REQUIRE(handled + failed == futures.size());
 }
 
 TEST_CASE("shutdown - concurrent enqueue during destruction") {
@@ -137,6 +195,7 @@ TEST_CASE("shutdown - concurrent enqueue during destruction") {
     std::thread t1([&, actor_ptr] {
         while (!stop.load(std::memory_order_relaxed)) {
             auto [needs_sched, future] = actor_zeta::send(actor_ptr, &worker_actor::ping);
+            if (needs_sched) { scheduler->enqueue(actor_ptr); }
             ++enqueue_count;
             std::this_thread::sleep_for(std::chrono::microseconds(1));
         }
@@ -153,7 +212,9 @@ TEST_CASE("shutdown - concurrent enqueue during destruction") {
     t1.join();
     t2.join();
 
-    REQUIRE(enqueue_count.load() > 0);
+    // The real check here is the sanitizer: this races send against teardown.
+    // The counter only proves the sender loop actually spun.
+    REQUIRE(enqueue_count.load() > 10);
 }
 
 TEST_CASE("shutdown - concurrent resume during destruction") {
@@ -166,15 +227,25 @@ TEST_CASE("shutdown - concurrent resume during destruction") {
     std::vector<actor_zeta::unique_future<void>> futures;
     for (int i = 0; i < 100; ++i) {
         auto [needs_sched, future] = actor_zeta::send(actor.get(), &worker_actor::ping);
+        if (needs_sched) { scheduler->enqueue(actor.get()); }
         futures.push_back(std::move(future));
     }
 
     scheduler->start();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     scheduler->stop();
+    const std::size_t handled = actor->handled();
     actor.reset();
 
-    REQUIRE(true);
+    // Nothing is lost: every message either ran or was cancelled at teardown.
+    std::size_t settled = 0;
+    std::size_t failed = 0;
+    for (auto& f : futures) {
+        if (f.is_ready()) { ++settled; }
+        if (f.failed()) { ++failed; }
+    }
+    REQUIRE(settled == futures.size());
+    REQUIRE(handled + failed == futures.size());
 }
 
 TEST_CASE("shutdown - three-way race: enqueue + resume + destroy") {
@@ -191,6 +262,7 @@ TEST_CASE("shutdown - three-way race: enqueue + resume + destroy") {
     std::thread t1([&, actor_ptr] {
         while (!stop.load(std::memory_order_relaxed)) {
             auto [needs_sched, future] = actor_zeta::send(actor_ptr, &worker_actor::ping);
+            if (needs_sched) { scheduler->enqueue(actor_ptr); }
             ++enqueue_count;
             std::this_thread::sleep_for(std::chrono::microseconds(10));
         }
@@ -209,5 +281,7 @@ TEST_CASE("shutdown - three-way race: enqueue + resume + destroy") {
     t1.join();
     t3.join();
 
-    REQUIRE(enqueue_count.load() > 0);
+    // The real check here is the sanitizer: this races send against teardown.
+    // The counter only proves the sender loop actually spun.
+    REQUIRE(enqueue_count.load() > 10);
 }

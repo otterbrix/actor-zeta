@@ -1,13 +1,5 @@
 #pragma once
 
-/// @file test_logger.hpp
-/// @brief Thread-safe logging utility for tests
-///
-/// Provides formatted logging with thread identification.
-/// Usage:
-///   g_log.log("Message");
-///   g_log.log("[%] value=%", "tag", 42);  // % is placeholder
-
 #include <mutex>
 #include <sstream>
 #include <iostream>
@@ -16,29 +8,23 @@
 
 namespace dispatcher_test {
 
-/// @brief Get current thread ID as string
 inline std::string thread_id_str() {
     std::ostringstream oss;
     oss << std::this_thread::get_id();
     return oss.str();
 }
 
-/// @brief Thread-safe logger with printf-style formatting using % placeholders
 class thread_logger {
 public:
-    /// @brief Enable or disable logging (disabled by default for performance)
     void set_enabled(bool enabled) { enabled_ = enabled; }
     bool enabled() const { return enabled_; }
 
-    /// @brief Log a simple message
     void log(const std::string& msg) {
         if (!enabled_) return;
         std::lock_guard<std::mutex> lock(mutex_);
         std::cerr << msg << std::endl;
     }
 
-    /// @brief Log with format string (% placeholders)
-    /// @example g_log.log("[%::method] thread=% value=%", name_, tid, val);
     template<typename... Args>
     void log(const char* fmt, Args&&... args) {
         if (!enabled_) return;
@@ -48,7 +34,7 @@ public:
     }
 
 private:
-    bool enabled_ = false;  // Disabled by default for ctest performance
+    bool enabled_ = false;
     void format_impl(std::ostringstream& oss, const char* fmt) {
         oss << fmt;
     }
@@ -68,7 +54,6 @@ private:
     std::mutex mutex_;
 };
 
-/// @brief Global logger instance
 inline thread_logger g_log;
 
 } // namespace dispatcher_test

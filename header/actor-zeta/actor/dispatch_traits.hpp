@@ -1,8 +1,11 @@
 #pragma once
 
+#include <memory>
+#include <cassert>
 #include <concepts>
 #include <cstdint>
 
+#include <actor-zeta/actor/address.hpp>
 #include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/callable_trait.hpp>
 #include <actor-zeta/detail/forwards.hpp>
@@ -10,8 +13,6 @@
 #include <actor-zeta/mailbox/id.hpp>
 
 namespace actor_zeta {
-
-    // Method map entry
 
     template<auto MethodPtr>
     struct method_map_entry {};
@@ -67,8 +68,7 @@ namespace actor_zeta {
             using result_type = typename trait::result_type;
 
             static constexpr bool returns_unique_future = type_traits::is_unique_future_v<result_type>;
-            static constexpr bool returns_generator = type_traits::is_generator_v<result_type>;
-            static constexpr bool is_valid = returns_unique_future || returns_generator;
+            static constexpr bool is_valid = returns_unique_future;
         };
 
         template<auto MethodPtr>
@@ -77,18 +77,13 @@ namespace actor_zeta {
             using result_type = typename trait::result_type;
             using args_types = typename trait::args_types;
 
-            static constexpr bool is_coroutine =
-                type_traits::is_unique_future_v<result_type> ||
-                type_traits::is_generator_v<result_type>;
+            static constexpr bool is_coroutine = type_traits::is_unique_future_v<result_type>;
             static constexpr bool has_const_ref = type_list_has_const_lvalue_ref<args_types>;
             static constexpr bool has_rvalue_ref_move_only = type_list_has_rvalue_ref_move_only<args_types>;
 
-            // Safe if: not a coroutine, or (no const& and no T&& to move-only)
             static constexpr bool no_const_ref = !is_coroutine || !has_const_ref;
             static constexpr bool no_rvalue_move_only = !is_coroutine || !has_rvalue_ref_move_only;
         };
-
-        // Actor/Interface detection concepts
 
         template<typename T>
         concept has_dispatch_traits = requires {
@@ -96,26 +91,21 @@ namespace actor_zeta {
             typename T::dispatch_traits::methods;
         };
 
-        /// Detects cooperative_actor via marker type (mailbox() is protected)
+        /// Detects cooperative_actor via its marker type (mailbox() is private)
         template<typename T>
         concept is_cooperative_actor = requires {
             typename T::is_cooperative_actor_type;
         };
 
-        /// Actor: has dispatch_traits and is cooperative_actor (concrete implementation)
         template<typename T>
         concept is_actor = has_dispatch_traits<T> && is_cooperative_actor<T>;
 
-        /// Interface: has dispatch_traits but is NOT an actor (pure contract)
         template<typename T>
         concept is_interface = has_dispatch_traits<T> && !is_cooperative_actor<T>;
 
     } // namespace detail
 
-    // dispatch_traits implementation
-
     namespace detail {
-        // Helper to extract methods from variadic pack
         template<auto... MethodPtrs>
         struct dispatch_traits_parser {
             using methods = type_traits::type_list<method_map_entry<MethodPtrs>...>;
@@ -151,9 +141,9 @@ namespace actor_zeta {
 
         static_assert(
             parser::all_valid,
-            "All actor methods must return unique_future<T> or generator<T>. "
+            "All actor methods must return unique_future<T>. "
             "Raw void or value returns are not allowed. "
-            "All actor methods must be coroutines using co_return or co_yield.");
+            "All actor methods must be coroutines using co_return.");
 
         static_assert(
             parser::all_no_const_ref,
@@ -167,7 +157,6 @@ namespace actor_zeta {
             "Use by-value instead: T (not T&&). See docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md");
     };
 
-    // Empty dispatch_traits (no methods)
     template<>
     struct dispatch_traits<> {
         using methods = type_traits::type_list<>;
@@ -185,25 +174,13 @@ namespace actor_zeta {
             using type = typename Actor::template unique_future<unwrap_future_t<ResultType>>;
         };
 
-        template<typename Actor, typename T>
-        struct dispatch_result_type<Actor, generator<T>> {
-            using type = generator<T>;
-        };
-
         template<typename Actor, typename ResultType>
         using dispatch_result_t = typename dispatch_result_type<Actor, ResultType>::type;
 
-        // send_result_t - wraps unique_future in pair<bool, future> for needs_scheduling
         template<typename Actor, typename ResultType>
         struct send_result_type {
             using future_type = dispatch_result_t<Actor, ResultType>;
             using type = std::pair<bool, future_type>;
-        };
-
-        // Generators also return pair<bool, generator<T>> for consistency
-        template<typename Actor, typename T>
-        struct send_result_type<Actor, generator<T>> {
-            using type = std::pair<bool, generator<T>>;
         };
 
         template<typename Actor, typename ResultType>
@@ -224,6 +201,16 @@ namespace actor_zeta {
 
         template<auto SearchPtr, auto... MethodPtrs>
         static constexpr uint64_t find_method_index() {
+            // Decidable at compile time, and falling back to index 0 is not a
+            // recoverable default: msg_id<Actor, M> would silently collapse onto the
+            // FIRST registered method and the compiler would point at a duplicate case
+            // label in behavior() instead of at the missing registration.
+            static_assert(sizeof...(MethodPtrs) > 0,
+                          "dispatch_traits for this actor registers no methods");
+            static_assert((is_same_ptr_v<SearchPtr, MethodPtrs> || ...),
+                          "this method is not registered in the actor's dispatch_traits -- "
+                          "add it to `using dispatch_traits = actor_zeta::dispatch_traits<...>`");
+
             constexpr bool matches[] = {is_same_ptr_v<SearchPtr, MethodPtrs>...};
 
             for (std::size_t i = 0; i < sizeof...(MethodPtrs); ++i) {
@@ -234,12 +221,7 @@ namespace actor_zeta {
             return 0;
         }
 
-        // =======================================================================
-        // Compile-time method validation helpers
-        // =======================================================================
-
-        /// Check if method signature (type) exists in method list
-        /// This catches errors when method with wrong signature is passed to send()
+        /// Catches a method with the wrong signature passed to send().
         template<typename Method, typename MethodList>
         struct method_signature_exists;
 
@@ -258,7 +240,6 @@ namespace actor_zeta {
         template<typename Method, typename MethodList>
         inline constexpr bool method_signature_exists_v = method_signature_exists<Method, MethodList>::value;
 
-        /// Check that method belongs to the expected class
         template<typename Method, typename ExpectedClass>
         struct method_belongs_to_class {
             using actual_class = typename type_traits::callable_trait<Method>::class_type;
@@ -269,7 +250,6 @@ namespace actor_zeta {
         template<typename Method, typename ExpectedClass>
         inline constexpr bool method_belongs_to_class_v = method_belongs_to_class<Method, ExpectedClass>::value;
 
-        /// Combined validation for send()
         template<typename Actor, typename Method>
         struct validate_method_for_send {
             using methods = typename Actor::dispatch_traits::methods;

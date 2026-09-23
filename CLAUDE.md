@@ -1,26 +1,30 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working with this repository.
+Guidance for Claude Code when working with this repository. The code is the source of
+truth; when this file and a header disagree, the header wins and this file gets fixed.
 
 ## Core Rules
 
-1. **READ FULL FILES** before making changes - this codebase has intricate template metaprogramming
-2. **NO RTTI, NO EXCEPTIONS** - code MUST compile with `-fno-rtti -fno-exceptions`
-3. **USE PMR** - never use `new`/`delete` directly, always `spawn<Actor>(memory_resource, args...)`
-4. **BUILD AND TEST** after every change
+1. **READ FULL FILES** before making changes. The template metaprogramming is intricate.
+2. **NO RTTI.** Code must compile with `-fno-rtti`. **Exceptions are optional**: the
+   default is `-fno-exceptions` and the library must build and pass there;
+   `EXCEPTIONS_DISABLE=OFF` is a supported mode with its own CI job. Library code never
+   `throw`s; user code may, and the library carries it to the caller.
+3. **USE PMR.** Never `new`/`delete` an actor: `spawn<Actor>(memory_resource, args...)`.
+4. **BUILD AND TEST** after every change.
 
 ## Project Overview
 
-actor-zeta is a C++20 **header-only** actor model with cooperative scheduling, PMR memory management, and no RTTI/exceptions dependencies.
+C++20 actor model with cooperative scheduling and `std::pmr` memory management. All
+code is under `header/`; `source/src.cpp` compiles the `.ipp` implementations into the
+`actor-zeta` target (or include `<actor-zeta/src.hpp>` in one translation unit).
 
 ## Quick Start
 
 ```bash
-# Setup
 conan profile detect --force
 conan install . -of build -s build_type=Debug --build=missing
 
-# Build
 cmake -B build -GNinja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DALLOW_EXAMPLES=ON \
@@ -29,169 +33,196 @@ cmake -B build -GNinja \
   -DEXCEPTIONS_DISABLE=ON \
   -DCMAKE_TOOLCHAIN_FILE=./build/Debug/generators/conan_toolchain.cmake
 cmake --build build
-
-# Test
 cd build && ctest --output-on-failure
 ```
 
-**CLion:** Uses `cmake-build-debug/`. Set toolchain: `-DCMAKE_TOOLCHAIN_FILE=cmake-build-debug/conan/Debug/generators/conan_toolchain.cmake`
+**CLion:** builds in `cmake-build-debug/`; pass the same `-DCMAKE_TOOLCHAIN_FILE` in
+the CMake profile options. Options: `ALLOW_EXAMPLES`, `ALLOW_TESTS` (Catch2),
+`ALLOW_BENCHMARK` (all OFF), `RTTI_DISABLE`, `EXCEPTIONS_DISABLE` (both ON).
 
 ## File Structure
 
 ```
 header/
-├── actor-zeta.hpp              # Main API
+├── actor-zeta.hpp              # Umbrella header
 ├── actor-zeta/
-│   ├── core.hpp                # Core types
-│   ├── spawn.hpp               # Actor allocation
-│   ├── send.hpp                # Message sending
-│   ├── actor/                  # Actor implementation
-│   │   ├── basic_actor.hpp     # Basic actor alias
-│   │   ├── dispatch.hpp        # Message dispatch
-│   │   └── dispatch_traits.hpp # Dispatch traits
-│   ├── mailbox/                # Message system
-│   └── detail/                 # Internal (future.hpp, generator.hpp, rtt.hpp)
-test/                           # Catch2 tests
-examples/                       # Usage examples
+│   ├── spawn.hpp               # spawn<Actor>(resource, args...)
+│   ├── send.hpp                # send(actor, &Actor::method, args...)
+│   ├── src.hpp                 # Pulls in every .ipp (one TU)
+│   ├── actor/                  # basic_actor alias, cooperative_actor, dispatch, dispatch_traits, address_t
+│   ├── mailbox/                # message, make_message, default_mailbox
+│   ├── scheduler/              # scheduler_t, sharing_scheduler, worker, job_ptr, resume_result
+│   ├── detail/                 # future.hpp, shared_state.hpp, behavior_t.hpp, rtt.hpp, ...
+│   └── impl/                   # .ipp implementations
+test/                           # Catch2 tests; test/tooltestsuites has scheduler_test_t
+examples/
 ```
 
 ## Architecture
 
 ### Actor Lifecycle
-1. Define actor class inheriting from `basic_actor<Actor>`
-2. Define `dispatch_traits<&Actor::method1, &Actor::method2>`
-3. Implement `behavior_t behavior(message*)` - coroutine with `co_await dispatch(...)`
-4. Spawn: `auto actor = spawn<MyActor>(memory_resource, args...)`
-5. Send: `auto [needs_sched, future] = send(actor.get(), &MyActor::method, args...)`
-6. Schedule: `if (needs_sched) scheduler->enqueue(actor.get())`
+1. Inherit from `basic_actor<Actor>`
+2. Declare `using dispatch_traits = actor_zeta::dispatch_traits<&Actor::m1, &Actor::m2>`
+3. Implement `behavior_t behavior(mailbox::message*)`: a coroutine that `co_await dispatch(...)`
+4. `auto actor = spawn<MyActor>(memory_resource, args...)`
+5. `auto [needs_sched, future] = send(actor.get(), &MyActor::method, args...)`
+6. `if (needs_sched) scheduler->enqueue(actor.get())`
+
+### Who May Schedule (CRITICAL)
+
+**`address_t` is for sending, nothing else. Only the owner launches actors.**
+
+An `address_t` carries `enqueue_impl` and no resume entry point, by design: a peer
+needs to post a message, not to run the recipient. Scheduling belongs to whoever
+owns the actors -- the supervisor that spawned them, or the code that drives them
+in a test. A `cooperative_actor` never holds a scheduler.
+
+So an actor that sends to a peer cannot discharge the `needs_sched` it gets back.
+It must not drop it either: a dropped obligation leaves the target with the
+`scheduled` bit set and no job anywhere, and every later `send()` to it then
+reports `needs_sched == false` -- the actor is unreachable for good, with no
+assert and no diagnostic. Record it and let the owner claim it:
+
+```cpp
+// In the actor: an address, so record.
+auto [needs_sched, f] = send(peer_address_, &Peer::method, x);
+if (needs_sched) { peer_owed_.fetch_add(1, std::memory_order_release); }
+int v = co_await std::move(f);
+
+std::size_t take_peer_obligations() {
+    return peer_owed_.exchange(0, std::memory_order_acq_rel);
+}
+
+// In the owner: claim and schedule.
+if (actor->take_peer_obligations() > 0) { scheduler->enqueue(peer); }
+```
+
+A supervisor (`actor_mixin`) that spawned its children does hold the scheduler and
+discharges directly -- see `examples/supervisor/`, `examples/balancer/`,
+`examples/delegation/`.
 
 ### Actor Shutdown (CRITICAL)
 
-**`scheduler->stop()` MUST be called BEFORE destroying actors.**
+The scheduler holds raw `job_ptr`s to actors and has no destructor: `scheduler_t`
+does not stop its workers when destroyed, and destroying a started scheduler runs
+`~std::thread` on joinable threads, which is `std::terminate()`. Two rules follow:
 
-The scheduler holds raw pointers (`job_ptr`) to actors. If an actor is destroyed while the scheduler is running, worker threads may call `resume()` on freed memory (use-after-free).
+- **`scheduler->stop()` must be called explicitly**, exactly once, before the scheduler is destroyed.
+- **`stop()` must run before any actor the scheduler may still hold is destroyed**, or a worker calls `resume()` on freed memory.
 
 #### Safe Pattern 1: Stop Scheduler First (Recommended)
 
 ```cpp
-void safe_shutdown() {
-    auto scheduler = std::make_unique<sharing_scheduler>(4, 1000);
-    scheduler->start();
-
-    auto actor = spawn<MyActor>(resource);
-
-    // Send messages (fire-and-forget is OK)
-    for (int i = 0; i < 100; ++i) {
-        auto [needs_sched, future] = send(actor.get(), &MyActor::process, i);
-        if (needs_sched) scheduler->enqueue(actor.get());
-        future.detach();  // Fire-and-forget
-    }
-
-    scheduler->stop();  // All workers exit, no more resume() calls
-}  // Actor destroyed here - SAFE
+auto scheduler = std::make_unique<sharing_scheduler>(4, 1000);
+scheduler->start();
+auto actor = spawn<MyActor>(resource);
+for (int i = 0; i < 100; ++i) {
+    auto [needs_sched, future] = send(actor.get(), &MyActor::process, i);
+    if (needs_sched) scheduler->enqueue(actor.get());
+    future.detach();
+}
+scheduler->stop();   // every worker joined; nothing can resume the actor now
+// actor destroyed after this: safe
 ```
 
 #### Safe Pattern 2: Wait for All Work
 
 ```cpp
-void wait_for_work() {
-    auto scheduler = std::make_unique<sharing_scheduler>(4, 1000);
-    scheduler->start();
-
-    std::vector<unique_future<int>> futures;
-
-    {
-        auto actor = spawn<MyActor>(resource);
-
-        for (int i = 0; i < 10; ++i) {
-            auto [needs_sched, future] = send(actor.get(), &MyActor::compute, i);
-            if (needs_sched) scheduler->enqueue(actor.get());
-            futures.push_back(std::move(future));  // Keep ALL futures
-        }
-
-        // Wait for ALL futures (scheduler workers produce; drive via run_until_complete).
-        for (auto& f : futures) {
-            auto result = actor_zeta::run_until_complete(f, []{ std::this_thread::yield(); });
-        }
-    }  // Actor destroyed - SAFE (all work complete)
-
-    scheduler->stop();
-}
+std::vector<unique_future<int>> futures;
+{
+    auto actor = spawn<MyActor>(resource);
+    for (int i = 0; i < 10; ++i) {
+        auto [needs_sched, future] = send(actor.get(), &MyActor::compute, i);
+        if (needs_sched) scheduler->enqueue(actor.get());
+        futures.push_back(std::move(future));   // keep every future
+    }
+    for (auto& f : futures) {
+        while (!f.is_ready()) { std::this_thread::yield(); }
+        if (f.failed()) { continue; }           // is_ready() is not a value gate
+        auto result = std::move(f).take_ready();
+    }
+}  // actor destroyed: safe, all work complete
+scheduler->stop();
 ```
 
 #### Safe Pattern 3: Actor Outlives Scheduler (RAII)
 
 ```cpp
 class Application {
-    std::unique_ptr<MyActor, pmr::deleter_t> actor_;    // Declared FIRST
-    std::unique_ptr<sharing_scheduler> scheduler_;       // Declared SECOND
-
+    std::unique_ptr<MyActor, pmr::deleter_t> actor_;   // declared first
+    std::unique_ptr<sharing_scheduler> scheduler_;      // declared second
 public:
-    Application(std::pmr::memory_resource* res)
+    explicit Application(std::pmr::memory_resource* res)
         : actor_(spawn<MyActor>(res))
-        , scheduler_(std::make_unique<sharing_scheduler>(4, 1000)) {
-        scheduler_->start();
-    }
-
+        , scheduler_(std::make_unique<sharing_scheduler>(4, 1000)) { scheduler_->start(); }
     ~Application() {
-        // C++ destroys in REVERSE order:
-        // 1. ~scheduler_ → stop() called, workers exit
-        // 2. ~actor_ → SAFE
+        scheduler_->stop();   // not automatic; members then destroy in reverse: ~scheduler_, ~actor_
     }
 };
 ```
 
-#### Unsafe Patterns (DO NOT USE)
+The declaration order puts `~scheduler_` before `~actor_`; the `stop()` call is what
+makes the pattern safe.
+
+#### Unsafe Pattern (DO NOT USE)
 
 ```cpp
-// WRONG: Actor destroyed while scheduler running
+// WRONG: the actor dies while a worker may still hold its job_ptr. ~cooperative_actor
+// waits for the current resume() to return, then frees; the worker's next resume() is
+// a use-after-free. Keeping the future does not help: it settles as failed()
+// (broken_pipe) if the frame was torn down, but the scheduler still holds the actor.
 {
     auto actor = spawn<MyActor>(resource);
-    auto [needs_sched, fut] = send(actor.get(), &MyActor::process, data);
+    auto [needs_sched, f] = send(actor.get(), &MyActor::process, data);
     if (needs_sched) scheduler->enqueue(actor.get());
-}  // CRASH: workers may call resume() on freed memory
-scheduler->stop();
-
-// WRONG: Destroy actor with pending futures
-unique_future<int> future;
-{
-    auto actor = spawn<MyActor>(resource);
-    auto [_, f] = send(actor.get(), &MyActor::slow_compute, 42);
     future = std::move(f);
-}  // CRASH: Actor freed while slow_compute running
-auto result = std::move(future).take_ready();  // Use-after-free
+}
+scheduler->stop();   // too late
 ```
 
 | Scenario | Safe? |
 |----------|-------|
 | `stop()` then destroy actor | Yes |
 | Wait all futures, then destroy | Yes |
-| Actor declared before scheduler (RAII) | Yes |
+| Actor declared before scheduler (RAII), `stop()` called in the destructor | Yes |
+| Destroy a started scheduler without `stop()` | **NO**: `std::terminate()` |
 | Destroy actor while scheduler running | **NO** |
 | Destroy actor with pending futures | **NO** |
 
 ### Memory Management
-- Uses `std::pmr::memory_resource`
-- **spawn()** returns `unique_ptr<Actor, pmr::deleter_t>`
-- Messages created in **receiver's** memory resource
+- `spawn()` returns `std::unique_ptr<Actor, pmr::deleter_t>`
+- Messages and their `shared_state` are allocated from the **receiver's** memory resource
+- Coroutine frames come from the actor's resource: a `unique_future<T>` coroutine must
+  be an inline actor member function or take a `std::pmr::memory_resource*`
 
 ### Type System (no RTTI)
-- `rtt.hpp` - custom runtime type info
-- `intrusive_ptr<T>` - reference counting (not `shared_ptr`)
+- `detail/rtt.hpp`: runtime-typed message bodies
+- Actors are owned by the `unique_ptr` from `spawn()` and referred to by `address_t`
+  (`actor->address()`); `detail/intrusive_ptr.hpp` exists but is not used for actors
 
 ## Code Conventions
 
 ### RTTI and Exceptions
-```cpp
-// NEVER:
-throw std::runtime_error("error");  // NO EXCEPTIONS
-typeid(MyClass).name();             // NO RTTI
-dynamic_cast<Derived*>(ptr);        // NO RTTI
 
-// INSTEAD:
-assert(condition && "error message");
-// Use custom RTT system from rtt.hpp
+```cpp
+// NEVER, in library code:
+typeid(MyClass).name();             // no RTTI
+dynamic_cast<Derived*>(ptr);        // no RTTI
+throw std::runtime_error("error");  // the library never throws
+// INSTEAD: assert() for impossible states, error codes for contracts, rtt.hpp for runtime types
 ```
+
+User code may throw, only with `EXCEPTIONS_DISABLE=OFF`. With `-fno-exceptions` the
+compiler emits no catch wrapper for a coroutine body and none of this exists.
+
+| Thrown from | Reaches |
+|-------------|---------|
+| an actor method, called directly | its own future; `take_ready()` rethrows it |
+| an actor method, `co_await`ed by another method | outward along the chain |
+| an actor method, reached via `send()`/`dispatch()` | the caller's future, with the original exception; a poller sees `failed()` and `std::errc::interrupted` |
+| `behavior()` itself, past `dispatch()` | nowhere: `behavior_t` is the root of the chain. Reported on stderr and discarded; the actor takes the next message |
+
+Put work that can throw in a dispatched method, not in `behavior()`.
 
 ### Actor Definition Pattern
 ```cpp
@@ -200,13 +231,9 @@ public:
     unique_future<int> compute(int x) { co_return x * 2; }
     unique_future<void> notify(std::string msg) { co_return; }
 
-    using dispatch_traits = actor_zeta::dispatch_traits<
-        &MyActor::compute,
-        &MyActor::notify
-    >;
+    using dispatch_traits = actor_zeta::dispatch_traits<&MyActor::compute, &MyActor::notify>;
 
-    explicit MyActor(std::pmr::memory_resource* ptr)
-        : basic_actor<MyActor>(ptr) {}
+    explicit MyActor(std::pmr::memory_resource* ptr) : basic_actor<MyActor>(ptr) {}
 
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         auto cmd = msg->command();
@@ -221,187 +248,85 @@ public:
 
 ### Message Sending
 ```cpp
-// send() returns std::pair<bool, unique_future<T>>
-// - first (needs_sched): true if actor needs to be scheduled
-// - second: the future to get the result
+// send() returns std::pair<bool, unique_future<T>>: {needs_sched, future}
 
-// Request-response (scheduler-driven cross-thread: drive with run_until_complete)
+// Cross-thread, scheduler-driven: poll from this thread
 auto [needs_sched, future] = send(target.get(), &Target::compute, arg);
 if (needs_sched) scheduler->enqueue(target.get());
-int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
+while (!future.is_ready()) { std::this_thread::yield(); }
+int result = future.failed() ? -1 : std::move(future).take_ready();
 
-// Same-thread (no scheduler): pump the actor manually
+// Same thread, no scheduler: pump the actor. `resume` means "run me again";
+// bound the loop, since an actor awaiting a producer nobody drives says it forever.
 auto [_, f] = send(actor.get(), &Actor::compute, 42);
-int result = actor_zeta::run_until_complete(f, [&]{ actor->resume(1); });
+for (int i = 0; i < 100 && !f.is_ready(); ++i) {
+    if (actor->resume(1).result != scheduler::resume_result::resume) break;
+}
+int r = f.failed() ? -1 : std::move(f).take_ready();
+
+// Inside an actor coroutine: it holds an address, not a scheduler, so it records
+// the obligation and its owner claims it (see "Who May Schedule").
+auto [needs_sched, f2] = send(other_address_, &Other::process, x);
+if (needs_sched) { other_owed_.fetch_add(1, std::memory_order_release); }
+int v = co_await std::move(f2);
 
 // Fire-and-forget
 auto [_, fut] = send(target.get(), &Target::method, arg1, arg2);
 fut.detach();
 ```
 
-**Never call** `.get()` or `.available()` — they were removed. `unique_future<T>` has
-only `take_ready()` (non-blocking, asserts the future is ready) and `is_ready()` (poll).
-Bring the future to ready via `co_await` (inside a coroutine), `run_until_complete(f, pump)`,
-or — for cross-thread tests where the producer is test-controlled — a tiny
-`std::atomic<bool> done` + `notify_all`/`wait(false)` pair.
+In tests, `actor_zeta::test::scheduler_test_t` (`test/tooltestsuites/`) pumps for
+you: `enqueue()` the actor, then `stop()` drains until a full sweep makes no progress.
 
 ### Coroutine Parameters
 ```cpp
-// For move-only types, use by-value (NOT T&&)
-unique_future<void> process(std::unique_ptr<Data> data) { ... }  // OK
-unique_future<void> process(std::unique_ptr<Data>&& data) { ... } // COMPILE ERROR
-// See docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
+unique_future<void> process(std::unique_ptr<Data> data);    // OK: by value
+unique_future<void> process(std::unique_ptr<Data>&& data);  // compile error, see docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
 ```
-
-## CMake Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `ALLOW_EXAMPLES` | OFF | Build examples |
-| `ALLOW_TESTS` | OFF | Build tests (Catch2) |
-| `RTTI_DISABLE` | ON | `-fno-rtti` |
-| `EXCEPTIONS_DISABLE` | ON | `-fno-exceptions` |
 
 ## Common Mistakes
 
 | Mistake | Correct |
 |---------|---------|
 | `new MyActor(...)` | `spawn<MyActor>(resource, ...)` |
-| `std::shared_ptr<Actor>` | `intrusive_ptr<Actor>` |
-| `throw`/`try`/`catch` | `assert()` or error codes |
-| `typeid`/`dynamic_cast` | Custom RTT system |
-| `T&&` for move-only in coroutines | `T` by-value |
-| `const T&` in coroutines | `T` by-value (dangling after co_await) |
+| `std::shared_ptr<Actor>` | the `unique_ptr` from `spawn()`; pass `address_t` around |
+| `throw` in library code | `assert()` for impossible states, error codes for contracts |
+| `typeid` / `dynamic_cast` | `rtt.hpp` |
+| `T&&` for a move-only type in a coroutine | `T` by value |
+| `const T&` in a coroutine | `T` by value (dangles after `co_await`) |
+| `co_await send(...)` | `static_assert`; split: pair, `enqueue`, `co_await std::move(f)` |
+| `.get()` / `.wait()` / `.available()` | do not exist; `co_await`, pump, or poll, then `take_ready()` |
+| `take_ready()` after `is_ready()` alone | check `failed()` first; a valueless extraction aborts in every build |
+| ignoring `resume()`'s verdict | `[[nodiscard]]`; requeue on `resume`, drop on `awaiting`, no `(void)` cast |
+| an actor holding a `scheduler*` | only a supervisor owns one; others record the obligation |
+| dropping `needs_sched` | strands the target for good; record it for the owner |
 
-## Promise/Future System
+## Recent Changes
 
-Async request-response via `unique_future<T>`:
+`CHANGELOG.md` has the detail and the migration guides.
 
-```cpp
-// Handler as coroutine
-unique_future<int> compute(int x) { co_return x * x; }
-
-// Caller - send() returns pair<bool, future>
-auto [needs_sched, future] = send(actor.get(), &Actor::compute, 42);
-if (needs_sched) scheduler->enqueue(actor.get());
-int result = actor_zeta::run_until_complete(future, []{ std::this_thread::yield(); });
-
-// Coroutine chaining
-unique_future<int> chain(int x) {
-    auto [needs_sched, f] = send(other.get(), &Other::process, x);
-    if (needs_sched) scheduler->enqueue(other.get());
-    int r = co_await std::move(f);
-    co_return r + 10;
-}
-```
-
-**See [`PROMISE_FUTURE_GUIDE.md`](PROMISE_FUTURE_GUIDE.md) for detailed patterns.**
-
-## Generator System
-
-Streaming data via `generator<T>` with `co_yield`:
-
-```cpp
-generator<int> stream_range(int start, int end) {
-    for (int i = start; i < end; ++i) {
-        co_yield i;
-    }
-}
-
-// Consumer (in coroutine)
-while (co_await gen) {
-    auto& value = gen.current();
-    process(value);
-}
-```
-
-**See [`GENERATOR_GUIDE.md`](GENERATOR_GUIDE.md) for detailed patterns.**
-
-## Recent Changes (2026)
-
-- **Blocking future API removed**: no more `.get()`/`.wait()`/`.available()`. Use
-  `co_await` (in coroutines), `run_until_complete(f, pump)` (top-level driver), or
-  poll `is_ready()` + `take_ready()` (cross-thread tests). Removed exponential-backoff
-  spinning that lived inside the old `get()`.
-- **Legacy `future_state<T>` family removed**: deleted `detail/future_state.hpp`,
-  `impl/detail/future_state.ipp`, `future_state_base`, `future_state_enum`,
-  `future_states::`, and the intrusive_ptr overloads for the base. `generator_state`
-  no longer inherits from `future_state_base` — it owns its own refcount/state-byte/
-  coroutine-handle fields directly. `result_storage<T>` moved to its own
-  `detail/result_storage.hpp` (used by `shared_state`).
-- **`actor_mixin` has no default `enqueue_impl`**: each Derived must define its own
-  (enforced by the `has_enqueue_impl` concept). `cooperative_actor` (and thus
-  `basic_actor`) is unaffected — it always provided its own. Sync actors on
-  `actor_mixin` must add:
-  ```cpp
-  [[nodiscard]] std::pair<bool, detail::enqueue_result>
-  enqueue_impl(mailbox::message_ptr msg) {
-      behavior(msg.get());
-      return {false, detail::enqueue_result::success};
-  }
-  ```
-- **`message::set_command(message_id)`** added: enables non-blocking
-  router/delegation patterns. See `examples/delegation/main.cpp`. The router restamps
-  the command on the same message and forwards it to the worker's `enqueue_impl`;
-  the caller's future is filled by the worker through the message's type-erased
-  `result_slot_` (so the router never co_awaits / never blocks).
-
-## Earlier Changes (2025-01)
-
-- **`send()` API simplified**: No sender address, returns `std::pair<bool, future>`
-- **`make_message()` simplified**: No sender address parameter
-- **`behavior()` is now a coroutine**: Returns `behavior_t`, use `co_await dispatch(...)`
-- **`enqueue_impl()` return type**: Now `std::pair<bool, enqueue_result>`
-- Messages created in receiver's memory resource
-- Unified actor state management (single atomic)
-- Compile-time check for `T&&` to move-only types in coroutines
-
-**See [`CHANGELOG.md`](CHANGELOG.md) for full history.**
+- `co_await send(...)` is a compile error; extracting from a valueless future aborts in every build.
+- A contended `resume()` returns `awaiting`; `done` means finished. `resume()` is `[[nodiscard]]` and a suspended behavior is no longer parked, so the verdict is the only signal.
+- A user exception reaches the caller's future (`EXCEPTIONS_DISABLE=OFF`) instead of killing the process.
+- Gone: `generator<T>` and streaming (batch with `unique_future<std::vector<T>>`), `.get()`/`.wait()`/`.available()`/`.cancel()`, the `future_state<T>` family, `actor_mixin`'s default `enqueue_impl`.
+- Added: `message::set_command()` for non-blocking routers (`examples/delegation/`), `promise<T>::exception()`.
+- Earlier (2025-01): `send()`/`make_message()` lost the sender address, `behavior()` became a coroutine, `enqueue_impl()` returns `pair<bool, enqueue_result>`, messages allocate in the receiver's resource, one atomic word for actor state.
 
 ## Debugging
 
-### AddressSanitizer
-
-Detect use-after-free and other memory issues:
-
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
-cmake --build build
-cd build && ctest --output-on-failure
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer"  # ASan
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread"                          # TSan
+cmake --build build && cd build && ctest --output-on-failure
 ```
 
-### ThreadSanitizer
-
-Detect data races:
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_CXX_FLAGS="-fsanitize=thread"
-cmake --build build
-cd build && ctest --output-on-failure
-```
-
-### Typical ASan Error (Actor Lifetime Bug)
-
-```
-==PID==ERROR: AddressSanitizer: heap-use-after-free on address 0xXXXX
-READ of size 1 at 0xXXXX thread TNN
-    #0 ... in std::atomic<actor_state>::load()
-    #1 ... in cooperative_actor::resume()
-    #2 ... in resume_impl<MyActor>()
-
-freed by thread T0 here:
-    #0 ... in ~cooperative_actor()
-```
-
-**Solution:** Call `scheduler->stop()` BEFORE destroying actors.
+A typical actor-lifetime ASan report reads `heap-use-after-free` in
+`std::atomic<actor_state>::load()` under `cooperative_actor::resume()` /
+`resume_impl<MyActor>()`, freed by `~cooperative_actor()`. Fix: `scheduler->stop()`
+before the actor is destroyed.
 
 ## Additional Resources
 
-- **[CHANGELOG.md](CHANGELOG.md)** - Change history
-- **[PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)** - Promise/Future guide
-- **[GENERATOR_GUIDE.md](GENERATOR_GUIDE.md)** - Generator guide
-- **[docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md](docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md)** - GCC 11.4 bug workaround
-- **Examples:** `examples/` directory
-- **Tests:** `test/` directory
+- [CHANGELOG.md](CHANGELOG.md), [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)
+- [docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md](docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md)
+- `examples/`, `test/`

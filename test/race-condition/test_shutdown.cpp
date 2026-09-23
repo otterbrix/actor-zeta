@@ -8,23 +8,16 @@
 #include <thread>
 #include <vector>
 
-// Simple test actor for shutdown testing
 class shutdown_test_actor final : public actor_zeta::basic_actor<shutdown_test_actor> {
 public:
     explicit shutdown_test_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<shutdown_test_actor>(resource) {
     }
 
-    // NOTE: No explicit destructor needed!
-    // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
-    // This prevents race condition between:
-    // - Main thread destroying dispatch() members
-    // - Worker thread calling behavior() which uses dispatch()
-    // Default destructor = shutdown_guard_t protection + clean dispatch() destruction
     ~shutdown_test_actor() = default;
 
     actor_zeta::unique_future<int> slow_task(int value) {
-        // Simulate slow processing
+        // slow enough that stop() lands mid-backlog
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         co_return value * 2;
     }
@@ -41,41 +34,16 @@ public:
     >;
 };
 
-// =============================================================================
-// Phase 1: Critical Tests - Actor Shutdown
-// =============================================================================
-
 TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures (safe pattern)") {
-    // TEST OBJECTIVE:
-    // Verify that actor can be safely destroyed while futures are still alive,
-    // using the correct shutdown order: scheduler->stop() BEFORE actor destruction.
-    //
-    // SCENARIO:
-    // 1. Create actor and send messages
-    // 2. Keep futures alive (don't call get())
-    // 3. Stop scheduler FIRST (guarantees no more resume() calls)
-    // 4. Destroy actor
-    //
-    // EXPECTED BEHAVIOR:
-    // - Futures may be orphaned (error state) or completed
-    // - No crashes, no memory leaks
-    // - No use-after-free
-    //
-    // VERIFICATION:
-    // - ASan will detect memory leaks
-    // - Test completes without crashes = SUCCESS
-
     auto* resource = std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
 
-    // Store futures that outlive the actor
     std::vector<actor_zeta::unique_future<int>> futures;
 
-    // Actor created outside scope so we control destruction order
+    // Function scope: the actor must outlive scheduler->stop() below.
     auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
 
-    // Send multiple messages and store futures
     constexpr int NUM_MESSAGES = 10;
     for (int i = 0; i < NUM_MESSAGES; ++i) {
         auto [needs_sched, future] = actor_zeta::send(actor.get(),
@@ -88,56 +56,29 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures (safe pattern
         futures.push_back(std::move(future));
     }
 
-    // Give some time for messages to be enqueued
+    // let part of the backlog get processed before stopping
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-    // CORRECT ORDER: Stop scheduler FIRST
-    // This guarantees no worker threads will call resume() on the actor
+    // stop() joins the workers; only after that may the actor die.
     scheduler->stop();
 
-    // Now safe to check futures (actor still alive, scheduler stopped)
     int successful = 0;
     for (auto& future : futures) {
         if (future.is_ready()) {
-            // Some messages may have been processed before scheduler stop
-            // Check for error state before taking the value
             if (!future.failed()) {
                 auto result = std::move(future).take_ready();
                 actor_zeta::detail::ignore_unused(result);
                 ++successful;
             }
-            // If failed(), the message was cancelled during shutdown - expected
         }
     }
 
-    // Actor destroyed here - SAFE because scheduler already stopped
-    // (actor destructor runs when unique_ptr goes out of scope at function end)
-
-    // Verification: Test completes without crashes
-    // Number of successful futures may vary (0 to NUM_MESSAGES)
-    REQUIRE(successful >= 0);  // Just verify we didn't crash
-
-    // If we reach here without ASan errors, test passed!
+    // Vacuous on purpose: anywhere from 0 to NUM_MESSAGES may complete before stop();
+    // the real check is a clean sanitizer run.
+    REQUIRE(successful >= 0);
 }
 
 TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
-    // TEST OBJECTIVE:
-    // Verify graceful shutdown pattern where all futures are awaited
-    //
-    // SCENARIO:
-    // 1. Create actor and send messages
-    // 2. Wait for all futures to complete
-    // 3. Destroy actor
-    //
-    // EXPECTED BEHAVIOR:
-    // - All messages processed successfully
-    // - Actor destroyed cleanly with no pending futures
-    // - No assertion failures
-    //
-    // VERIFICATION:
-    // - All futures return correct results
-    // - No memory leaks (ASan)
-
     auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
@@ -147,7 +88,6 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
     {
         auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
 
-        // Send messages and store futures
         constexpr int NUM_MESSAGES = 10;
         for (int i = 0; i < NUM_MESSAGES; ++i) {
             auto [needs_sched, future] = actor_zeta::send(actor.get(),
@@ -160,9 +100,8 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
             futures.push_back(std::move(future));
         }
 
-        // GRACEFUL SHUTDOWN: Wait for all futures before destroying actor.
-        // The scheduler's worker threads are the producers; the consumer just
-        // polls each future then takes its value.
+        // The scheduler is still running, so every future must be complete
+        // before the actor goes out of scope.
         std::vector<int> results;
         results.reserve(futures.size());
         for (auto& f : futures) {
@@ -173,46 +112,17 @@ TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
         }
         int completed = 0;
         for (size_t i = 0; i < results.size(); ++i) {
-            REQUIRE(results[i] == static_cast<int>(i) * 2);  // Verify correct result
+            REQUIRE(results[i] == static_cast<int>(i) * 2);
             ++completed;
         }
 
         REQUIRE(completed == NUM_MESSAGES);
-
-        // Actor destroyed here - all futures consumed, no pending messages
     }
 
     scheduler->stop();
-
-    // Verification: All messages processed successfully
-    // Test completes without crashes or assertions
 }
 
-// =============================================================================
-// Template for Future Tests
-// =============================================================================
-
 TEST_CASE("Shutdown Test 4.3: Rapid shutdown with pending work") {
-    // TEST OBJECTIVE:
-    // Verify that rapid scheduler stop with pending work is handled safely.
-    // Tests the correct shutdown pattern: scheduler->stop() BEFORE actor destruction.
-    //
-    // SCENARIO:
-    // 1. Create actor and send many messages (work backlog)
-    // 2. Stop scheduler immediately (some work may be incomplete)
-    // 3. Destroy actor safely (no workers running)
-    //
-    // EXPECTED BEHAVIOR:
-    // - scheduler->stop() waits for all workers to exit
-    // - After stop(), no resume() calls can happen
-    // - Actor destruction is safe
-    // - No crashes, no data races
-    //
-    // VERIFICATION:
-    // - ASan detects use-after-free
-    // - TSan detects data races
-    // - Test completes without crashes = SUCCESS
-
     auto* resource = std::pmr::get_default_resource();
 
     constexpr int NUM_ITERATIONS = 50;
@@ -223,7 +133,6 @@ TEST_CASE("Shutdown Test 4.3: Rapid shutdown with pending work") {
 
         auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
 
-        // Send burst of messages to create work backlog
         constexpr int NUM_MESSAGES = 100;
         std::vector<actor_zeta::unique_future<int>> futures;
         futures.reserve(NUM_MESSAGES);
@@ -239,43 +148,20 @@ TEST_CASE("Shutdown Test 4.3: Rapid shutdown with pending work") {
             futures.push_back(std::move(future));
         }
 
-        // Random delay before shutdown to vary timing
         if (iter % 3 == 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } else if (iter % 3 == 1) {
             std::this_thread::yield();
         }
-        // else: immediate shutdown
 
-        // CORRECT ORDER: Stop scheduler FIRST
-        // This guarantees all workers have exited before actor destruction
+        // stop() before the actor goes out of scope at the end of the iteration.
         scheduler->stop();
-
-        // Actor destroyed here - SAFE because scheduler already stopped
-        // (actor destructor runs when unique_ptr goes out of scope at iteration end)
     }
 
-    // If we reach here without crashes, test passed!
     REQUIRE(true);
 }
 
 TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
-    // TEST OBJECTIVE:
-    // Test actor lifecycle with sequential creation and destruction.
-    // Verifies that actors can be safely created and destroyed in cycles.
-    //
-    // SCENARIO:
-    // 1. Create actor, send message, wait for completion, destroy actor
-    // 2. Repeat sequentially with different timing patterns
-    //
-    // NOTE: Actor MUST NOT be destroyed while running (assertion in destructor).
-    // All patterns must wait for message processing to complete before destruction.
-    //
-    // EXPECTED BEHAVIOR:
-    // - All messages processed successfully
-    // - No memory leaks
-    // - No crashes
-
     auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
     scheduler->start();
@@ -284,10 +170,8 @@ TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
     std::atomic<int> completed_cycles{0};
 
     for (int i = 0; i < NUM_CYCLES; ++i) {
-        // Create actor
         auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
 
-        // Send message
         auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                       &shutdown_test_actor::slow_task, i);
 
@@ -295,29 +179,27 @@ TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
             scheduler->enqueue(actor.get());
         }
 
-        // Vary timing BEFORE waiting for result (to test different scheduling scenarios)
         switch (i % 4) {
-            case 0: // Immediate wait
+            case 0:
                 break;
-            case 1: // Yield first
+            case 1:
                 std::this_thread::yield();
                 break;
-            case 2: // Small sleep first
+            case 2:
                 std::this_thread::sleep_for(std::chrono::microseconds(500));
                 break;
-            case 3: // No extra delay
+            case 3:
                 break;
         }
 
-        // Always wait for result before destroying actor: the scheduler worker
-        // threads produce, so poll readiness on this thread then take.
+        // The destructor asserts the actor is not running, so wait before it goes
+        // out of scope.
         while (!future.is_ready()) {
             std::this_thread::yield();
         }
         int result = std::move(future).take_ready();
         REQUIRE(result == i * 2);
 
-        // Actor destroyed here - safe because message was processed
         completed_cycles.fetch_add(1, std::memory_order_relaxed);
     }
 

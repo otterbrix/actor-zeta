@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
@@ -29,7 +30,6 @@ namespace actor_zeta { namespace scheduler {
             explicit worker_data(Scheduler*) {}
         };
 
-        // Single enqueue - accepts node (new or reused)
         template<class Coordinator>
         bool enqueue(Coordinator* self, std::unique_ptr<job_ptr> node) {
             std::unique_lock<std::mutex> guard(cast(self).lock);
@@ -47,12 +47,6 @@ namespace actor_zeta { namespace scheduler {
 
         template<class Worker, class Resumable>
         void external_enqueue(Worker* self, Resumable* resumable) {
-            auto node = std::make_unique<job_ptr>(resumable, &scheduler::detail::resume_impl<Resumable>);
-            enqueue(self->parent(), std::move(node));
-        }
-
-        template<class Worker, class Resumable>
-        void internal_enqueue(Worker* self, Resumable* resumable) {
             auto node = std::make_unique<job_ptr>(resumable, &scheduler::detail::resume_impl<Resumable>);
             enqueue(self->parent(), std::move(node));
         }

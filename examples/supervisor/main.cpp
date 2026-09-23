@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -6,6 +7,24 @@
 #include <vector>
 
 #include <actor-zeta.hpp>
+
+// Bounded spin on a future completed elsewhere (scheduler worker or inline actor_mixin).
+// is_ready() is only promise_released, which a promise dying without a value also sets.
+// Gate on failed(): extracting without one aborts in every build, Release included.
+// The bound turns a producer that never completes into a visible error.
+template<typename T>
+T await_from_scheduler(actor_zeta::unique_future<T>& future) {
+    constexpr int kSpinCap = 10'000'000;
+    for (int i = 0; i < kSpinCap && !future.is_ready(); ++i) {
+        std::this_thread::yield();
+    }
+    if (!future.is_ready() || future.failed()) {
+        std::cerr << "await_from_scheduler: future did not complete with a value\n";
+        std::abort();
+    }
+    return std::move(future).take_ready();
+}
+
 
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
@@ -153,15 +172,11 @@ int main() {
     std::cerr << "=== Supervisor Example: Manual Scheduling ===" << std::endl;
     std::cerr << std::endl;
 
-    // Top-level result collection without task<>/sync_wait. The supervisor (an
-    // actor_mixin) processes each request synchronously, so every returned future is
-    // ready as soon as send() returns. We use a non-blocking consumer poll for each:
-    // while(!f.is_ready()) yield; then take_ready(). The real scheduler keeps running
-    // while we drive, and is stopped before the actor is destroyed.
+    // The supervisor is an actor_mixin: each request runs inside send(), so the future is
+    // ready on return. The scheduler is stopped before the actors it drives are destroyed.
     auto await_request = [](auto future_pair) {
         auto& future = future_pair.second;
-        // Real scheduler produces cross-thread; drive with a yield pump and discard.
-        (void) actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
+        return await_from_scheduler(future);
     };
 
     std::cerr << "--- Creating Workers ---" << std::endl;

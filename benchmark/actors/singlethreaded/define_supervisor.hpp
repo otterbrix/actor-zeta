@@ -40,6 +40,16 @@ public:
         co_return;
     }
 
+private:
+    // This supervisor is the run queue: singlethreaded's ping_pong_actor holds no
+    // scheduler and cannot enqueue its partner, so nothing else will ever run the
+    // children. A `resume` verdict means "put me back in a run queue" -- discharge it here.
+    static void drive(Actor* child) {
+        while (child->resume(1).result == actor_zeta::scheduler::resume_result::resume) {
+        }
+    }
+
+public:
     actor_zeta::unique_future<void> send() {
         if (actor_0_ && scheduler_) {
             auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
@@ -48,9 +58,10 @@ public:
         } else if (actor_0_) {
             auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
             actor_zeta::detail::ignore_unused(future);
-            actor_0_->resume(1);
-            actor_1_->resume(1);
-            actor_0_->resume(1);
+            // One message each: start -> ping -> pong, so three passes over the pair.
+            drive(actor_0_.get());
+            drive(actor_1_.get());
+            drive(actor_0_.get());
         }
         co_return;
     }

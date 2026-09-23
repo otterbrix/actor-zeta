@@ -15,11 +15,6 @@ namespace actor_zeta { namespace actor {
         , enqueue_fn_(nullptr) {
     }
 
-    address_t::address_t(std::pmr::memory_resource* resource, void* ptr)
-        : resource_([](std::pmr::memory_resource* r){assert(r!=nullptr);return r;}(resource))
-        , ptr_([](void* p){assert(p!=nullptr);return p;}(ptr)) {
-    }
-
     bool address_t::operator!() const noexcept {
         return !(static_cast<bool>(ptr_));
     }

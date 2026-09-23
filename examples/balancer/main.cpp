@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <cassert>
 
 #include <chrono>
@@ -88,6 +89,24 @@ private:
 
 
 
+// collection_t is an actor_mixin, so its behavior() runs inline on the caller's thread
+// while a scheduler worker drives the child; this side only polls for the answer.
+template<typename T>
+T await_child(actor_zeta::unique_future<T>& future) {
+    // is_ready() is only promise_released, which a promise dying without a value also sets.
+    // Gate on failed(): extracting without one aborts in every build, Release included.
+    // The bound turns a future that never completes into a visible error.
+    constexpr int kAwaitCap = 10'000'000;
+    for (int i = 0; i < kAwaitCap && !future.is_ready(); ++i) {
+        std::this_thread::yield();
+    }
+    if (!future.is_ready() || future.failed()) {
+        std::cerr << "await_child: future did not complete with a value\n";
+        std::abort();
+    }
+    return std::move(future).take_ready();
+}
+
 class collection_t final : public actor_zeta::actor::actor_mixin<collection_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
@@ -98,9 +117,10 @@ public:
         return {false, actor_zeta::detail::enqueue_result::success};
     }
 
-    collection_t(std::pmr::memory_resource* resource, actor_zeta::sharing_scheduler*)
+    collection_t(std::pmr::memory_resource* resource, actor_zeta::sharing_scheduler* scheduler)
         : actor_zeta::actor::actor_mixin<collection_t>()
-        , resource_(resource) {
+        , resource_(resource)
+        , scheduler_(scheduler) {
         ++count_collection;
     }
 
@@ -111,7 +131,7 @@ public:
         actors_.emplace_back(std::move(ptr));
     }
 
-    // Interface methods - signatures define the contract
+    // Bodies never run -- behavior() forwards every message itself; only the signatures matter.
     actor_zeta::unique_future<void> insert(std::string, std::string) { co_return; }
     actor_zeta::unique_future<void> remove(std::string) { co_return; }
     actor_zeta::unique_future<void> update(std::string, std::string) { co_return; }
@@ -124,7 +144,6 @@ public:
         &collection_t::find
     >;
 
-    // Balancer behavior: forwards messages to child actors
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
         if (actors_.empty()) {
             std::cerr << "Error: No child actors available" << std::endl;
@@ -144,14 +163,17 @@ public:
         using update_args = actor_zeta::type_traits::type_list<std::string, std::string>;
         using find_args = actor_zeta::type_traits::type_list<std::string>;
 
-        // Forward based on command
         switch (cmd) {
             case actor_zeta::msg_id<collection_t, &collection_t::insert>: {
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::insert,
                     actor_zeta::detail::get<0, insert_args>(args),
                     actor_zeta::detail::get<1, insert_args>(args));
-                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -159,7 +181,11 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::remove,
                     actor_zeta::detail::get<0, remove_args>(args));
-                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -168,7 +194,11 @@ public:
                     &collection_part_t::update,
                     actor_zeta::detail::get<0, update_args>(args),
                     actor_zeta::detail::get<1, update_args>(args));
-                actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<void>().set_value();
                 break;
             }
@@ -176,7 +206,11 @@ public:
                 auto [needs_sched, future] = actor_zeta::send(child.get(),
                     &collection_part_t::find,
                     actor_zeta::detail::get<0, find_args>(args));
-                auto result = actor_zeta::run_until_complete(future, [&] { child->resume(1); });
+                if (needs_sched) {
+                    scheduler_->enqueue(child.get());
+                }
+                auto result = await_child(future);
+                msg->transfer_ownership();   // ~message must not overwrite the fulfilled slot
                 msg->get_result_promise<std::string>().set_value(std::move(result));
                 break;
             }
@@ -185,6 +219,7 @@ public:
 
 private:
     std::pmr::memory_resource* resource_;
+    actor_zeta::sharing_scheduler* scheduler_;
     uint32_t cursor_ = 0;
     std::vector<collection_part_t::unique_actor> actors_;
 };
@@ -199,6 +234,9 @@ int main() {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
         new actor_zeta::scheduler::sharing_scheduler(1, 100));
+    // Workers must be running before the first forward: only the scheduler drives the
+    // children. stop() below runs before `collection` (and its children) are destroyed.
+    scheduler->start();
     auto collection = actor_zeta::spawn<collection_t>(resource, scheduler.get());
 
     std::cerr << "=== Creating 3 collection_part actors ===" << std::endl;
@@ -217,8 +255,6 @@ int main() {
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
     { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::remove, std::string("key3")); std::move(f).take_ready(); }
-
-    scheduler->start();
 
     std::this_thread::sleep_for(sleep_time);
 

@@ -110,7 +110,7 @@ The only working solution is to avoid rvalue reference parameters in coroutine m
 
 ### Affects
 
-- **Coroutine method signatures**: Methods returning `unique_future<T>` or `generator<T>`
+- **Coroutine method signatures**: Methods returning `unique_future<T>`
 - **Promise type operator new**: Cannot extract resource from arguments
 
 ## Test Case

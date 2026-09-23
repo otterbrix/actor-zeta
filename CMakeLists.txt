@@ -6,10 +6,10 @@ message(STATUS "CMAKE_C_COMPILER_ID = ${CMAKE_C_COMPILER_ID}")
 message(STATUS "STANDARD CPP = ${CMAKE_CXX_STANDARD}")
 message(STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 
-if (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"  AND UNIX AND NOT APPLE ) #------------------------------------- Clang
+if (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"  AND UNIX AND NOT APPLE )
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
     list(APPEND CMAKE_MODULE_PATH "${LLVM_DIR}")
-endif() #--------------------------------------------------------------------------- Clang
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,23 +22,27 @@ option(ENABLE_TESTS_MEASUREMENTS    "ENABLE TESTS MEASUREMENTS" OFF)
 option(ALLOW_BENCHMARK              "ALLOW BENCHMARK"           OFF)
 option(RTTI_DISABLE                 "RTTI DISABLE"              ON)
 option(EXCEPTIONS_DISABLE           "EXCEPTIONS DISABLE"        ON)
+# OFF by default so a local build is not blocked by a new compiler's new warning;
+# CI turns it ON, which is the only place the whole matrix is seen at once.
+option(WARNINGS_AS_ERRORS           "WARNINGS AS ERRORS"        OFF)
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (default Debug)" FORCE)
 endif()
 
-# RTTI/Exceptions flags
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     if (EXCEPTIONS_DISABLE)
         message(STATUS "Disable C++ exceptions (MSVC).")
-        string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
-        add_compile_definitions(__EXCEPTIONS_DISABLE__)
+        # MSVC has no -fno-exceptions: strip every /EH instead. Re-adding /EHsc would
+        # contradict __EXCEPTIONS_DISABLE__, which shared_state.hpp #errors on;
+        # _HAS_EXCEPTIONS=0 is the half the MS STL reads.
+        string(REGEX REPLACE "/EH[a-z]+" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+        add_compile_definitions(__EXCEPTIONS_DISABLE__ _HAS_EXCEPTIONS=0)
     endif()
 
     if (RTTI_DISABLE)
         message(STATUS "Disable RTTI (MSVC).")
-        string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+        string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
     endif()
 elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang"))
@@ -50,7 +54,7 @@ elseif ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES 
 
     if (RTTI_DISABLE)
         message(STATUS "Disable RTTI (GNU/Clang).")
-        string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+        string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
     endif()
 endif()
@@ -61,6 +65,7 @@ message(STATUS "ENABLE_TESTS_MEASUREMENTS = ${ENABLE_TESTS_MEASUREMENTS}")
 message(STATUS "ALLOW_BENCHMARK = ${ALLOW_BENCHMARK}")
 message(STATUS "RTTI_DISABLE = ${RTTI_DISABLE}")
 message(STATUS "EXCEPTIONS_DISABLE = ${EXCEPTIONS_DISABLE}")
+message(STATUS "WARNINGS_AS_ERRORS = ${WARNINGS_AS_ERRORS}")
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/
@@ -85,7 +90,6 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
             -Wsign-conversion
             -Wsign-promo
 
-            # Additional warnings
             -Wshadow
             -Wdouble-promotion
             -Wformat=2
@@ -93,22 +97,30 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
             -Wunused
             -Wimplicit-fallthrough
 
-            # Errors for critical issues
             -Werror=return-type
             -Werror=init-self
     )
 
-    # GCC-specific flags
+    if (WARNINGS_AS_ERRORS)
+        add_compile_options(-Werror)
+    endif()
+
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
         add_compile_options(
                 -Wlogical-op
                 -Wduplicated-cond
                 -Wduplicated-branches
-                #-Wnull-dereference
+
+                # A coroutine frame is allocated by promise_type::operator new(size, args...)
+                # and freed by operator delete(void*, size_t): [dcl.fct.def.coroutine] has no
+                # "placement delete with the same arguments" form, so that pairing is the one
+                # the standard prescribes. GCC applies the ordinary new/delete matching rules
+                # to the frame and reports every coroutine in the tree. Only with exceptions
+                # enabled, where the unwind path makes the deallocation visible to it.
+                -Wno-mismatched-new-delete
         )
     endif()
 
-    # Clang-specific flags
     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         add_compile_options(
                 -Wmost
@@ -116,10 +128,11 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "GNU") OR (CMAKE_CXX_COMPILER_ID MATCHES "Cla
     endif()
 
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    add_compile_options(/W4 /WX)
+    add_compile_options(/W4)
+    if (WARNINGS_AS_ERRORS)
+        add_compile_options(/WX)
+    endif()
 endif()
-
-############## FINAL PROJECT CONFIG #################
 
 file(GLOB ${PROJECT_NAME}_HEADERS
     header/actor-zeta/base/*.hpp
@@ -150,21 +163,16 @@ file(GLOB ${PROJECT_NAME}_HEADERS
     header/*.h
 )
 
-if ((CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND NOT APPLE) #------------------------------------- Clang
-    ############## LLVM CONFIGURATION #################
-    # https://github.com/nsumner/llvm-demo Example LLVM Build
-
+if ((CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND NOT APPLE)
     # LLVM_DIR must be set to the prefix of /share/llvm/cmake via commandline
     find_package(LLVM REQUIRED CONFIG)
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_LIBRARY_DIRS}")
 
-    # Check if using Conan toolchain (to avoid stdlib conflicts with dependencies)
+    # A Conan toolchain means Conan-built dependencies, and the stdlib has to match them.
     if (DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE MATCHES "conan")
-        # Conan build: use libstdc++11 to match Conan-built dependencies
         set(LIBCXX "libstdc++11")
         message(STATUS "Conan build detected: forcing LIBCXX=${LIBCXX} to match dependencies")
     else()
-        # Auto-detect stdlib if not using Conan
         find_library(CLANG_LIBCPP
             NAMES libc++ c++
             HINTS ${LLVM_LIBRARY_DIRS})
@@ -176,16 +184,12 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND NOT APPLE) #--------------------
         message(STATUS "Found CLANG_LIBCPP=${CLANG_LIBCPP}")
         message(STATUS "Found CLANG_LIBCPP_ABI=${CLANG_LIBCPP_ABI}")
 
-        # Linker flags for targets and Conan
         set(LINKFLAGS "")
-        ### https://stackoverflow.com/questions/43662736/cmake-switch-between-clang-g-and-libc-libstdc
 
         if (${CLANG_LIBCPP} MATCHES "CLANG_LIBCPP-NOTFOUND")
             set(LIBCXX "libstdc++11")
         else()
-            # Change compiler library and libunwind from libgcc GCC implementation to LLVM's compiler-rt
-            # See https://clang.llvm.org/docs/Toolchain.html for details
-            # LINKFLAGS variable contains required link flags
+            # Switch to LLVM's libc++ and compiler-rt; see https://clang.llvm.org/docs/Toolchain.html
             set(LINKFLAGS "-stdlib=libc++ -rtlib=compiler-rt")
 
             if (NOT APPLE)
@@ -214,9 +218,9 @@ if ((CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND NOT APPLE) #--------------------
         endif()
     endif()
 
-else() #---------------------------------------------------------------------------- GNU
+else()
     set(LIBCXX "libstdc++11")
-endif() #--------------------------------------------------------------------------- Clang
+endif()
 
 message(STATUS "Using shared linker flags : ${CMAKE_SHARED_LINKER_FLAGS}")
 message(STATUS "Using exe linker flags    : ${CMAKE_EXE_LINKER_FLAGS}")
@@ -233,28 +237,16 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${CMAKE_DL_LIBS}
 )
 
-#################################################################
-
-# configuration
-#############################################################################################
-#conan
-
 if (CONAN_EXPERIMENTAL_INCLUDE)
     set(CONAN_SYSTEM_INCLUDES "On")
 endif ()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang"  AND UNIX AND NOT APPLE )
     # https://docs.conan.io/1/reference/config_files/settings.yml.html#c-standard-libraries-aka-compiler-libcxx
-    #conan_cmake_autodetect(CONAN_SETTINGS)
     set(CONAN_SETTINGS "build_type=${CMAKE_BUILD_TYPE};compiler.libcxx=${LIBCXX};compiler.cppstd=${CMAKE_CXX_STANDARD}")
 endif ()
 
 message(STATUS "CONAN_SETTINGS: ${CONAN_SETTINGS}")
-
-
-# configuration
-#############################################################################################
-#conan
 
 if (ALLOW_EXAMPLES)
     add_subdirectory(examples)

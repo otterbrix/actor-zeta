@@ -42,18 +42,15 @@ public:
         co_return;
     }
 
+    // Only the initial enqueue is needed: coro_ping_pong_actor enqueues its own partner
+    // and the worker discharges every resume verdict. No hand-driven fallback -- the
+    // children's start()/ping() are guarded on scheduler_.
     actor_zeta::unique_future<void> send() {
         if (actor_0_ && scheduler_) {
             auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
             if (needs_sched) {
                 scheduler_->enqueue(actor_0_.get());
             }
-        } else if (actor_0_) {
-            auto [needs_sched_sync, future_sync] = actor_zeta::send(actor_0_.get(), &Actor::start);
-            actor_zeta::detail::ignore_unused(future_sync);
-            actor_0_->resume(1);
-            actor_1_->resume(1);
-            actor_0_->resume(1);
         }
         co_return;
     }

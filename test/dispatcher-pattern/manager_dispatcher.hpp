@@ -1,21 +1,10 @@
 #pragma once
 
 /// @file manager_dispatcher.hpp
-/// @brief Dispatcher actor - middle level coordinator
-///
-/// manager_dispatcher_t demonstrates advanced coroutine patterns:
-/// 1. Single co_await: size() waits for storage response
-/// 2. Sequential co_await: execute_transaction() does two sequential queries
-/// 3. Parallel requests + await all: aggregate_sizes() sends parallel requests
-/// 4. Nested coroutines: get_aggregate_detail() called from aggregate_sizes()
-/// 5. Branching based on results
-/// 6. Pending coroutine management with poll_pending()
-///
-/// Type System Integration (from make_message.hpp, dispatch_traits.hpp):
-/// - is_valid_rtt_type<T>: Validates message argument types
-/// - dispatch_traits<&Method...>: Compile-time method->ID mapping
-/// - msg_id<Actor, &Method>: Get message ID for method pointer
-/// - dispatch(self, &method, msg): Unpack args and call method
+/// Middle-level actor of the dispatcher-pattern test. Every handler returns
+/// unique_future<T> and co_awaits storage directly -- single, sequential, parallel
+/// and nested awaits, plus lambda-coroutines -- so there is no sender map and no
+/// *_finish() callback hop.
 
 #include <actor-zeta.hpp>
 
@@ -24,6 +13,7 @@
 #include "test_logger.hpp"
 
 #include <vector>
+#include <atomic>
 #include <unordered_map>
 #include <string>
 
@@ -31,24 +21,9 @@ namespace dispatcher_test {
 
 using namespace actor_zeta;
 
-/// @brief Dispatcher actor - coordinates queries between client and storage
-///
-/// Architecture position: MIDDLE level
-/// Receives: requests from client_t (or direct tests)
-/// Sends: requests to memory_storage_t
-/// Returns: results back to caller via unique_future
-///
-/// OLD (session-based) pattern:
-///   - session_to_address_ map to track senders
-///   - size() saves sender, sends fire-and-forget to storage
-///   - size_finish() callback finds sender, sends response
-///
-/// NEW (promise/future) pattern:
-///   - No session_to_address_ needed!
-///   - size() returns unique_future<size_result_t>
-///   - Uses co_await to wait for storage response
 class manager_dispatcher_t final : public basic_actor<manager_dispatcher_t> {
 public:
+    /// Holds an address_t: all a peer needs to send. Launching actors is the supervisor's job.
     explicit manager_dispatcher_t(
             std::pmr::memory_resource* mr,
             address_t memory_storage,
@@ -58,43 +33,37 @@ public:
         , name_(name) {
     }
 
-    // =========================================================================
-    // Simple methods
-    // =========================================================================
-
-    /// @brief Trigger behavior() to process pending coroutines
-    unique_future<void> poll() {
-        g_log.log("[%::poll] called", name_);
-        co_return;
+    /// send() hands back an obligation this actor cannot discharge -- it has an
+    /// address, not a scheduler. Dropping it would strand storage for good, so it
+    /// is recorded here and the supervisor driving this test claims it below.
+    void owe_storage(bool needs_sched) {
+        if (needs_sched) {
+            storage_owed_.fetch_add(1, std::memory_order_release);
+        }
     }
 
-    /// @brief Close and cleanup cursor for session
-    unique_future<void> close_cursor(session_id_t session) {
+    /// Claimed once by the owner, which then enqueues storage.
+    std::size_t take_storage_obligations() {
+        return storage_owed_.exchange(0, std::memory_order_acq_rel);
+    }
+
+    /// Returns whether a cursor was actually removed, so a test can tell the work
+    /// from a handler that merely ran to completion.
+    unique_future<bool> close_cursor(session_id_t session) {
         auto tid = thread_id_str();
         g_log.log("[%::close_cursor] thread=% session=%", name_, tid, session.data());
 
         auto it = result_storage_.find(session);
-        if (it != result_storage_.end()) {
-            g_log.log("[%::close_cursor] Removing cursor from storage", name_);
-            result_storage_.erase(it);
-        } else {
+        if (it == result_storage_.end()) {
             g_log.log("[%::close_cursor] Cursor not found in storage", name_);
+            co_return false;
         }
-        co_return;
+
+        g_log.log("[%::close_cursor] Removing cursor from storage", name_);
+        result_storage_.erase(it);
+        co_return true;
     }
 
-    // =========================================================================
-    // PATTERN 1: Single co_await
-    // Method waits for one response from storage
-    // =========================================================================
-
-    /// @brief Get collection size
-    ///
-    /// Demonstrates: Single co_await pattern
-    /// - Validate input
-    /// - Send request to storage
-    /// - co_await response
-    /// - Return result
     unique_future<size_result_t> size(
             session_id_t session,
             std::string database_name,
@@ -104,7 +73,6 @@ public:
         g_log.log("[%::size] thread=% session=% db=% coll=%",
                   name_, tid, session.data(), database_name, collection);
 
-        // Branching: validate input
         if (database_name.empty() || collection.empty()) {
             g_log.log("[%::size] Error: empty database or collection name", name_);
             co_return size_result_t::error("Empty database or collection name");
@@ -112,23 +80,19 @@ public:
 
         g_log.log("[%::size] Sending request to memory_storage...", name_);
 
-        // Single co_await - wait for storage response
-        auto [_, result] = co_await send(memory_storage_,
+        auto sent_result = send(memory_storage_,
             &memory_storage_t::size,
             session,
             collection_full_name_t{database_name, collection});
+        owe_storage(sent_result.first);
+        auto result = co_await std::move(sent_result.second);
 
         g_log.log("[%::size] Got result from storage: %", name_, result);
 
         co_return size_result_t(result);
     }
 
-    // =========================================================================
-    // PATTERN 2: Execute plan with cursor result
-    // =========================================================================
-
-    /// @brief Execute query plan and return cursor
-    /// @param session Session ID (BY VALUE - message destroyed after co_await)
+    /// Parameters by value: the message they came from is gone after the co_await.
     unique_future<cursor_t_ptr> execute_plan(
             session_id_t session,
             logical_plan_t plan) {
@@ -137,7 +101,6 @@ public:
         g_log.log("[%::execute_plan] thread=% session=% plan=%",
                   name_, tid, session.data(), plan.to_string());
 
-        // Branching: validate plan
         if (plan.collection.database.empty()) {
             g_log.log("[%::execute_plan] Error: invalid plan", name_);
             auto error_cursor = std::make_unique<cursor_t>();
@@ -148,36 +111,22 @@ public:
 
         g_log.log("[%::execute_plan] Sending request to memory_storage...", name_);
 
-        auto [_1, cursor] = co_await send(memory_storage_,
+        auto sent_cursor = send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             std::move(plan));
+        owe_storage(sent_cursor.first);
+        auto cursor = co_await std::move(sent_cursor.second);
 
         g_log.log("[%::execute_plan] Got cursor with % rows, error=%",
                   name_, cursor->row_count(), cursor->has_error);
 
-        // Track cursor by session for later cleanup
         result_storage_[session] = cursor.get();
 
         co_return std::move(cursor);
     }
 
-    // =========================================================================
-    // PATTERN 3: Transaction - Sequential co_await
-    // Multiple dependent operations in sequence
-    // =========================================================================
-
-    /// @brief Execute transaction with two sequential queries
-    ///
-    /// Demonstrates: Sequential co_await pattern
-    /// - Step 1: Execute first query, co_await result
-    /// - Check result, branch on error
-    /// - Step 2: Execute second query, co_await result
-    /// - Combine results
-    ///
-    /// IMPORTANT: Local variables may be corrupted after co_await!
-    /// Save values you need BEFORE the next co_await.
-    /// @param session Session ID (BY VALUE - message destroyed after co_await)
+    /// Two sequential awaits, the second issued only if the first succeeded.
     unique_future<transaction_result_t> execute_transaction(
             session_id_t session,
             std::string collection1,
@@ -187,7 +136,6 @@ public:
         g_log.log("[%::execute_transaction] thread=% session=% coll1=% coll2=%",
                   name_, tid, session.data(), collection1, collection2);
 
-        // Validation
         if (collection1.empty() || collection2.empty()) {
             g_log.log("[%::execute_transaction] Error: empty collection name", name_);
             co_return transaction_result_t::error("Empty collection name");
@@ -195,18 +143,18 @@ public:
 
         g_log.log("[%::execute_transaction] Step 1: Execute plan for %", name_, collection1);
 
-        // STEP 1: First query
-        auto [_1, cursor1] = co_await send(memory_storage_,
+        auto sent_cursor1 = send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection1)));
+        owe_storage(sent_cursor1.first);
+        auto cursor1 = co_await std::move(sent_cursor1.second);
 
         if (!cursor1) {
             g_log.log("[%::execute_transaction] ERROR: cursor1 is NULL after first co_await!", name_);
             co_return transaction_result_t::error("cursor1 is NULL");
         }
 
-        // Branching: check step 1 result
         if (cursor1->has_error) {
             g_log.log("[%::execute_transaction] Step 1 FAILED: %", name_, cursor1->error_message);
             co_return transaction_result_t::error("Step 1 failed: " + cursor1->error_message);
@@ -215,15 +163,14 @@ public:
         g_log.log("[%::execute_transaction] Step 1 OK: % rows. Step 2: Execute plan for %",
                   name_, cursor1->row_count(), collection2);
 
-        // IMPORTANT: Save cursor1 data BEFORE second co_await
-        // cursor1 may be corrupted during second suspend
         std::size_t cursor1_row_count = cursor1->row_count();
 
-        // STEP 2: Second query (depends on step 1 success)
-        auto [_2, cursor2] = co_await send(memory_storage_,
+        auto sent_cursor2 = send(memory_storage_,
             &memory_storage_t::execute_plan,
             session,
             logical_plan_t("select", collection_full_name_t("test_db", collection2)));
+        owe_storage(sent_cursor2.first);
+        auto cursor2 = co_await std::move(sent_cursor2.second);
 
         if (!cursor2) {
             g_log.log("[%::execute_transaction] ERROR: cursor2 is NULL!", name_);
@@ -238,55 +185,39 @@ public:
         g_log.log("[%::execute_transaction] Step 2 OK: % rows. COMMIT",
                   name_, cursor2->row_count());
 
-        // Use saved row count from step 1
         std::size_t total = cursor1_row_count + cursor2->row_count();
         co_return transaction_result_t(total, true);
     }
 
-    // =========================================================================
-    // PATTERN 4: Aggregation - Parallel requests + Nested coroutine
-    // =========================================================================
-
-    /// @brief Aggregate sizes from multiple collections
-    ///
-    /// Demonstrates:
-    /// - Parallel requests: send ALL requests before waiting
-    /// - Await all: collect results in order
-    /// - Nested coroutine: call get_aggregate_detail()
-    /// - Branching based on total size
-    ///
-    /// @param session Session ID (BY VALUE - message destroyed after first suspend)
-    /// @param collections Collection names to aggregate
+    /// Sends ALL requests before awaiting any, then awaits a nested coroutine.
     unique_future<aggregate_result_t> aggregate_sizes(
-            session_id_t session,  // BY VALUE - critical for coroutine safety
+            session_id_t session,
             std::vector<std::string> collections) {
 
         auto tid = thread_id_str();
         g_log.log("[%::aggregate_sizes] thread=% session=% collections=%",
                   name_, tid, session.data(), collections.size());
 
-        // A) Branching: validate input
         if (collections.empty()) {
             g_log.log("[%::aggregate_sizes] Error: no collections provided", name_);
             co_return aggregate_result_t::error("No collections provided");
         }
 
-        // B) Parallel requests - send ALL without waiting
         g_log.log("[%::aggregate_sizes] Sending % parallel requests...", name_, collections.size());
 
         std::vector<unique_future<std::size_t>> futures;
-        futures.reserve(collections.size());  // CRITICAL: reserve to avoid reallocation!
+        futures.reserve(collections.size());
 
         for (const auto& coll : collections) {
-            auto [ns, f] = send(memory_storage_,
+
+            auto sent = send(memory_storage_,
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", coll));
-            (void)ns;
-            futures.push_back(std::move(f));
+            owe_storage(sent.first);
+            futures.push_back(std::move(sent.second));
         }
 
-        // C) Await all - collect results in order
         g_log.log("[%::aggregate_sizes] Awaiting % futures...", name_, futures.size());
 
         std::size_t total = 0;
@@ -299,7 +230,6 @@ public:
 
         g_log.log("[%::aggregate_sizes] Total: %. Calling nested coroutine...", name_, total);
 
-        // D) Nested coroutine call
         auto detail = co_await get_aggregate_detail(session, total, collections.size());
 
         g_log.log("[%::aggregate_sizes] Done. Detail: %", name_, detail);
@@ -307,15 +237,9 @@ public:
         co_return aggregate_result_t(total, collections.size(), std::move(detail));
     }
 
-    /// @brief Nested coroutine - called from aggregate_sizes()
-    ///
-    /// Demonstrates:
-    /// - Coroutine depth (coroutine calling coroutine)
-    /// - Conditional co_await (only for large datasets)
-    ///
-    /// @param session Session ID (BY VALUE - coroutine may outlive caller)
+    /// Nested: awaited from aggregate_sizes(), with a co_await only on one branch.
     unique_future<std::string> get_aggregate_detail(
-            session_id_t session,  // BY VALUE
+            session_id_t session,
             std::size_t total,
             std::size_t count) {
 
@@ -325,15 +249,15 @@ public:
 
         std::string detail;
 
-        // Branching inside nested coroutine
         if (total > 200) {
             g_log.log("[%::get_aggregate_detail] Large dataset, getting extra info...", name_);
 
-            // Additional co_await inside nested coroutine
-            auto [_, extra_size] = co_await send(memory_storage_,
+            auto sent_extra_size = send(memory_storage_,
                 &memory_storage_t::size,
                 session,
                 collection_full_name_t("test_db", "users"));
+            owe_storage(sent_extra_size.first);
+            auto extra_size = co_await std::move(sent_extra_size.second);
 
             detail = "large_dataset:total=" + std::to_string(total) +
                      ",count=" + std::to_string(count) +
@@ -347,17 +271,10 @@ public:
         co_return detail;
     }
 
-    // =========================================================================
-    // PATTERN 5: Lambda INSIDE actor method
-    // =========================================================================
-
-    /// @brief Pattern 5a: Simple lambda inside method
-    /// Lambda is defined and used entirely within the method
     unique_future<int> transform_with_lambda(int value, int factor) {
         auto tid = thread_id_str();
         g_log.log("[%::transform_with_lambda] value=% factor=%", name_, value, factor);
 
-        // Lambda defined INSIDE actor method
         auto transform = [](int v, int f) {
             return v * f + 100;
         };
@@ -367,13 +284,10 @@ public:
         co_return result;
     }
 
-    /// @brief Pattern 5b: Lambda capturing `this` to access actor state
-    /// Lambda can modify actor member variables
     unique_future<std::string> compute_with_lambda_and_state(std::string prefix) {
         auto tid = thread_id_str();
         g_log.log("[%::compute_with_lambda_and_state] prefix=%", name_, prefix);
 
-        // Lambda captures `this` to access actor state (name_)
         auto format_with_name = [this](const std::string& p) {
             return p + "_from_" + name_;
         };
@@ -383,48 +297,36 @@ public:
         co_return result;
     }
 
-    /// @brief Pattern 5c: Lambda + coroutine - use lambda after co_await
-    /// Lambda processes result from async operation
-    ///
-    /// IMPORTANT: Parameters must be BY VALUE if used after co_await!
-    /// References become invalid after first suspend.
-    ///
-    /// @param session Session ID (BY VALUE - message destroyed after first suspend)
-    /// @param collection Collection name (BY VALUE - must survive co_await!)
+    /// `collection` is used after the co_await, so it is by value: a reference
+    /// into the message would dangle once the frame suspends.
     unique_future<std::string> async_transform_with_lambda(
-            session_id_t session,       // BY VALUE - survives co_await
-            std::string collection) {   // BY VALUE - survives co_await
+            session_id_t session,
+            std::string collection) {
 
         auto tid = thread_id_str();
         g_log.log("[%::async_transform_with_lambda] session=% collection=%",
                   name_, session.data(), collection);
 
-        // Lambda to transform result after async operation
         auto format_result = [this](std::size_t size, const std::string& coll) {
             return "Collection " + coll + " in " + name_ + " has " + std::to_string(size) + " items";
         };
 
-        // co_await - wait for storage response
-        auto [_, size] = co_await send(memory_storage_,
+        auto sent_size = send(memory_storage_,
             &memory_storage_t::size,
             session,
             collection_full_name_t("test_db", collection));
+        owe_storage(sent_size.first);
+        auto size = co_await std::move(sent_size.second);
 
-        // Use lambda to process result AFTER co_await
-        // collection is valid here because it was passed BY VALUE
         std::string result = format_result(size, collection);
         g_log.log("[%::async_transform_with_lambda] result=%", name_, result);
         co_return result;
     }
 
-    /// @brief Pattern 5d: Lambda that IS a coroutine (has co_await inside)
-    ///
-    /// CRITICAL: Lambda-coroutine needs resource as FIRST parameter!
-    /// The promise extracts resource from first arg via extract_resource_impl().
-    ///
-    /// @param session Session ID (BY VALUE)
-    /// @param collection Collection name (BY VALUE)
-    /// @param multiplier Multiplier for result (BY VALUE)
+    /// A lambda that is itself a coroutine. Its first parameter must be the
+    /// memory_resource*: the promise takes its allocator from the first argument
+    /// (extract_resource_impl()), and a lambda has no actor `this` to take it from.
+    /// Everything else is captured by value.
     unique_future<int> execute_with_coroutine_lambda(
             session_id_t session,
             std::string collection,
@@ -434,54 +336,45 @@ public:
         g_log.log("[%::execute_with_coroutine_lambda] session=% collection=% mult=%",
                   name_, session.data(), collection, multiplier);
 
-        // Lambda that IS a coroutine - has co_await/co_return INSIDE
-        // CRITICAL: First parameter MUST be std::pmr::memory_resource* for promise!
-        // Capture everything else BY VALUE (not by reference!)
         auto async_get_size = [this,
-                               session_copy = std::move(session),         // MOVE
-                               collection_copy = std::move(collection),   // MOVE
-                               multiplier_copy = multiplier               // copy (int is cheap)
+                               session_copy = std::move(session),
+                               collection_copy = std::move(collection),
+                               multiplier_copy = multiplier
                               ](std::pmr::memory_resource* /*res*/) -> unique_future<int> {
-            // ^^ resource passed as first param for promise_type constructor
-
             g_log.log("[%::coroutine_lambda] Starting async operation...", name_);
 
-            // co_await INSIDE lambda - this makes lambda a coroutine
-            auto [_ns, size] = co_await send(memory_storage_,
+            auto sent_size = send(memory_storage_,
                 &memory_storage_t::size,
                 session_copy,
                 collection_full_name_t("test_db", collection_copy));
+            owe_storage(sent_size.first);
+            auto size = co_await std::move(sent_size.second);
 
             g_log.log("[%::coroutine_lambda] Got size=%, applying multiplier=%",
                       name_, size, multiplier_copy);
 
-            // co_return INSIDE lambda
             co_return static_cast<int>(size) * multiplier_copy;
         };
 
-        // Execute the lambda-coroutine - pass resource() as first argument!
         g_log.log("[%::execute_with_coroutine_lambda] Calling lambda-coroutine...", name_);
         auto result_future = async_get_size(resource());
 
-        // co_await the result of lambda-coroutine
         int result = co_await std::move(result_future);
 
         g_log.log("[%::execute_with_coroutine_lambda] Lambda-coroutine returned: %", name_, result);
         co_return result;
     }
 
-    // =========================================================================
-    // Extended database operations with lambda-coroutines
-    // =========================================================================
-
-    /// @brief Create cursor from async query - lambda-coroutine returns unique_ptr
+    /// Lambda-coroutine returning a move-only unique_ptr.
     unique_future<cursor_t_ptr> create_cursor_from_query(
             session_id_t session,
             std::string collection) {
         auto build_cursor = [this, s = std::move(session), coll = std::move(collection)]
                 (std::pmr::memory_resource*) -> unique_future<cursor_t_ptr> {
-            auto [_ns, size] = co_await send(memory_storage_, &memory_storage_t::size,
+            auto sent_size = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            owe_storage(sent_size.first);
+            auto size = co_await std::move(sent_size.second);
             auto cursor = std::make_unique<cursor_t>();
             for (std::size_t i = 0; i < std::min(size, std::size_t(10)); ++i)
                 cursor->data.push_back("row_" + std::to_string(i) + "_from_" + coll);
@@ -491,15 +384,13 @@ public:
         co_return co_await build_cursor(resource());
     }
 
-    /// @brief Validate query then execute - chained lambda-coroutines
+    /// One lambda-coroutine awaiting another.
     unique_future<cursor_t_ptr> validate_and_execute(
             session_id_t session,
             logical_plan_t plan) {
-        // Step 1: Validate plan
         auto validate = [](std::pmr::memory_resource*, const logical_plan_t& p) -> unique_future<bool> {
             co_return !p.collection.database.empty() && !p.collection.collection.empty();
         };
-        // Step 2: Execute if valid
         auto execute = [this, &validate, s = std::move(session)]
                 (std::pmr::memory_resource* res, logical_plan_t p) -> unique_future<cursor_t_ptr> {
             bool is_valid = co_await validate(res, p);
@@ -509,22 +400,25 @@ public:
                 err->error_message = "Validation failed";
                 co_return std::move(err);
             }
-            auto [_ns, cursor] = co_await send(memory_storage_,
+            auto sent_cursor = send(memory_storage_,
                 &memory_storage_t::execute_plan, s, std::move(p));
+            owe_storage(sent_cursor.first);
+            auto cursor = co_await std::move(sent_cursor.second);
             co_return std::move(cursor);
         };
         co_return co_await execute(resource(), std::move(plan));
     }
 
-    /// @brief Get statistics across all collections - parallel lambda-coroutines
+    /// Three lambda-coroutines started before any is awaited.
     unique_future<aggregate_result_t> get_database_statistics(session_id_t session) {
         auto fetch_size = [this, s = session](std::pmr::memory_resource*, std::string coll)
                 -> unique_future<std::size_t> {
-            auto [_ns, result] = co_await send(memory_storage_, &memory_storage_t::size,
+            auto sent_result = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            owe_storage(sent_result.first);
+            auto result = co_await std::move(sent_result.second);
             co_return result;
         };
-        // Parallel fetch all collection sizes
         std::vector<unique_future<std::size_t>> futures;
         futures.reserve(3);
         futures.push_back(fetch_size(resource(), "users"));
@@ -542,7 +436,7 @@ public:
         co_return result;
     }
 
-    /// @brief Process batch buffer with move-only data
+    /// Move-only argument captured into a lambda-coroutine.
     unique_future<transaction_result_t> process_batch_buffer(
             session_id_t session,
             std::unique_ptr<std::vector<std::string>> batch) {
@@ -562,15 +456,13 @@ public:
         co_return co_await process(resource());
     }
 
-    /// @brief Get cached value - ready immediately via promise
+    /// A promise filled by hand and awaited while already ready.
     unique_future<std::size_t> get_cached_value(
             [[maybe_unused]] session_id_t session,
             std::string collection) {
-        // Simulate cache hit - value is ready immediately
         promise<std::size_t> cache_promise(resource());
         auto future = cache_promise.get_future();
 
-        // Lookup in "cache" (simulated)
         std::size_t cached = 0;
         if (collection == "users") cached = 100;
         else if (collection == "orders") cached = 250;
@@ -581,7 +473,6 @@ public:
         co_return co_await std::move(future);
     }
 
-    /// @brief Execute with retry on error
     unique_future<size_result_t> execute_with_retry(
             session_id_t session,
             std::string collection,
@@ -590,62 +481,64 @@ public:
                 (std::pmr::memory_resource*, bool simulate_error) -> unique_future<size_result_t> {
             if (simulate_error)
                 co_return size_result_t::error("connection_timeout");
-            auto [_ns, size] = co_await send(memory_storage_, &memory_storage_t::size,
+            auto sent_size = send(memory_storage_, &memory_storage_t::size,
                 s, collection_full_name_t("test_db", coll));
+            owe_storage(sent_size.first);
+            auto size = co_await std::move(sent_size.second);
             co_return size_result_t(size);
         };
-        // First attempt fails if max_retries > 0 (simulate retry scenario)
+        // The first attempt is made to fail whenever max_retries > 0.
         auto result = co_await try_fetch(resource(), max_retries > 0);
         if (result.has_error && max_retries > 0) {
             g_log.log("[%::execute_with_retry] Retry after error: %", name_, result.error_message);
-            result = co_await try_fetch(resource(), false);  // Retry succeeds
+            result = co_await try_fetch(resource(), false);
         }
         co_return result;
     }
 
-    generator<std::string> create_row_stream(
+    /// Row forwarding (manager -> storage) with the rows delivered as one vector,
+    /// each prefixed by this actor.
+    unique_future<std::vector<std::string>> fetch_row_batch(
             session_id_t session,
             std::string collection) {
 
         auto tid = thread_id_str();
-        g_log.log("[%::create_row_stream] thread=% session=% collection=%",
+        g_log.log("[%::fetch_row_batch] thread=% session=% collection=%",
                   name_, tid, session.data(), collection);
 
+        std::vector<std::string> rows;
+
         if (collection.empty()) {
-            g_log.log("[%::create_row_stream] Error: empty collection name", name_);
-            co_yield stream_error{std::make_error_code(std::errc::invalid_argument)};
-            co_return;
+            g_log.log("[%::fetch_row_batch] Error: empty collection name", name_);
+            co_return rows;
         }
 
-        auto [_, storage_gen] = send(memory_storage_,
-            &memory_storage_t::stream_rows,
+        // Goes straight to storage rather than through this actor's own
+        // execute_plan(), which would register the cursor in result_storage_ and
+        // leave a dangling pointer once the cursor dies with this frame.
+        auto sent_cursor = send(memory_storage_,
+            &memory_storage_t::execute_plan,
             session,
-            collection_full_name_t("test_db", collection));
+            logical_plan_t("select", collection_full_name_t("test_db", collection)));
+        owe_storage(sent_cursor.first);
+        auto cursor = co_await std::move(sent_cursor.second);
 
-        g_log.log("[%::create_row_stream] Got storage generator, forwarding rows...", name_);
-
-        while (co_await storage_gen) {
-            if (storage_gen.has_error()) {
-                g_log.log("[%::create_row_stream] Storage error: %",
-                          name_, storage_gen.error().message());
-                co_yield stream_error{storage_gen.error()};
-                co_return;
-            }
-
-            auto& row = storage_gen.current();
-            g_log.log("[%::create_row_stream] Forwarding: %", name_, row);
-            co_yield "[manager] " + row;
+        if (cursor->has_error) {
+            g_log.log("[%::fetch_row_batch] Storage error: %", name_, cursor->error_message);
+            co_return rows;
         }
 
-        g_log.log("[%::create_row_stream] Stream exhausted", name_);
+        rows.reserve(cursor->data.size());
+        for (const auto& row : cursor->data) {
+            g_log.log("[%::fetch_row_batch] Forwarding: %", name_, row);
+            rows.push_back("[manager] " + row);
+        }
+
+        g_log.log("[%::fetch_row_batch] Done, % rows", name_, rows.size());
+        co_return rows;
     }
 
-    // =========================================================================
-    // dispatch_traits - compile-time method->ID mapping
-    // =========================================================================
-
     using dispatch_traits = actor_zeta::dispatch_traits<
-        &manager_dispatcher_t::poll,
         &manager_dispatcher_t::size,
         &manager_dispatcher_t::execute_plan,
         &manager_dispatcher_t::close_cursor,
@@ -656,29 +549,22 @@ public:
         &manager_dispatcher_t::compute_with_lambda_and_state,
         &manager_dispatcher_t::async_transform_with_lambda,
         &manager_dispatcher_t::execute_with_coroutine_lambda,
-    
+
         &manager_dispatcher_t::create_cursor_from_query,
         &manager_dispatcher_t::validate_and_execute,
         &manager_dispatcher_t::get_database_statistics,
         &manager_dispatcher_t::process_batch_buffer,
         &manager_dispatcher_t::get_cached_value,
         &manager_dispatcher_t::execute_with_retry,
-    
-        &manager_dispatcher_t::create_row_stream
-    >;
 
-    // =========================================================================
-    // behavior() - message dispatch with pending coroutine management
-    // =========================================================================
+        &manager_dispatcher_t::fetch_row_batch
+    >;
 
     behavior_t behavior(mailbox::message* msg) {
         auto tid = thread_id_str();
         g_log.log("[%::behavior] thread=% command=%", name_, tid, msg->command());
 
         switch (msg->command()) {
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::poll>:
-                co_await poll();
-                break;
             case msg_id<manager_dispatcher_t, &manager_dispatcher_t::size>:
                 co_await dispatch(this, &manager_dispatcher_t::size, msg);
                 break;
@@ -727,8 +613,8 @@ public:
             case msg_id<manager_dispatcher_t, &manager_dispatcher_t::execute_with_retry>:
                 co_await dispatch(this, &manager_dispatcher_t::execute_with_retry, msg);
                 break;
-            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::create_row_stream>:
-                co_await dispatch(this, &manager_dispatcher_t::create_row_stream, msg);
+            case msg_id<manager_dispatcher_t, &manager_dispatcher_t::fetch_row_batch>:
+                co_await dispatch(this, &manager_dispatcher_t::fetch_row_batch, msg);
                 break;
             default:
                 g_log.log("[%::behavior] Unknown command!", name_);
@@ -736,97 +622,11 @@ public:
         }
     }
 
-    // =========================================================================
-    // Pending coroutine management
-    // =========================================================================
-
-    bool has_pending() const {
-        return !pending_size_.empty() ||
-               !pending_execute_.empty() ||
-               !pending_transaction_.empty() ||
-               !pending_aggregate_.empty() ||
-               !pending_detail_.empty();
-    }
-
-    /// @brief Clean up completed futures
-    /// @note With auto-resume in set_value()/set_ready(), coroutines resume automatically
-    /// This function just removes completed futures from pending lists
-    void poll_pending() {
-        // Clean up completed size futures
-        for (auto it = pending_size_.begin(); it != pending_size_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] size coroutine completed", name_);
-                it = pending_size_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        // Clean up completed execute futures
-        for (auto it = pending_execute_.begin(); it != pending_execute_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] execute coroutine completed", name_);
-                it = pending_execute_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        // Clean up completed transaction futures
-        for (auto it = pending_transaction_.begin(); it != pending_transaction_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] transaction coroutine completed", name_);
-                it = pending_transaction_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        // Clean up completed aggregate futures
-        for (auto it = pending_aggregate_.begin(); it != pending_aggregate_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] aggregate coroutine completed", name_);
-                it = pending_aggregate_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        // Clean up completed detail futures
-        for (auto it = pending_detail_.begin(); it != pending_detail_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] detail coroutine completed", name_);
-                it = pending_detail_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        // Clean up completed transform futures
-        for (auto it = pending_transform_.begin(); it != pending_transform_.end();) {
-            if (it->is_ready()) {
-                g_log.log("[%::poll_pending] transform coroutine completed", name_);
-                it = pending_transform_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    const std::string& name() const { return name_; }
-
-    ~manager_dispatcher_t() = default;
-
 private:
     address_t memory_storage_;
+    std::atomic<std::size_t> storage_owed_{0};
     std::string name_;
 
-    // Pending coroutines by type
-    std::vector<unique_future<size_result_t>> pending_size_;
-    std::vector<unique_future<cursor_t_ptr>> pending_execute_;
-    std::vector<unique_future<transaction_result_t>> pending_transaction_;
-    std::vector<unique_future<aggregate_result_t>> pending_aggregate_;
-    std::vector<unique_future<std::string>> pending_detail_;
-    std::vector<unique_future<int>> pending_transform_;  // for transform_with_lambda
-    
-    std::vector<generator<std::string>> pending_generators_;
-
-    // Cursor tracking by session
     std::unordered_map<session_id_t, cursor_t*, session_id_hash> result_storage_;
 };
 

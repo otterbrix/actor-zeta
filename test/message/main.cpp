@@ -30,9 +30,6 @@ constexpr static auto three = actor_zeta::mailbox::make_message_id(3);
 
 namespace {
 
-// Helper functions for testing message in containers
-// Note: message constructor no longer takes result_slot parameter
-
 template<class Seq>
 void check_seq_push_back(Seq& v, std::pmr::memory_resource* res) {
     v.emplace_back(res, one);
@@ -51,7 +48,6 @@ void check_seq_insert_at_end(Seq& v, std::pmr::memory_resource* res) {
     v.clear();
 }
 
-// For queue<message>
 inline void check_queue_push(std::queue<message>& q,
                              std::pmr::memory_resource* res) {
     q.emplace(res, one);
@@ -60,8 +56,6 @@ inline void check_queue_push(std::queue<message>& q,
     REQUIRE(q.size() == 3);
     while (!q.empty()) q.pop();
 }
-
-// --- For map<size_t, message> ---
 
 inline void check_map_basic(std::map<size_t, message>& m,
                             std::pmr::memory_resource* res) {
@@ -144,13 +138,11 @@ TEST_CASE("message (no move/copy of message/rtt)") {
     }
 
     SECTION("simple") {
-        // 1) simple message via make_message
         auto [msg, future] = actor_zeta::detail::make_message(resource, one);
-        REQUIRE( static_cast<bool>(msg) ); // message_ptr has operator bool
+        REQUIRE( static_cast<bool>(msg) );
         REQUIRE( msg->command() == actor_zeta::mailbox::make_message_id(1) );
-        actor_zeta::detail::ignore_unused(future); // unused in this test
+        actor_zeta::detail::ignore_unused(future);
 
-        // 2) separate payload - use specialized rtt move constructor
         rtt body(resource, int(1));
         message msg2(resource, one, std::move(body));
         REQUIRE(msg2.body().get<int>(0) == 1);
@@ -170,7 +162,6 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         message msg1(resource, three);
         REQUIRE( msg1.command() == actor_zeta::mailbox::make_message_id(3) );
 
-        // Use allocator-extended move constructor (PMR migration)
         message msg2(std::allocator_arg, resource, std::move(msg1));
         REQUIRE( msg2.command() == actor_zeta::mailbox::make_message_id(3) );
     }
@@ -189,44 +180,36 @@ TEST_CASE("message (no move/copy of message/rtt)") {
         REQUIRE( msg.command() == actor_zeta::mailbox::make_message_id(0) );
     }
 
-    // NOTE: Cross-arena RTT migration is not supported for type-erased containers
-    // containing non-trivial types, as it would require proper copy construction
-    // which is impossible without runtime type information
+    // Same-arena only: rtt's allocator-extended move asserts the arenas match, since
+    // migrating a type-erased container would need copy construction it cannot do.
     SECTION("rtt same-arena migration") {
-        // Create rtt in arena
         auto* arena =std::pmr::get_default_resource();
         rtt rtt1(arena, int(42), std::string("test"), double(3.14));
         REQUIRE( rtt1.get<int>(0) == 42 );
         REQUIRE( rtt1.get<std::string>(1) == "test" );
         REQUIRE( rtt1.get<double>(2) == Approx(3.14) );
 
-        // Same-arena migration via allocator-extended move constructor
         rtt rtt2(std::allocator_arg, arena, std::move(rtt1));
 
-        // Verify data is preserved after migration
         REQUIRE( rtt2.get<int>(0) == 42 );
         REQUIRE( rtt2.get<std::string>(1) == "test" );
         REQUIRE( rtt2.get<double>(2) == Approx(3.14) );
     }
 
     SECTION("init_future_slot and transfer_ownership") {
-        // Test the new unified slot API
         message msg(resource, one);
         REQUIRE( !msg.has_result_slot() );
 
-        // Create a shared_state and init the slot
         auto* state = actor_zeta::detail::allocate_shared_state<int>(resource);
         msg.init_future_slot<int>(state);
         REQUIRE( msg.has_result_slot() );
 
-        // Transfer ownership
         msg.transfer_ownership();
 
-        // After transfer, destructor should NOT call cleanup_fn_
-        // (We can't directly test this, but it should not crash)
-
-        // Clean up manually since ownership was transferred
-        (void)state->release_promise();
+        // After transfer_ownership() ~message must not run cleanup_fn_, so the state
+        // is released by hand here, as the dispatch coroutine otherwise would.
+        const bool deallocated = state->release_promise();
+        REQUIRE_FALSE(deallocated);
         state->release_future();
     }
 }

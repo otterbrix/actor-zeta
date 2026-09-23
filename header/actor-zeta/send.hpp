@@ -7,8 +7,6 @@ namespace actor_zeta {
 
     namespace detail {
 
-        // Compile-time argument validation
-
         template<typename Actor, auto MethodPtr, typename... Args>
         struct validate_send_args {
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
@@ -33,82 +31,49 @@ namespace actor_zeta {
                 "(move/copy constructible, not abstract)");
         };
 
-        // Dispatch implementation - creates message and calls enqueue_impl
-
         template<typename Actor, auto MethodPtr, uint64_t ActionId, typename ActorPtr, typename... Args>
         inline auto dispatch_method_impl(ActorPtr* actor, Args&&... args)
             -> send_result_t<Actor, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type> {
-            (void)validate_send_args<Actor, MethodPtr, Args...>{};
+            // Instantiated for its static_asserts only.
+            [[maybe_unused]] const validate_send_args<Actor, MethodPtr, Args...> arg_check{};
 
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
             using method_result_type = typename callable_trait::result_type;
 
             auto cmd = mailbox::make_message_id(ActionId);
 
-            if constexpr (type_traits::is_unique_future_v<method_result_type>) {
-                using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
+            // dispatch_traits rejects any other return type before we get here.
+            using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
-                auto [msg, future] = detail::make_message<value_type>(
-                    actor->resource(), cmd, std::forward<Args>(args)...);
+            auto [msg, future] = detail::make_message<value_type>(
+                actor->resource(), cmd, std::forward<Args>(args)...);
 
-                // On queue_closed the message destructor calls cleanup_fn_, which sets
-                // operation_canceled on the slot and releases the promise — no manual
-                // handling needed here.
-                auto [needs_sched, result] = actor->enqueue_impl(std::move(msg));
-                ignore_unused(result);
-                return {needs_sched, std::move(future)};
-
-            } else if constexpr (type_traits::is_generator_v<method_result_type>) {
-                using value_type = typename method_result_type::value_type;
-
-                auto [msg, gen] = detail::make_generator_message<value_type>(
-                    actor->resource(), cmd, std::forward<Args>(args)...);
-
-                auto [needs_sched, enq_result] = actor->enqueue_impl(std::move(msg));
-
-                if (enq_result == enqueue_result::queue_closed) {
-                    gen.cancel();
-                }
-
-                return {needs_sched, std::move(gen)};
-            }
+            // On queue_closed the message destructor calls cleanup_fn_, which sets
+            // operation_canceled on the slot and releases the promise — no manual
+            // handling needed here.
+            auto [needs_sched, result] = actor->enqueue_impl(std::move(msg));
+            ignore_unused(result);
+            return {needs_sched, std::move(future)};
         }
-
-        // Dispatch for address_t (interface polymorphism)
 
         template<typename Interface, auto MethodPtr, uint64_t ActionId, typename... Args>
         inline auto dispatch_method_impl_address(actor::address_t target, Args&&... args)
             -> send_result_t<Interface, typename type_traits::callable_trait<decltype(MethodPtr)>::result_type> {
-            (void)validate_send_args<Interface, MethodPtr, Args...>{};
+            // Instantiated for its static_asserts only.
+            [[maybe_unused]] const validate_send_args<Interface, MethodPtr, Args...> arg_check{};
 
             using callable_trait = type_traits::callable_trait<decltype(MethodPtr)>;
             using method_result_type = typename callable_trait::result_type;
 
             auto cmd = mailbox::make_message_id(ActionId);
 
-            if constexpr (type_traits::is_unique_future_v<method_result_type>) {
-                using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
+            using value_type = typename type_traits::is_unique_future<method_result_type>::value_type;
 
-                auto [msg, future] = detail::make_message<value_type>(
-                    target.resource(), cmd, std::forward<Args>(args)...);
-                auto [needs_sched, result] = target.enqueue_impl(std::move(msg));
-                ignore_unused(result);
-                return {needs_sched, std::move(future)};
-
-            } else if constexpr (type_traits::is_generator_v<method_result_type>) {
-                using value_type = typename method_result_type::value_type;
-
-                auto [msg, gen] = detail::make_generator_message<value_type>(
-                    target.resource(), cmd, std::forward<Args>(args)...);
-
-                auto [needs_sched, enq_result] = target.enqueue_impl(std::move(msg));
-
-                if (enq_result == enqueue_result::queue_closed) {
-                    gen.cancel();
-                }
-
-                return {needs_sched, std::move(gen)};
-            }
+            auto [msg, future] = detail::make_message<value_type>(
+                target.resource(), cmd, std::forward<Args>(args)...);
+            auto [needs_sched, result] = target.enqueue_impl(std::move(msg));
+            ignore_unused(result);
+            return {needs_sched, std::move(future)};
         }
 
     } // namespace detail
@@ -175,7 +140,7 @@ namespace actor_zeta {
 
         assert(target && "target address must not be empty");
 
-        auto* actor = static_cast<Actor*>(target.get());   // direct dispatch path
+        auto* actor = static_cast<Actor*>(target.get());
         using methods = typename Actor::dispatch_traits::methods;
 
         return runtime_dispatch_helper<Actor, Method, methods>::dispatch(

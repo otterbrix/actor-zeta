@@ -1,10 +1,12 @@
-#define CATCH_CONFIG_MAIN // This tells Catch to provide a main() - only do this in one cpp file
+#define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
 #define TEST_HAS_NO_EXCEPTIONS
 
 #include <actor-zeta/detail/queue/lifo_inbox.hpp>
 #include <actor-zeta/detail/queue/singly_linked.hpp>
+#include <actor-zeta/mailbox/make_message.hpp>
+#include <actor-zeta/mailbox/message.hpp>
 
 using namespace actor_zeta::detail;
 
@@ -87,4 +89,27 @@ TEST_CASE("lifo_inbox_tests") {
         REQUIRE(res == enqueue_result::success);
         REQUIRE(fix.close_and_fetch() == "21");
     }
+}
+
+// A queue must free its leftovers with the element's OWN deleter: mailbox::message
+// lives in a PMR block behind a BlockHdr, so std::default_delete hands the global
+// allocator a pointer that is not the allocation base. The reachable path is a push
+// into an already-closed inbox (a send racing shutdown), where ASan reported "free on
+// address which was not malloc()-ed". The static_assert in lifo_inbox/linked_list makes
+// the wrong instantiation a COMPILE error; this pins the runtime half, and bites under
+// ASan.
+
+TEST_CASE("lifo_inbox: a rejected push frees the message through its own deleter") {
+    auto* resource = std::pmr::get_default_resource();
+    lifo_inbox<actor_zeta::mailbox::message, actor_zeta::mailbox::message_deleter> inbox;
+
+    auto msg = actor_zeta::mailbox::pmr_make_message(
+        resource, resource, actor_zeta::mailbox::make_message_id(7));
+    REQUIRE(msg);
+
+    inbox.close();
+
+    // Ownership passes to the queue, which must reject it AND free it correctly.
+    const auto result = inbox.push_front(msg.release());
+    REQUIRE(result == enqueue_result::queue_closed);
 }

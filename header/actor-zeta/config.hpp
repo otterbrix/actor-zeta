@@ -27,9 +27,12 @@ namespace actor_zeta {
             "actor-zeta REQUIRES C++20 Coroutines Support\n"
             "\n"
             "Required: <coroutine> or <experimental/coroutine>\n"
-            "Minimum: GCC 10+, Clang 14+ (or Clang 8-13 with -fcoroutines-ts), MSVC 2019 16.8+\n"
+            "Minimum: GCC 10+, Clang 14+, MSVC 2019 16.8+\n"
             "\n"
-            "Fix: Update compiler, add -std=c++20, or add -fcoroutines-ts for experimental\n");
+            "Note: <experimental/coroutine> is detected but NOT supported --\n"
+            "it cannot express noop_coroutine(), which symmetric transfer requires.\n"
+            "\n"
+            "Fix: Update the compiler and add -std=c++20\n");
     }
 #endif
 
@@ -42,8 +45,7 @@ namespace actor_zeta {
 
 #define CACHE_LINE_SIZE 64
 
-// RETURNS_NONNULL - marks function as never returning null pointer.
-// Helps GCC/Clang eliminate false positive -Wnull-dereference warnings.
+// Lets GCC/Clang drop false-positive -Wnull-dereference warnings.
 #if defined(__GNUC__) // GCC and Clang
 #define RETURNS_NONNULL [[gnu::returns_nonnull]]
 #else

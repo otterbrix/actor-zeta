@@ -5,31 +5,36 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/scheduler/sharing_scheduler.hpp>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
 
-// =============================================================================
-// NOTE: bad_shutdown_actor test removed!
-// =============================================================================
+// Stress, not proof: teardown under load. ~cooperative_actor publishes
+// `destroying` and then wait_for_activity_to_drain()s for the thread holding
+// `running` and for any sender already past enqueue_impl's gate -- that much it
+// does protect, and that is what these cases exercise.
 //
-// REASON: With shutdown_guard_t, race condition is IMPOSSIBLE to reproduce!
-//
-// BEFORE (without shutdown_guard):
-//   - Actor without explicit begin_shutdown() → race condition
-//   - Test could reliably reproduce bug with TSan
-//
-// NOW (with shutdown_guard):
-//   - shutdown_guard_t automatically calls begin_shutdown() for ALL actors
-//   - Even actors without explicit destructor are SAFE
-//   - Race condition cannot be reproduced anymore!
-//
-// CONCLUSION: This is GOOD! shutdown_guard_t provides automatic safety.
-//             Test was useful for finding the bug, but now the bug is fixed.
-// =============================================================================
+// What it CANNOT protect is a job already sitting in the scheduler's queue: the
+// actor holds no scheduler and cannot revoke it, so a worker picking that job up
+// after the actor is gone reads freed memory. CLAUDE.md lists exactly that as
+// unsafe. So each case here drains its own work before letting the actor die;
+// destroying one mid-flight is UB, not a property to assert. ASan on Linux
+// reported it; macOS ASan did not.
 
-// =============================================================================
-// Test Actor - Demonstrates automatic shutdown_guard protection
-// =============================================================================
+namespace {
+    // Bounded: a stalled actor must fail the assertion, not hang the suite.
+    template<typename Actor>
+    [[nodiscard]] bool drain(Actor* actor, std::size_t expected) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (actor->processed_count() < expected) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return true;
+    }
+} // namespace
 
 class good_shutdown_actor final : public actor_zeta::basic_actor<good_shutdown_actor> {
 public:
@@ -38,9 +43,7 @@ public:
         , counter_(0) {
     }
 
-    // NOTE: No explicit destructor needed!
-    // shutdown_guard_t automatically calls begin_shutdown() before base class destructor.
-    // This prevents race condition - safe to destroy dispatch() members.
+    // ~cooperative_actor does the waiting; nothing to add here.
     ~good_shutdown_actor() = default;
 
     actor_zeta::unique_future<int> slow_task(int value) {
@@ -66,18 +69,7 @@ private:
     std::atomic<size_t> counter_;
 };
 
-// =============================================================================
-// Aggressive Shutdown Test - Verifies automatic shutdown_guard protection
-// =============================================================================
-
-TEST_CASE("Aggressive Shutdown Test: Automatic shutdown_guard protection") {
-    // TEST OBJECTIVE:
-    // Verify that proper use of begin_shutdown() prevents race condition
-    //
-    // EXPECTED RESULT WITH TSAN:
-    // - NO data races detected
-    // - All operations synchronized correctly
-
+TEST_CASE("Aggressive Shutdown Test: Automatic teardown under load") {
     auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
     scheduler->start();
@@ -104,33 +96,23 @@ TEST_CASE("Aggressive Shutdown Test: Automatic shutdown_guard protection") {
                 }
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-
-            // begin_shutdown() called in destructor → safe destruction
+            // Drain before the actor dies: a queued job outliving it is UB.
+            REQUIRE(drain(actor.get(), NUM_MESSAGES));
         }
 
         futures.clear();
     }
 
     scheduler->stop();
-
-    // If we reach here without TSan errors, test passed!
-    REQUIRE(true);
 }
 
 TEST_CASE("Stress Test: Concurrent actor creation/destruction") {
-    // TEST OBJECTIVE:
-    // Stress test with many actors being created and destroyed concurrently
-    //
-    // EXPECTED RESULT:
-    // - No races with proper begin_shutdown() usage
-    // - No crashes or memory leaks
-
     auto* resource =std::pmr::get_default_resource();
     auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
     scheduler->start();
 
     std::atomic<int> completed{0};
+    std::atomic<int> stranded{0};
     constexpr int NUM_THREADS = 4;
     constexpr int NUM_ACTORS = 48;  // Must be divisible by NUM_THREADS
 
@@ -141,8 +123,8 @@ TEST_CASE("Stress Test: Concurrent actor creation/destruction") {
                 {
                     auto actor = actor_zeta::spawn<good_shutdown_actor>(resource);
 
-                    // Send a few messages
-                    for (int j = 0; j < 10; ++j) {
+                    constexpr int kMessages = 10;
+                    for (int j = 0; j < kMessages; ++j) {
                         auto [needs_sched, future] = actor_zeta::send(actor.get(),
                                                       &good_shutdown_actor::slow_task, j);
                         if (needs_sched) {
@@ -150,8 +132,12 @@ TEST_CASE("Stress Test: Concurrent actor creation/destruction") {
                         }
                     }
 
-                    // Tiny sleep to ensure some messages are queued
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    // Drained, not raced: destroying an actor whose job is still
+                    // queued is UB. The concurrency under test is the spawn and
+                    // teardown storm across threads, not that window.
+                    if (!drain(actor.get(), kMessages)) {
+                        stranded.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
 
                 completed.fetch_add(1, std::memory_order_relaxed);
@@ -165,5 +151,6 @@ TEST_CASE("Stress Test: Concurrent actor creation/destruction") {
 
     scheduler->stop();
 
+    REQUIRE(stranded.load() == 0);
     REQUIRE(completed.load() == NUM_ACTORS);
 }

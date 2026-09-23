@@ -9,24 +9,6 @@
 
 namespace actor_zeta { namespace test {
 
-    namespace {
-
-        class dummy_worker {
-        public:
-            dummy_worker(scheduler_test_t* parent)
-                : parent_(parent) {
-            }
-
-            void execute_later(scheduler::job_ptr job) {
-                parent_->jobs.push_back(job);
-            }
-
-        private:
-            scheduler_test_t* parent_;
-        };
-
-    } // namespace
-
     scheduler_test_t::scheduler_test_t(std::size_t num_worker_threads, std::size_t max_throughput)
         : max_throughput_(max_throughput)
         , num_workers_(num_worker_threads) {
@@ -35,7 +17,22 @@ namespace actor_zeta { namespace test {
     void scheduler_test_t::start() {}
 
     void scheduler_test_t::stop() {
-        while (run() > 0) {}
+        // "queue non-empty" is not a termination condition: a behavior suspended on a
+        // pending co_await legitimately returns `resume` with zero messages handled,
+        // forever. Drain until a full sweep of the queue makes no progress.
+        for (;;) {
+            const size_t n = jobs.size();
+            if (n == 0) {
+                return;
+            }
+            size_t progressed = 0;
+            for (size_t i = 0; i < n && run_once(); ++i) {
+                progressed += last_messages_processed_;
+            }
+            if (progressed == 0) {
+                return;
+            }
+        }
     }
 
     void scheduler_test_t::enqueue(scheduler::job_ptr job) {
@@ -48,10 +45,13 @@ namespace actor_zeta { namespace test {
         }
         auto job = jobs.front();
         jobs.pop_front();
-        dummy_worker worker{this};
-        switch (job.resume(1)) {
+        auto info = job.resume(1);
+        last_messages_processed_ = info.messages_processed;
+        switch (info.result) {
             case scheduler::resume_result::resume:
-                jobs.push_front(job);
+                // FIFO, matching work_sharing::enqueue. push_front would let one
+                // spinning job monopolise the deque and starve every other actor.
+                jobs.push_back(job);
                 break;
             case scheduler::resume_result::done:
             case scheduler::resume_result::awaiting:

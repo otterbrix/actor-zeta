@@ -11,30 +11,14 @@
 #include <memory>
 #include <array>
 
-// =============================================================================
-// Test for race condition described in docs/actor-zeta-available-race.md
-//
-// BUG: Race between unique_future::available() and final_suspend()
-//
-// When coroutine executes co_return:
-// 1. Destructors of local variables are called
-// 2. promise.return_void() / return_value() is called
-//    -> set_value() is called
-//    -> available() becomes TRUE here
-// 3. promise.final_suspend() is called
-//    -> coroutine is suspended (if suspend_always)
-//
-// available() returns true BEFORE coroutine reaches final_suspend().
-// If another thread destroys future between steps 2 and 3:
-// - handle.destroy() is called on non-suspended coroutine
-// - This calls destructors of local variables AGAIN
-// - Result: use-after-free / double-free
-//
-// IMPORTANT: This test is most effective when run with AddressSanitizer:
-//   cmake -DCMAKE_CXX_FLAGS="-fsanitize=address -g" ...
-// =============================================================================
+// Futures destroyed the instant is_ready() reads true, with the producing
+// coroutine's locals instrumented to notice a second destruction. Guards, not
+// repros: is_ready() is promise_released, set only after the value is written and
+// the continuation claimed, and a finished producer parks at final_suspend for
+// release() to reclaim rather than racing the consumer for the frame. Most
+// meaningful under AddressSanitizer.
 
-// Magic number sentinel to detect double-free and use-after-free
+// Magic-number sentinel: a second destruction or a use-after-free is counted.
 class sentinel_data {
 public:
     static constexpr uint64_t MAGIC_ALIVE = 0xFEEDFACECAFEBABEULL;
@@ -48,7 +32,6 @@ public:
 
     ~sentinel_data() {
         if (magic_ != MAGIC_ALIVE) {
-            // Double destruction or use-after-free detected!
             double_destructions_.fetch_add(1, std::memory_order_relaxed);
         }
         magic_ = MAGIC_DEAD;
@@ -61,7 +44,7 @@ public:
     sentinel_data(sentinel_data&& other) noexcept
         : magic_(MAGIC_ALIVE)
         , value_(other.value_) {
-        other.magic_ = MAGIC_DEAD; // Mark source as moved
+        other.magic_ = MAGIC_DEAD;
         constructions_.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -93,41 +76,36 @@ std::atomic<int> sentinel_data::constructions_{0};
 std::atomic<int> sentinel_data::destructions_{0};
 std::atomic<int> sentinel_data::double_destructions_{0};
 
-// Actor with coroutines that have local variables
 class available_race_actor final : public actor_zeta::basic_actor<available_race_actor> {
 public:
     explicit available_race_actor(std::pmr::memory_resource* resource)
         : actor_zeta::basic_actor<available_race_actor>(resource)
         , processed_count_(0) {}
 
-    // Coroutine with single local variable
     actor_zeta::unique_future<int> process_simple(int value) {
         sentinel_data local_data(value);
-        std::this_thread::yield(); // Increase race window
+        std::this_thread::yield(); // widen the window
         int result = local_data.value() * 2;
         processed_count_.fetch_add(1, std::memory_order_relaxed);
         co_return result;
     }
 
-    // Coroutine with multiple local variables - more destructors to call
     actor_zeta::unique_future<int> process_complex(int value) {
         sentinel_data data1(value);
         sentinel_data data2(value + 1);
         sentinel_data data3(value + 2);
         std::array<sentinel_data*, 3> ptrs = {&data1, &data2, &data3};
 
-        // Do some work
         int sum = 0;
         for (auto* p : ptrs) {
             sum += p->value();
-            std::this_thread::yield(); // Increase race window
+            std::this_thread::yield(); // widen the window
         }
 
         processed_count_.fetch_add(1, std::memory_order_relaxed);
         co_return sum;
     }
 
-    // Coroutine with nested scopes - complex destructor ordering
     actor_zeta::unique_future<int> process_nested(int value) {
         sentinel_data outer(value);
         int result = 0;
@@ -166,10 +144,6 @@ private:
     std::atomic<std::size_t> processed_count_;
 };
 
-// =============================================================================
-// Test 1: Basic available() race - destroy future when available() returns true
-// =============================================================================
-
 TEST_CASE("available race: basic destroy on available") {
     sentinel_data::reset_counters();
 
@@ -190,19 +164,16 @@ TEST_CASE("available race: basic destroy on available") {
             scheduler->enqueue(actor.get());
         }
 
-        // Thread that aggressively polls and destroys
         std::thread destroyer([fut = std::move(future), &races_triggered]() mutable {
-            // Tight loop polling - no yield to maximize race window hit
+            // No yield: the destroy should land as close to readiness as possible.
             int spins = 0;
             while (!fut.is_ready() && spins < 100000) {
                 ++spins;
             }
 
-            // Check for double destruction before destroy
             int before = sentinel_data::double_destructions();
 
-            // Future destroyed here - potential use-after-free!
-            // Move to temporary that immediately goes out of scope
+            // Destroyed untaken, the instant is_ready() read true.
             { auto temp = std::move(fut); }
 
             int after = sentinel_data::double_destructions();
@@ -226,17 +197,11 @@ TEST_CASE("available race: basic destroy on available") {
     std::cout << "Races triggered:     " << races_triggered.load() << "\n";
     std::cout << "===================================\n\n";
 
-    // BUG INDICATOR: double destructions detected means race condition triggered
-    // With ASan this will crash immediately on use-after-free
+    // Under ASan a use-after-free aborts before this line.
     WARN("Double destructions detected: " << total_double);
 
-    // Balance check
     REQUIRE(sentinel_data::constructions() == sentinel_data::destructions());
 }
-
-// =============================================================================
-// Test 2: Complex coroutine with multiple locals
-// =============================================================================
 
 TEST_CASE("available race: complex coroutine with multiple locals") {
     sentinel_data::reset_counters();
@@ -257,11 +222,8 @@ TEST_CASE("available race: complex coroutine with multiple locals") {
             scheduler->enqueue(actor.get());
         }
 
-        // Wait for ready then immediately destroy
         while (!future.is_ready()) {
-            // Tight spin
         }
-        // Destroy happens when future goes out of scope
     }
 
     scheduler->stop();
@@ -276,10 +238,6 @@ TEST_CASE("available race: complex coroutine with multiple locals") {
     WARN("Double destructions: " << sentinel_data::double_destructions());
     REQUIRE(sentinel_data::constructions() == sentinel_data::destructions());
 }
-
-// =============================================================================
-// Test 3: High concurrency - multiple sender threads
-// =============================================================================
 
 TEST_CASE("available race: high concurrency stress") {
     sentinel_data::reset_counters();
@@ -307,12 +265,10 @@ TEST_CASE("available race: high concurrency stress") {
                     scheduler->enqueue(actor.get());
                 }
 
-                // Aggressive polling
                 int spins = 0;
                 while (!future.is_ready() && spins < 50000) {
                     ++spins;
                 }
-                // Future destroyed here
             }
         });
     }
@@ -334,11 +290,6 @@ TEST_CASE("available race: high concurrency stress") {
     REQUIRE(sentinel_data::constructions() == sentinel_data::destructions());
 }
 
-// =============================================================================
-// Test 4: poll_pending() pattern from otterbrix
-// Simulates the exact pattern that triggers the bug in production
-// =============================================================================
-
 TEST_CASE("available race: poll_pending pattern simulation") {
     sentinel_data::reset_counters();
 
@@ -352,7 +303,6 @@ TEST_CASE("available race: poll_pending pattern simulation") {
     constexpr int NUM_BATCHES = 50;
 
     for (int batch = 0; batch < NUM_BATCHES; ++batch) {
-        // Create batch of pending futures (like pending_ vector in dispatcher)
         std::vector<actor_zeta::unique_future<int>> pending;
         pending.reserve(BATCH_SIZE);
 
@@ -368,14 +318,10 @@ TEST_CASE("available race: poll_pending pattern simulation") {
             pending.push_back(std::move(future));
         }
 
-        // Simulate poll_pending() - remove futures that are available
-        // This is the EXACT problematic pattern!
+        // Erase (destroy) each future as soon as it reads ready.
         while (!pending.empty()) {
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->is_ready()) {
-                    // BUG: is_ready() is true but coroutine may not have
-                    // reached final_suspend() yet!
-                    // Erasing calls ~unique_future -> handle.destroy()
                     it = pending.erase(it);
                 } else {
                     ++it;
@@ -383,7 +329,6 @@ TEST_CASE("available race: poll_pending pattern simulation") {
             }
 
             if (!pending.empty()) {
-                // Small delay between polls
                 std::this_thread::yield();
             }
         }
@@ -401,11 +346,6 @@ TEST_CASE("available race: poll_pending pattern simulation") {
     WARN("Double destructions in poll_pending: " << sentinel_data::double_destructions());
     REQUIRE(sentinel_data::constructions() == sentinel_data::destructions());
 }
-
-// =============================================================================
-// Test 5: Verify the proposed fix would work (conceptual test)
-// Shows that adding small delay after available() prevents the race
-// =============================================================================
 
 TEST_CASE("available race: safe destroy with delay (workaround demo)") {
     sentinel_data::reset_counters();
@@ -430,11 +370,8 @@ TEST_CASE("available race: safe destroy with delay (workaround demo)") {
             std::this_thread::yield();
         }
 
-        // WORKAROUND: Small delay to allow final_suspend() to complete
-        // In production fix, this would be: while (!future.safely_destroyable()) yield;
+        // The delay is the point of this case; the cases above destroy with none.
         std::this_thread::sleep_for(std::chrono::microseconds(10));
-
-        // Now safe to destroy
     }
 
     scheduler->stop();
@@ -444,7 +381,6 @@ TEST_CASE("available race: safe destroy with delay (workaround demo)") {
     std::cout << "Double destructions: " << sentinel_data::double_destructions() << "\n";
     std::cout << "======================================\n\n";
 
-    // With workaround, should have no double destructions
     REQUIRE(sentinel_data::double_destructions() == 0);
     REQUIRE(sentinel_data::constructions() == sentinel_data::destructions());
 }

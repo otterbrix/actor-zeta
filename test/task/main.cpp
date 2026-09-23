@@ -3,6 +3,7 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 #include <memory>
 #include <memory_resource>
@@ -10,9 +11,7 @@
 
 using namespace actor_zeta;
 
-// Cooperative actor whose method produces a unique_future<int>.
-// Used both as a worker-thread producer (driven by a real sharing_scheduler) and as a
-// manually-pumped actor (driven by run_until_complete).
+// Used as a worker-thread producer (sharing_scheduler) and as a hand-pumped actor (scheduler_test_t).
 class compute_actor final : public basic_actor<compute_actor> {
 public:
     explicit compute_actor(std::pmr::memory_resource* res)
@@ -33,12 +32,6 @@ public:
     }
 };
 
-// ============================================================================
-// Test 1: honest cross-thread consumer poll — a real sharing_scheduler worker is
-// the producer; the main thread polls is_ready() and takes the value via take_ready().
-// No task<>/sync_wait: there is nothing to pump locally, the worker resolves the
-// future cross-thread.
-// ============================================================================
 TEST_CASE("cross-thread: scheduler worker produces, main thread polls take_ready") {
     auto* resource = std::pmr::get_default_resource();
 
@@ -53,26 +46,36 @@ TEST_CASE("cross-thread: scheduler worker produces, main thread polls take_ready
         sched->enqueue(actor.get());
     }
 
-    // Consumer drive on the main thread: the worker thread resolves the future cross-thread;
-    // run_until_complete pumps a plain yield until ready, then takes the value (no manual loop).
-    int result = run_until_complete(future, [] { std::this_thread::yield(); });
+    constexpr int kAwaitCap = 10'000'000;
+    for (int i = 0; i < kAwaitCap && !future.is_ready(); ++i) {
+        std::this_thread::yield(); // a worker resolves it cross-thread; nothing to pump locally
+    }
+    // is_ready() is promise_released, which a promise dying without a value also sets,
+    // so failed() is gated separately. The bound makes a stalled producer fail, not hang.
+    REQUIRE(future.is_ready());
+    REQUIRE(!future.failed());
+    int result = std::move(future).take_ready();
     REQUIRE(result == 42);
 
-    // Respect shutdown order: stop the scheduler BEFORE the actor is destroyed.
-    sched->stop();
+    sched->stop(); // BEFORE the actor is destroyed
 }
 
-// ============================================================================
-// Test 2: run_until_complete drives a future to completion via a manual pump.
-// ============================================================================
-TEST_CASE("run_until_complete drives a future via a manual pump") {
+TEST_CASE("a manual pump drives a future to completion") {
     auto* resource = std::pmr::get_default_resource();
 
-    // No scheduler: this actor is pumped manually on the calling thread.
+    // No worker threads: pumped by hand on the calling thread.
     auto actor = spawn<compute_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     auto [needs_sched, future] = send(actor.get(), &compute_actor::doubler, 50);
+    sched.enqueue(actor.get());
 
-    int result = run_until_complete(future, [&] { actor->resume(1); });
-    REQUIRE(result == 100);
+    // The bound is the hang guard for a never-driven producer; is_ready() is not a value gate, hence failed().
+    constexpr int kPumpCap = 1'000'000;
+    for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
+        sched.run_once();
+    }
+    REQUIRE(future.is_ready());
+    REQUIRE_FALSE(future.failed());
+    REQUIRE(std::move(future).take_ready() == 100);
 }

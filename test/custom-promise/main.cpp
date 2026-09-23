@@ -3,11 +3,8 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/detail/promise_concepts.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 #include <vector>
-
-// ============================================================================
-// Test: promise basic API
-// ============================================================================
 
 TEST_CASE("promise<int> - basic set_value and get_future") {
     auto* resource = std::pmr::get_default_resource();
@@ -20,7 +17,7 @@ TEST_CASE("promise<int> - basic set_value and get_future") {
     REQUIRE_FALSE(future.is_ready());
 
     p.set_value(42);
-    REQUIRE_FALSE(p.valid());  // Promise invalidated after set_value
+    REQUIRE_FALSE(p.valid());
 
     REQUIRE(future.is_ready());
     REQUIRE(std::move(future).take_ready() == 42);
@@ -54,10 +51,6 @@ TEST_CASE("promise<string> - complex type") {
     REQUIRE(std::move(future).take_ready() == "hello world");
 }
 
-// ============================================================================
-// Test: vector of futures - key requirement!
-// ============================================================================
-
 class worker_actor final : public actor_zeta::basic_actor<worker_actor> {
 public:
     explicit worker_actor(std::pmr::memory_resource* ptr, int id)
@@ -83,14 +76,13 @@ private:
 TEST_CASE("vector of futures - same type from different actors") {
     auto* resource = std::pmr::get_default_resource();
 
-    // Create multiple workers
     auto worker1 = actor_zeta::spawn<worker_actor>(resource, 2);
     auto worker2 = actor_zeta::spawn<worker_actor>(resource, 3);
     auto worker3 = actor_zeta::spawn<worker_actor>(resource, 5);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Collect futures in a vector - key requirement!
     std::vector<actor_zeta::unique_future<int>> futures;
-    futures.reserve(3);  // Important: reserve to avoid reallocation
+    futures.reserve(3);
 
     {
         auto [needs_sched, future] = actor_zeta::send(
@@ -117,12 +109,11 @@ TEST_CASE("vector of futures - same type from different actors") {
         futures.push_back(std::move(future));
     }
 
-    // Process messages
-    worker1->resume(10);
-    worker2->resume(10);
-    worker3->resume(10);
+    sched.enqueue(worker1.get());
+    sched.enqueue(worker2.get());
+    sched.enqueue(worker3.get());
+    sched.run();
 
-    // Verify results
     REQUIRE(futures[0].is_ready());
     REQUIRE(futures[1].is_ready());
     REQUIRE(futures[2].is_ready());
@@ -132,35 +123,18 @@ TEST_CASE("vector of futures - same type from different actors") {
     REQUIRE(std::move(futures[2]).take_ready() == 50);  // 10 * 5
 }
 
-// ============================================================================
-// Test: Concepts validation
-// ============================================================================
-
 TEST_CASE("promise concepts - valid_future_value_type") {
-    // void is valid
     static_assert(actor_zeta::detail::valid_future_value_type<void>);
-
-    // Primitive types are valid
     static_assert(actor_zeta::detail::valid_future_value_type<int>);
     static_assert(actor_zeta::detail::valid_future_value_type<double>);
-
-    // Standard library types are valid
     static_assert(actor_zeta::detail::valid_future_value_type<std::string>);
     static_assert(actor_zeta::detail::valid_future_value_type<std::vector<int>>);
-
-    // References are NOT valid
     static_assert(!actor_zeta::detail::valid_future_value_type<int&>);
     static_assert(!actor_zeta::detail::valid_future_value_type<const int&>);
-
-    // const types are NOT valid
     static_assert(!actor_zeta::detail::valid_future_value_type<const int>);
 
     REQUIRE(true);  // All static_asserts passed
 }
-
-// ============================================================================
-// Test: Backward compatibility - old actor code works
-// ============================================================================
 
 class old_style_actor final : public actor_zeta::basic_actor<old_style_actor> {
 public:
@@ -168,7 +142,6 @@ public:
         : actor_zeta::basic_actor<old_style_actor>(ptr)
         , call_count_(0) {}
 
-    // Old-style coroutine method - still works!
     actor_zeta::unique_future<int> compute(int x) {
         ++call_count_;
         co_return x * 2;
@@ -204,36 +177,33 @@ private:
 TEST_CASE("backward compatibility - old actor code works") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<old_style_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Send to typed method
     auto [needs_sched1, future1] = actor_zeta::send(
             actor.get(),
             &old_style_actor::compute,
         21
     );
 
-    actor->resume(10);
+    sched.enqueue(actor.get());
+    sched.run();
 
     REQUIRE(future1.is_ready());
     REQUIRE(std::move(future1).take_ready() == 42);
     REQUIRE(actor->call_count() == 1);
 
-    // Send to void method
     auto [needs_sched2, future2] = actor_zeta::send(
             actor.get(),
             &old_style_actor::do_work
     );
 
-    actor->resume(10);
+    sched.enqueue(actor.get());
+    sched.run();
 
     REQUIRE(future2.is_ready());
-    std::move(future2).take_ready();  // Should not crash
+    std::move(future2).take_ready();
     REQUIRE(actor->call_count() == 2);
 }
-
-// ============================================================================
-// Test: has_custom_promise_type concept
-// ============================================================================
 
 class actor_without_custom_promise : public actor_zeta::basic_actor<actor_without_custom_promise> {
 public:
@@ -249,7 +219,6 @@ public:
     explicit actor_with_custom_promise(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<actor_with_custom_promise>(ptr) {}
 
-    // Custom promise_type template alias
     template<typename T>
     using promise_type = typename actor_zeta::unique_future<T>::promise_type;
 
@@ -258,45 +227,30 @@ public:
 };
 
 TEST_CASE("has_custom_promise_type concept") {
-    // Actor without custom promise_type
     static_assert(!actor_zeta::detail::has_custom_promise_type<actor_without_custom_promise>);
-
-    // Actor with custom promise_type
     static_assert(actor_zeta::detail::has_custom_promise_type<actor_with_custom_promise>);
 
     REQUIRE(true);  // All static_asserts passed
 }
 
-// ============================================================================
-// Test: make_ready_future works
-// ============================================================================
-
 TEST_CASE("make_ready_future - all overloads") {
     auto* resource = std::pmr::get_default_resource();
 
-    // void
     auto void_future = actor_zeta::make_ready_future(resource);
     REQUIRE(void_future.is_ready());
 
-    // int with value
     auto int_future = actor_zeta::make_ready_future<int>(resource, 42);
     REQUIRE(int_future.is_ready());
     REQUIRE(std::move(int_future).take_ready() == 42);
 
-    // string with value
     auto str_future = actor_zeta::make_ready_future<std::string>(resource, std::string("test"));
     REQUIRE(str_future.is_ready());
     REQUIRE(std::move(str_future).take_ready() == "test");
 
-    // int default constructed
     auto int_default = actor_zeta::make_ready_future<int>(resource);
     REQUIRE(int_default.is_ready());
     REQUIRE(std::move(int_default).take_ready() == 0);
 }
-
-// ============================================================================
-// Test: Promise destruction without set_value sets error
-// ============================================================================
 
 TEST_CASE("promise destruction without set_value - sets broken_pipe") {
     auto* resource = std::pmr::get_default_resource();
@@ -304,19 +258,13 @@ TEST_CASE("promise destruction without set_value - sets broken_pipe") {
     actor_zeta::unique_future<int> future([resource]() {
         actor_zeta::promise<int> p(resource);
         auto f = p.get_future();
-        // Promise destroyed without set_value
         return f;
     }());
 
-    // Future should be in failed state with broken_pipe
     REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
 }
-
-// ============================================================================
-// Test: Promise set_error
-// ============================================================================
 
 TEST_CASE("promise set_error - propagates error to future") {
     auto* resource = std::pmr::get_default_resource();

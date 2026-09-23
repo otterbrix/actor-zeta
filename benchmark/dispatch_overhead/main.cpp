@@ -1,8 +1,28 @@
 #include <benchmark/benchmark.h>
 #include <actor-zeta.hpp>
 #include <cstdint>
+#include <cstdlib>
 
 using namespace actor_zeta;
+
+// A one-actor, same-thread run queue. The driver has to stay on the benchmark thread:
+// handing these actors to sharing_scheduler would replace the dispatch cost under test
+// with a condition-variable wakeup and a cross-thread spin. The loop discharges the
+// resume verdict ("put me back in a run queue") instead of dropping it.
+class same_thread_scheduler {
+public:
+    explicit same_thread_scheduler(size_t max_throughput) noexcept
+        : max_throughput_(max_throughput) {}
+
+    template<typename Actor>
+    void enqueue(Actor* actor) {
+        while (actor->resume(max_throughput_).result == scheduler::resume_result::resume) {
+        }
+    }
+
+private:
+    size_t max_throughput_;
+};
 
 class old_style_actor : public basic_actor<old_style_actor> {
 public:
@@ -63,34 +83,52 @@ private:
 static void BM_OldStyleDispatch(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<old_style_actor>(resource);
+    same_thread_scheduler sched(1);
 
     int method_id = static_cast<int>(state.range(0));
+
+    // Probe, outside the measured region: one drive after one send makes the future
+    // ready. That holds per actor+driver, not per method, so probing method1 covers
+    // every case below; see BM_FullCycle_1Arg for why an unchecked take_ready() matters.
+    {
+        auto [probe_needs_sched, probe_future] = send(actor.get(), &old_style_actor::method1, 1);
+        sched.enqueue(actor.get());
+        if (!probe_future.is_ready() || probe_future.failed()) {
+            std::abort();
+        }
+        std::move(probe_future).take_ready();
+    }
 
     for (auto _ : state) {
         switch (method_id) {
             case 0: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method1, 1);
-                run_until_complete(f, [&] { actor->resume(1); });
+                sched.enqueue(actor.get());   // unconditional: this IS the dispatch under measurement
+                std::move(f).take_ready();
                 break;
             }
             case 1: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method2, 2);
-                run_until_complete(f, [&] { actor->resume(1); });
+                sched.enqueue(actor.get());
+                std::move(f).take_ready();
                 break;
             }
             case 2: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method3, 3);
-                run_until_complete(f, [&] { actor->resume(1); });
+                sched.enqueue(actor.get());
+                std::move(f).take_ready();
                 break;
             }
             case 3: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method4, 4);
-                run_until_complete(f, [&] { actor->resume(1); });
+                sched.enqueue(actor.get());
+                std::move(f).take_ready();
                 break;
             }
             case 4: {
                 auto [needs_sched, f] = send(actor.get(), &old_style_actor::method5, 5);
-                run_until_complete(f, [&] { actor->resume(1); });
+                sched.enqueue(actor.get());
+                std::move(f).take_ready();
                 break;
             }
         }
@@ -150,6 +188,10 @@ static void BM_DirectCall_Coroutine(benchmark::State& state) {
 
     for (auto _ : state) {
         auto future = actor->compute(42);
+        if (!future.is_ready() || future.failed()) {
+            state.SkipWithError("drive left the future unready; timings would be meaningless");
+            break;
+        }
         int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
     }
@@ -162,7 +204,6 @@ static void BM_Dispatch_0Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
 
-    // Create message once, reuse
     auto [msg, future_unused] = detail::make_message(resource,
         msg_id<coroutine_actor, &coroutine_actor::noop>);
 
@@ -178,10 +219,30 @@ BENCHMARK(BM_Dispatch_0Args)->Unit(benchmark::kNanosecond);
 static void BM_FullCycle_1Arg(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
+    same_thread_scheduler sched(1);
+
+    // Probe, outside the measured region: one drive after one send makes the future
+    // ready. take_ready() aborts on a valueless future in every build, so
+    // an unchecked violation would read unset storage and report a plausible wrong
+    // number. The timed loop still gates on is_ready()/failed(): one predictable
+    // branch is cheaper than a fabricated timing.
+    {
+        auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::compute, 42);
+        sched.enqueue(actor.get());
+        if (!probe_future.is_ready() || probe_future.failed()) {
+            std::abort();
+        }
+        benchmark::DoNotOptimize(std::move(probe_future).take_ready());
+    }
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        sched.enqueue(actor.get());   // unconditional: this IS the dispatch under measurement
+        if (!f.is_ready() || f.failed()) {
+            state.SkipWithError("drive left the future unready; timings would be meaningless");
+            break;
+        }
+        int result = std::move(f).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -192,10 +253,26 @@ BENCHMARK(BM_FullCycle_1Arg)->Unit(benchmark::kNanosecond);
 static void BM_FullCycle_2Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
+    same_thread_scheduler sched(1);
+
+    // Probe, outside the measured region, as in BM_FullCycle_1Arg.
+    {
+        auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::sum, 10, 20);
+        sched.enqueue(actor.get());
+        if (!probe_future.is_ready() || probe_future.failed()) {
+            std::abort();
+        }
+        benchmark::DoNotOptimize(std::move(probe_future).take_ready());
+    }
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum, 10, 20);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        sched.enqueue(actor.get());   // unconditional: this IS the dispatch under measurement
+        if (!f.is_ready() || f.failed()) {
+            state.SkipWithError("drive left the future unready; timings would be meaningless");
+            break;
+        }
+        int result = std::move(f).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -206,10 +283,26 @@ BENCHMARK(BM_FullCycle_2Args)->Unit(benchmark::kNanosecond);
 static void BM_FullCycle_3Args(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
+    same_thread_scheduler sched(1);
+
+    // Probe, outside the measured region, as in BM_FullCycle_1Arg.
+    {
+        auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::sum3, 10, 20, 30);
+        sched.enqueue(actor.get());
+        if (!probe_future.is_ready() || probe_future.failed()) {
+            std::abort();
+        }
+        benchmark::DoNotOptimize(std::move(probe_future).take_ready());
+    }
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::sum3, 10, 20, 30);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        sched.enqueue(actor.get());   // unconditional: this IS the dispatch under measurement
+        if (!f.is_ready() || f.failed()) {
+            state.SkipWithError("drive left the future unready; timings would be meaningless");
+            break;
+        }
+        int result = std::move(f).take_ready();
         benchmark::DoNotOptimize(result);
     }
 
@@ -220,10 +313,26 @@ BENCHMARK(BM_FullCycle_3Args)->Unit(benchmark::kNanosecond);
 static void BM_FullCycle_Coroutine(benchmark::State& state) {
     auto resource = std::pmr::get_default_resource();
     auto actor = spawn<coroutine_actor>(resource);
+    same_thread_scheduler sched(1);
+
+    // Probe, outside the measured region, as in BM_FullCycle_1Arg.
+    {
+        auto [probe_needs_sched, probe_future] = send(actor.get(), &coroutine_actor::compute, 42);
+        sched.enqueue(actor.get());
+        if (!probe_future.is_ready() || probe_future.failed()) {
+            std::abort();
+        }
+        benchmark::DoNotOptimize(std::move(probe_future).take_ready());
+    }
 
     for (auto _ : state) {
         auto [needs_sched, f] = send(actor.get(), &coroutine_actor::compute, 42);
-        int result = run_until_complete(f, [&] { actor->resume(1); });
+        sched.enqueue(actor.get());   // unconditional: this IS the dispatch under measurement
+        if (!f.is_ready() || f.failed()) {
+            state.SkipWithError("drive left the future unready; timings would be meaningless");
+            break;
+        }
+        int result = std::move(f).take_ready();
         benchmark::DoNotOptimize(result);
     }
 

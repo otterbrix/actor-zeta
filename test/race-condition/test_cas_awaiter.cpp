@@ -12,27 +12,14 @@
 #include <coroutine>
 #include <functional>
 
-// =============================================================================
-// Tests for CAS-based awaiter (Variant B+) as described in:
-//   docs/actor-zeta-race-comprehensive-fix.md §7.2
-//
-// These tests use the NEW API that will be implemented:
-// - await_ready() checks has_result() (not is_ready())
-// - await_suspend() uses CAS to set continuation_
-// - CAS failure means double-await (programmer error)
-// - After CAS success, re-check has_result() for late producer
-// - final_awaiter uses exchange to take continuation atomically
-//
-// IMPORTANT: These tests will NOT COMPILE until the document is implemented.
-// This is intentional - they serve as a specification for the new API.
-// =============================================================================
+// The awaiter protocol, hand-rolled on shared_state so each step can be pinned:
+// await_ready() checks has_result(), NOT is_ready(); await_suspend() installs the
+// continuation with a CAS (a failed CAS is a double-await) and re-checks
+// has_result() afterwards to catch a late producer; final_awaiter claims the
+// continuation with an exchange.
 
 using namespace actor_zeta;
 using namespace actor_zeta::detail;
-
-// =============================================================================
-// TEST SECTION 1: shared_state::continuation_ CAS operations (§7.2)
-// =============================================================================
 
 TEST_CASE("CAS awaiter: initial continuation is nullptr") {
     auto* resource = std::pmr::get_default_resource();
@@ -40,7 +27,8 @@ TEST_CASE("CAS awaiter: initial continuation is nullptr") {
 
     REQUIRE(state->continuation_.load() == nullptr);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -50,7 +38,6 @@ TEST_CASE("CAS awaiter: CAS sets continuation successfully") {
 
     std::coroutine_handle<> handle = std::noop_coroutine();
 
-    // Simulate awaiter: CAS to set continuation
     std::coroutine_handle<> expected = nullptr;
     bool cas_success = state->continuation_.compare_exchange_strong(
         expected, handle,
@@ -59,7 +46,8 @@ TEST_CASE("CAS awaiter: CAS sets continuation successfully") {
     REQUIRE(cas_success);
     REQUIRE(state->continuation_.load() == handle);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -70,14 +58,12 @@ TEST_CASE("CAS awaiter: second CAS fails (double-await detection)") {
     std::coroutine_handle<> handle1 = std::noop_coroutine();
     std::coroutine_handle<> handle2 = std::noop_coroutine();
 
-    // First awaiter succeeds
     std::coroutine_handle<> expected1 = nullptr;
     bool cas1 = state->continuation_.compare_exchange_strong(
         expected1, handle1,
         std::memory_order_acq_rel, std::memory_order_acquire);
     REQUIRE(cas1);
 
-    // Second awaiter fails — double-await detected
     std::coroutine_handle<> expected2 = nullptr;
     bool cas2 = state->continuation_.compare_exchange_strong(
         expected2, handle2,
@@ -85,7 +71,8 @@ TEST_CASE("CAS awaiter: second CAS fails (double-await detection)") {
     REQUIRE_FALSE(cas2);
     REQUIRE(expected2 == handle1);  // expected updated to current value
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -96,35 +83,28 @@ TEST_CASE("CAS awaiter: exchange takes continuation atomically") {
     std::coroutine_handle<> handle = std::noop_coroutine();
     state->continuation_.store(handle, std::memory_order_release);
 
-    // Producer: exchange to take continuation
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
 
     REQUIRE(cont == handle);
     REQUIRE(state->continuation_.load() == nullptr);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
-
-// =============================================================================
-// TEST SECTION 2: await_ready behavior (§7.2)
-// await_ready checks has_result() for fast path
-// =============================================================================
 
 TEST_CASE("CAS awaiter: await_ready returns true if has_result") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
 
-    // Initially: no result
     REQUIRE_FALSE(state->has_result());
 
-    // Set value
     state->set_value(42);
 
-    // Now has_result is true — await_ready should return true
     REQUIRE(state->has_result());
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -134,33 +114,24 @@ TEST_CASE("CAS awaiter: await_ready uses has_result, not is_ready") {
 
     state->set_value(42);
 
-    // has_result is true, but is_ready is false (promise not released)
+    // The state await_ready() sees on an already-completed producer: a result,
+    // but no promise_released yet.
     REQUIRE(state->has_result());
     REQUIRE_FALSE(state->is_ready());
 
-    // await_ready should check has_result → returns true
-    // This is the fast path for already-completed coroutines
-
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
-
-// =============================================================================
-// TEST SECTION 3: await_suspend flow (§7.2)
-// 1. CAS to set continuation
-// 2. Re-check has_result after CAS
-// 3. Return true (suspend) or false (resume immediately)
-// =============================================================================
 
 TEST_CASE("CAS awaiter: await_suspend - producer finished before CAS") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
 
-    // Producer finishes first
     state->set_value(42);
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
 
-    // Awaiter comes late
     std::coroutine_handle<> handle = std::noop_coroutine();
     std::coroutine_handle<> expected = nullptr;
 
@@ -170,11 +141,9 @@ TEST_CASE("CAS awaiter: await_suspend - producer finished before CAS") {
 
     REQUIRE(cas_success);
 
-    // Re-check has_result after CAS
+    // The post-CAS re-check: a result is present, so await_suspend() would return
+    // false and take its continuation back.
     REQUIRE(state->has_result());
-
-    // Since has_result is true, awaiter should return false (resume immediately)
-    // and take back its continuation
 
     state->release_future();
 }
@@ -183,7 +152,6 @@ TEST_CASE("CAS awaiter: await_suspend - producer not finished yet") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
 
-    // Awaiter comes first
     std::coroutine_handle<> handle = std::noop_coroutine();
     std::coroutine_handle<> expected = nullptr;
 
@@ -193,31 +161,20 @@ TEST_CASE("CAS awaiter: await_suspend - producer not finished yet") {
 
     REQUIRE(cas_success);
 
-    // Re-check has_result after CAS
+    // The post-CAS re-check: no result, so await_suspend() would stay suspended.
     REQUIRE_FALSE(state->has_result());
 
-    // Since has_result is false, awaiter returns true (suspends)
-    // Producer will resume via symmetric transfer
-
-    // Producer finishes
     state->set_value(99);
 
-    // Producer takes continuation
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
     REQUIRE(cont == handle);
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
-// =============================================================================
-// TEST SECTION 4: final_awaiter flow (§6.2)
-// 1. Take continuation via exchange
-// 2. Release promise (Last-One-Out)
-// 3. Self-destroy coroutine
-// 4. Symmetric transfer to continuation
-// =============================================================================
-
+// final_awaiter's order: claim the continuation FIRST, then release_promise().
 TEST_CASE("CAS awaiter: final_awaiter takes continuation") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
@@ -225,17 +182,13 @@ TEST_CASE("CAS awaiter: final_awaiter takes continuation") {
     std::coroutine_handle<> handle = std::noop_coroutine();
     state->continuation_.store(handle, std::memory_order_release);
 
-    // final_suspend: take continuation first
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
     REQUIRE(cont == handle);
 
-    // Then release promise
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
 
-    // Then self.destroy() (simulated - we can't test actual destroy)
-
-    // Then symmetric transfer to cont
     REQUIRE(cont != nullptr);
 
     state->release_future();
@@ -245,25 +198,17 @@ TEST_CASE("CAS awaiter: final_awaiter with no waiter") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
 
-    // No awaiter registered
     REQUIRE(state->continuation_.load() == nullptr);
 
-    // final_suspend: take continuation
     auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
     REQUIRE(cont == nullptr);
 
-    // Then release promise
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     REQUIRE(state->is_ready());
-
-    // Symmetric transfer to noop_coroutine
 
     state->release_future();
 }
-
-// =============================================================================
-// TEST SECTION 5: Concurrent CAS stress tests
-// =============================================================================
 
 TEST_CASE("CAS awaiter: concurrent CAS - only one succeeds") {
     constexpr int NUM_ITERATIONS = 1000;
@@ -297,11 +242,11 @@ TEST_CASE("CAS awaiter: concurrent CAS - only one succeeds") {
             t.join();
         }
 
-        // Exactly one thread should succeed
         REQUIRE(success_count.load() == 1);
         REQUIRE(failure_count.load() == 3);
 
-        (void)state->release_promise();
+        const bool deallocated = state->release_promise();
+        REQUIRE_FALSE(deallocated);
         state->release_future();
     }
 }
@@ -314,17 +259,20 @@ TEST_CASE("CAS awaiter: concurrent producer-consumer") {
         auto* state = allocate_shared_state<int>(resource);
 
         std::atomic<bool> consumer_resumed{false};
+        // release_promise() reports whether THIS call deallocated the state. The
+        // peer thread here only reads -- it never releases the future -- so the
+        // answer is deterministically false. Latch it and assert after the join:
+        // a Catch2 macro fired from inside a thread is itself a data race.
+        std::atomic<bool> promise_deallocated{false};
 
-        std::thread producer([state, i]() {
+        std::thread producer([state, i, &promise_deallocated]() {
             state->set_value(int(i));
 
-            // Take continuation
-            auto cont = state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
+            // Take the continuation. This test exercises the exchange only and
+            // deliberately does not resume it.
+            state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
 
-            (void)state->release_promise();
-
-            // Would resume cont here via symmetric transfer
-            (void)cont;
+            promise_deallocated.store(state->release_promise(), std::memory_order_relaxed);
         });
 
         std::thread consumer([state, &consumer_resumed]() {
@@ -335,28 +283,24 @@ TEST_CASE("CAS awaiter: concurrent producer-consumer") {
                 expected, handle,
                 std::memory_order_acq_rel, std::memory_order_acquire);
 
-            // Wait for is_ready
             while (!state->is_ready()) {
                 std::this_thread::yield();
             }
 
-            // Value should be visible
-            REQUIRE(state->has_result());
-            consumer_resumed.store(true, std::memory_order_release);
+            // Latched, not asserted here: a Catch2 macro inside a thread is itself
+            // a race -- the very thing the comment above already says.
+            consumer_resumed.store(state->has_result(), std::memory_order_release);
         });
 
         producer.join();
         consumer.join();
 
         REQUIRE(consumer_resumed.load());
+        REQUIRE_FALSE(promise_deallocated.load());
 
         state->release_future();
     }
 }
-
-// =============================================================================
-// TEST SECTION 6: Memory ordering verification
-// =============================================================================
 
 TEST_CASE("CAS awaiter: memory ordering - value visible after exchange") {
     constexpr int NUM_ITERATIONS = 1000;
@@ -366,28 +310,27 @@ TEST_CASE("CAS awaiter: memory ordering - value visible after exchange") {
         auto* state = allocate_shared_state<int>(resource);
 
         std::atomic<int> read_value{-1};
+        // Same shape as above: latch release_promise()'s answer, assert after the
+        // join -- a Catch2 macro fired from inside a thread is itself a data race.
+        std::atomic<bool> promise_deallocated{false};
 
-        std::thread producer([state, i]() {
-            // Write value BEFORE exchange
+        std::thread producer([state, i, &promise_deallocated]() {
             state->set_value(int(i));
 
-            // Exchange continuation (with acq_rel)
             state->continuation_.exchange(nullptr, std::memory_order_acq_rel);
 
-            (void)state->release_promise();
+            promise_deallocated.store(state->release_promise(), std::memory_order_relaxed);
         });
 
         std::thread consumer([state, &read_value]() {
-            // Set continuation
             std::coroutine_handle<> handle = std::noop_coroutine();
             state->continuation_.store(handle, std::memory_order_release);
 
-            // Wait for is_ready
             while (!state->is_ready()) {
                 std::this_thread::yield();
             }
 
-            // Value must be visible (synchronizes-with exchange)
+            // The value written before the exchange must be visible after is_ready().
             read_value.store(state->get_value(), std::memory_order_relaxed);
         });
 
@@ -395,14 +338,11 @@ TEST_CASE("CAS awaiter: memory ordering - value visible after exchange") {
         consumer.join();
 
         REQUIRE(read_value.load() == i);
+        REQUIRE_FALSE(promise_deallocated.load());
 
         state->release_future();
     }
 }
-
-// =============================================================================
-// TEST SECTION 7: Edge cases
-// =============================================================================
 
 TEST_CASE("CAS awaiter: multiple set_value forbidden") {
     auto* resource = std::pmr::get_default_resource();
@@ -411,11 +351,11 @@ TEST_CASE("CAS awaiter: multiple set_value forbidden") {
     state->set_value(42);
     REQUIRE(state->has_result());
 
-    // Second set_value should be forbidden
-    // Implementation should assert or ignore
-    // (This test documents expected behavior)
+    // A second set_value is a contract violation; nothing in shared_state
+    // enforces it, so only the first write is exercised here.
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }
 
@@ -427,9 +367,10 @@ TEST_CASE("CAS awaiter: error then value forbidden") {
     state->set_error(ec);
     REQUIRE(state->has_error());
 
-    // set_value after set_error should be forbidden
-    // (This test documents expected behavior)
+    // set_value after set_error is likewise a contract violation and is not
+    // exercised; error_set alone is what a consumer must see.
 
-    (void)state->release_promise();
+    const bool deallocated = state->release_promise();
+    REQUIRE_FALSE(deallocated);
     state->release_future();
 }

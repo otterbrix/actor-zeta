@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      - master
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -15,6 +15,7 @@ jobs:
       matrix:
         cxx_standard: [20]
         build_type: ["Release", "Debug"]
+        exceptions_disable: ["ON", "OFF"]
         os: ["macos-14", "macos-15"]
 
     runs-on: ${{ matrix.os }}
@@ -30,6 +31,7 @@ jobs:
         env:
           BUILD_TYPE: ${{matrix.build_type}}
           CXX_STANDARD: ${{matrix.cxx_standard}}
+          EXCEPTIONS_DISABLE: ${{matrix.exceptions_disable}}
         run: |
           conan profile detect --force
           conan install . --output-folder=build/${BUILD_TYPE} -s build_type=${BUILD_TYPE} --build=missing
@@ -55,6 +57,9 @@ jobs:
             -DALLOW_TESTS=ON \
             -DENABLE_TESTS_MEASUREMENTS=ON \
             -DALLOW_BENCHMARK=ON \
+            -DEXCEPTIONS_DISABLE=${EXCEPTIONS_DISABLE} \
+            -DRTTI_DISABLE=ON \
+            -DWARNINGS_AS_ERRORS=ON \
             -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_PATH}
 
       - name: Build

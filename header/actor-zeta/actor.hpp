@@ -15,15 +15,12 @@ namespace actor_zeta {
     using actor_zeta::actor::actor_mixin;
 
     using actor_zeta::unique_future;
-    using actor_zeta::generator;
     using actor_zeta::promise;
     using actor_zeta::make_ready_future;
     using actor_zeta::make_error;
 
-    // behavior() coroutine type
     using actor_zeta::behavior_t;
 
-    // Contract-based actor interfaces
     using actor_zeta::implements;
 
 } // namespace actor_zeta

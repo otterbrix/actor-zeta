@@ -8,7 +8,6 @@
 
 using namespace actor_zeta;
 
-/// @brief Worker actor - handles requests
 class worker_actor final : public basic_actor<worker_actor> {
 public:
     explicit worker_actor(std::pmr::memory_resource* resource)
@@ -36,8 +35,6 @@ public:
 };
 
 
-/// @brief Client actor - uses only address_t for communication with worker
-/// Resume is controlled by supervisor externally
 class client_actor final : public basic_actor<client_actor> {
 public:
     explicit client_actor(std::pmr::memory_resource* resource, address_t worker_address)
@@ -46,16 +43,16 @@ public:
         , final_result_(0) {
     }
 
-    /// @brief Coroutine - sends request and waits for result
-    /// Suspend/resume is controlled by supervisor
     unique_future<int> process(int x) {
         std::cerr << "[client::process] START x=" << x << std::endl;
 
-        // Send request to worker via address_t (only address!)
+        // A handler holds an address_t and no scheduler, so it cannot enqueue the
+        // worker itself: it records the obligation and the driver discharges it.
         auto [needs_sched, future] = send(worker_address_, &worker_actor::compute, x);
+        if (needs_sched) {
+            worker_owed_.store(true, std::memory_order_release);
+        }
 
-        // co_await - suspend if not ready
-        // Supervisor will resume coroutine when future becomes ready
         int result = co_await std::move(future);
         std::cerr << "[client::process] Got result: " << result << std::endl;
 
@@ -85,9 +82,6 @@ public:
         }
     }
 
-    /// @brief Clean up completed pending futures
-    /// @return true if there are still pending coroutines
-    /// With auto-resume in set_value(), coroutines resume automatically
     bool poll_pending() {
         for (auto it = pending_.begin(); it != pending_.end();) {
             if (it->is_ready()) {
@@ -99,21 +93,24 @@ public:
         return !pending_.empty();
     }
 
-    /// @brief Check if there are pending coroutines
     bool has_pending() const { return !pending_.empty(); }
+
+    /// One obligation, claimed once: the driver enqueues the worker only for it.
+    bool take_worker_obligation() {
+        return worker_owed_.exchange(false, std::memory_order_acq_rel);
+    }
 
     ~client_actor() = default;
 
 private:
     address_t worker_address_;
+    std::atomic<bool> worker_owed_{false};
     std::atomic<int> final_result_;
-    std::vector<unique_future<void>> pending_;  // Store pending dispatch futures
+    std::vector<unique_future<void>> pending_;
 };
 
 
-/// @brief Simple supervisor - controls resume() of actors
-/// This is a separate entity that knows about all actors
-/// For test: accepts concrete actor types
+/// Drives resume() on both actors from the test thread; there is no scheduler.
 class simple_supervisor {
 public:
     void set_actors(worker_actor* w, client_actor* c = nullptr) {
@@ -121,11 +118,22 @@ public:
         client_ = c;
     }
 
-    /// @brief Runs one resume cycle for all actors
-    void run_once() {
-        if (client_) client_->resume(1);
-        if (worker_) worker_->resume(1);
-        // With behavior_t API, coroutines resume automatically when futures ready
+    /// Returns true while at least one actor still asks to be rescheduled; the
+    /// caller's loop discharges that verdict by coming round again.
+    ///
+    /// With a client present the worker runs only on an obligation the client
+    /// recorded: a blind resume would hide a dropped needs_sched, which strands
+    /// an actor for good. With no client there is no obligation to honour, so
+    /// the worker is the only thing to drive.
+    bool run_once() {
+        bool wants_more = false;
+        if (client_) {
+            wants_more |= client_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
+        }
+        if (worker_ && (!client_ || client_->take_worker_obligation())) {
+            wants_more |= worker_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
+        }
+        return wants_more;
     }
 
 private:
@@ -138,15 +146,18 @@ TEST_CASE("worker only") {
     auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_actor>(resource);
 
-    // Supervisor controls resume
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get());
 
     auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
 
-    // Producer is pumped on this thread via the supervisor: drive the future to
-    // completion by pumping the supervisor until it is ready, then take the value.
-    int result = run_until_complete(future, [&] { supervisor.run_once(); });
+    // Bounded so a mis-wired pump fails the assertion below instead of hanging.
+    constexpr int kPumpCap = 64;
+    for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
+        supervisor.run_once();
+    }
+    REQUIRE(future.is_ready());
+    int result = std::move(future).take_ready();
 
     REQUIRE(result == 42);
 }
@@ -157,21 +168,27 @@ TEST_CASE("client-worker coroutine with supervisor") {
     auto worker = spawn<worker_actor>(resource);
     auto client = spawn<client_actor>(resource, worker->address());
 
-    // Supervisor knows about all actors and controls their resume
     simple_supervisor supervisor;
     supervisor.set_actors(worker.get(), client.get());
 
-    // Send message to client
     auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
 
-    // Producer is pumped on this thread via the supervisor.
-    int result = run_until_complete(future, [&] { supervisor.run_once(); });
+    // Bounded so a mis-wired pump fails the assertion below instead of hanging.
+    constexpr int kPumpCap = 64;
+    for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
+        supervisor.run_once();
+    }
+    REQUIRE(future.is_ready());
+    int result = std::move(future).take_ready();
 
     REQUIRE(result == 52);  // 21 * 2 + 10 = 52
 
-    // Verify via get_result()
     auto [needs_sched2, result_future] = send(client.get(), &client_actor::get_result);
-    int verified = run_until_complete(result_future, [&] { supervisor.run_once(); });
+    for (int i = 0; i < kPumpCap && !result_future.is_ready(); ++i) {
+        supervisor.run_once();
+    }
+    REQUIRE(result_future.is_ready());
+    int verified = std::move(result_future).take_ready();
 
     REQUIRE(verified == 52);
 }

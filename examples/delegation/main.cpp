@@ -1,8 +1,9 @@
-// Non-blocking delegation pattern: an actor_mixin router restamps the message's
-// command via message::set_command and forwards it to one of a pool of
-// cooperative-actor workers. The caller's future is filled by the worker through
-// the message's type-erased result_slot; the router itself never waits.
+// Non-blocking delegation: an actor_mixin router restamps the message's command via
+// message::set_command and forwards it to a pool of cooperative workers. The worker
+// fills the caller's future through the message's type-erased result_slot; the router never waits.
 
+#include <cassert>
+#include <cstdlib>
 #include <atomic>
 #include <cstddef>
 #include <iostream>
@@ -13,6 +14,23 @@
 
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
+
+// Bounded spin on a future completed elsewhere. is_ready() is only the promise_released
+// bit (set by a promise dying without a value too) and extracting without one aborts in
+// every build -- hence failed(). The bound turns a stuck producer into a visible error.
+template<typename T>
+T await_from_scheduler(actor_zeta::unique_future<T>& future) {
+    constexpr int kSpinCap = 10'000'000;
+    for (int i = 0; i < kSpinCap && !future.is_ready(); ++i) {
+        std::this_thread::yield();
+    }
+    if (!future.is_ready() || future.failed()) {
+        std::cerr << "await_from_scheduler: future did not complete with a value\n";
+        std::abort();
+    }
+    return std::move(future).take_ready();
+}
+
 
 using namespace actor_zeta;
 
@@ -36,9 +54,8 @@ class router_t final : public actor::actor_mixin<router_t> {
 public:
     template<typename T> using unique_future = actor_zeta::unique_future<T>;
 
-    // The body never runs: enqueue_impl below intercepts every message. The
-    // signature must match worker_t::compute (same value_type + parameter types)
-    // because result_slot_ is reinterpreted as shared_state<value_type>*.
+    // Never runs: enqueue_impl intercepts every message. The signature must match
+    // worker_t::compute because result_slot_ is reinterpreted as shared_state<value_type>*.
     unique_future<int> compute(int) { co_return 0; }
 
     using dispatch_traits = actor_zeta::dispatch_traits<&router_t::compute>;
@@ -87,14 +104,15 @@ int main() {
     std::vector<unique_future<int>> futs;
     futs.reserve(N);
     for (int i = 0; i < N; ++i) {
-        auto [needs_sched, f] = send(router.get(), &router_t::compute, i);
-        (void) needs_sched;
-        futs.push_back(std::move(f));
+        auto sent = send(router.get(), &router_t::compute, i);
+        // A synchronous actor_mixin restamps and forwards inside send(): nothing to schedule.
+        assert(!sent.first);
+        futs.push_back(std::move(sent.second));
     }
 
     int sum = 0;
     for (auto& f : futs) {
-        sum += run_until_complete(f, [] { std::this_thread::yield(); });
+        sum += await_from_scheduler(f);
     }
 
     int expected = 0;
@@ -103,6 +121,6 @@ int main() {
     std::cout << "delegation example: sum = " << sum
               << " (expected " << expected << ")" << std::endl;
 
-    sched->stop();   // before actors are destroyed (CLAUDE.md shutdown order)
+    sched->stop();   // before the actors it can resume are destroyed
     return sum == expected ? 0 : 1;
 }

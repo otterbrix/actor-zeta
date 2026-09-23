@@ -1,10 +1,29 @@
 #include <cassert>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <thread>
 #include <vector>
 
 #include <actor-zeta.hpp>
+
+// Bounded spin on a future completed elsewhere (scheduler worker or inline actor_mixin).
+// is_ready() is only promise_released, which a promise dying without a value also sets.
+// Gate on failed(): extracting without one aborts in every build, Release included.
+// The bound turns a producer that never completes into a visible error.
+template<typename T>
+T await_from_scheduler(actor_zeta::unique_future<T>& future) {
+    constexpr int kSpinCap = 10'000'000;
+    for (int i = 0; i < kSpinCap && !future.is_ready(); ++i) {
+        std::this_thread::yield();
+    }
+    if (!future.is_ready() || future.failed()) {
+        std::cerr << "await_from_scheduler: future did not complete with a value\n";
+        std::abort();
+    }
+    return std::move(future).take_ready();
+}
+
 
 using std::pmr::memory_resource;
 
@@ -122,16 +141,13 @@ int main() {
 
     int const actors = 5;
 
-    // The supervisor (an actor_mixin) processes create requests synchronously, so each
-    // create future is ready as soon as send() returns. The worker download results are
-    // produced on the supervisor's internal worker threads (sharing_scheduler e_), so we
-    // collect them with a non-blocking consumer poll: while(!f.is_ready()) yield; then
-    // take_ready(). The supervisor owns and stops e_ in its destructor, so the actors (and
-    // their scheduler) outlive this collection.
+    // create() runs inline (actor_mixin); the download results below come from the
+    // supervisor's own scheduler e_, which it stops in its destructor -- after this loop.
     for (auto i = actors; i > 0; --i) {
-        auto [needs_sched, future] = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
-        (void) needs_sched; // synchronous actor_mixin: future is ready immediately
-        actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
+        auto sent = actor_zeta::send(supervisor.get(), &supervisor_lite::create);
+        // A synchronous actor_mixin runs the handler inside send(): nothing to schedule.
+        assert(!sent.first);
+        await_from_scheduler(sent.second);
     }
 
     std::size_t total_size = 0;
@@ -149,8 +165,7 @@ int main() {
             if (needs_sched) {
                 supervisor->schedule_worker(i);
             }
-            // Worker runs on the supervisor's internal scheduler (cross-thread).
-            total_size += actor_zeta::run_until_complete(future, [] { std::this_thread::yield(); });
+            total_size += await_from_scheduler(future);
         }
     }
 

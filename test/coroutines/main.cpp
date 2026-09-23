@@ -5,10 +5,9 @@
 #include <actor-zeta.hpp>
 #include <actor-zeta/actor/dispatch.hpp>
 #include <actor-zeta/config.hpp>
+#include <test/tooltestsuites/scheduler_test.hpp>
 
-// ============================================================================
-// Test 1: promise_type exists and can be used for co_return
-// ============================================================================
+#include <atomic>
 
 TEST_CASE("promise_type in unique_future<T>") {
     SECTION("promise_type exists for unique_future<int>") {
@@ -22,24 +21,14 @@ TEST_CASE("promise_type in unique_future<T>") {
     }
 }
 
-// ============================================================================
-// Test 2: Coroutine with co_return (actor member functions)
-// ============================================================================
-
-// Test actor with coroutine member functions
-// ============================================================================
-// IMPORTANT: This actor follows proper Actor Model principles:
-// - Methods are registered in dispatch_traits
-// - behavior() dispatches messages
-// - Tests MUST use send() instead of direct calls (actor->method())
-// ============================================================================
+// Methods are registered in dispatch_traits and reached through behavior(), so the
+// tests below must go through send() rather than calling actor->method() directly.
 class coroutine_test_actor final : public actor_zeta::basic_actor<coroutine_test_actor> {
 public:
     explicit coroutine_test_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<coroutine_test_actor>(res) {
     }
 
-    // Coroutine member functions - resource() extracted from 'this'
     actor_zeta::unique_future<int> coro_int() {
         co_return 42;
     }
@@ -84,16 +73,18 @@ public:
 TEST_CASE("simple coroutines with co_return") {
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     SECTION("co_return int") {
-        // FIXED: Use send() instead of direct call
         auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_int
         );
 
-        // Process message through actor
-        actor->resume(100);
+        if (needs_sched) {
+            sched.enqueue(actor.get());
+        }
+        sched.run();
 
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
@@ -102,15 +93,13 @@ TEST_CASE("simple coroutines with co_return") {
     }
 
     SECTION("co_return string") {
-        // FIXED: Use send() instead of direct call
         auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_string
         );
 
-        // Process message through actor
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
         std::string result = std::move(future).take_ready();
@@ -118,37 +107,31 @@ TEST_CASE("simple coroutines with co_return") {
     }
 
     SECTION("co_return void") {
-        // FIXED: Use send() instead of direct call
         auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_void
         );
 
-        // Process message through actor
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
-        std::move(future).take_ready();  // Should not throw
+        std::move(future).take_ready();
     }
 }
-
-// ============================================================================
-// Test 12: Coroutine futures (STATE mode)
-// ============================================================================
 
 TEST_CASE("Coroutine futures") {
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     SECTION("co_return creates valid future") {
-        // Use send() instead of direct call
         auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_int
         );
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
 
@@ -157,13 +140,12 @@ TEST_CASE("Coroutine futures") {
     }
 
     SECTION("move constructor preserves future state") {
-        // Use send() instead of direct call
         auto [needs_sched, future1] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_string
         );
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(future1.valid());
 
         auto future2 = std::move(future1);
@@ -175,7 +157,6 @@ TEST_CASE("Coroutine futures") {
     }
 
     SECTION("cancel works on futures") {
-        // Create future via promise (clean API)
         actor_zeta::promise<int> p(resource);
         auto future_state = p.get_future();
 
@@ -189,22 +170,15 @@ TEST_CASE("Coroutine futures") {
     }
 }
 
-// ============================================================================
-// Test 13: All methods must be coroutines via actor (need resource())
-// ============================================================================
-
-// Test actor for arithmetic coroutine tests
 class arithmetic_test_actor final : public actor_zeta::basic_actor<arithmetic_test_actor> {
 public:
     explicit arithmetic_test_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<arithmetic_test_actor>(res) {}
 
-    // Coroutine method returning unique_future<int>
     actor_zeta::unique_future<int> coro_add(int a, int b) {
         co_return a + b;
     }
 
-    // Coroutine method returning unique_future<std::string>
     actor_zeta::unique_future<std::string> coro_concat(std::string a, std::string b) {
         co_return a + b;
     }
@@ -229,15 +203,15 @@ public:
 TEST_CASE("coroutine methods with unique_future return type") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<arithmetic_test_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     SECTION("coro_add returns ready future") {
-        // Use send() instead of direct call
         auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &arithmetic_test_actor::coro_add, 10, 20
         );
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
 
@@ -246,14 +220,13 @@ TEST_CASE("coroutine methods with unique_future return type") {
     }
 
     SECTION("coro_concat returns ready future") {
-        // Use send() instead of direct call
         auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &arithmetic_test_actor::coro_concat,
             std::string("hello"), std::string(" world")
         );
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(future.valid());
         REQUIRE(future.is_ready());
 
@@ -262,41 +235,32 @@ TEST_CASE("coroutine methods with unique_future return type") {
     }
 
     SECTION("ready future - no waiting, instant get()") {
-        // Use send() instead of direct call
         auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &arithmetic_test_actor::coro_add, 5, 7
         );
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(future.is_ready());
 
-        // get() should return immediately without blocking
         auto start = std::chrono::steady_clock::now();
         int result = std::move(future).take_ready();
         auto elapsed = std::chrono::steady_clock::now() - start;
 
         REQUIRE(result == 12);
-        // Should be near-instant (< 1ms)
         REQUIRE(elapsed < std::chrono::milliseconds(1));
     }
 }
 
-// ============================================================================
-// Test 14: Handler integration - methods returning unique_future<T>
-// ============================================================================
-
 #include <actor-zeta.hpp>
 #include <actor-zeta/send.hpp>
 
-// Test actor with methods returning unique_future<T>
 class future_test_actor final : public actor_zeta::basic_actor<future_test_actor> {
 public:
     explicit future_test_actor(std::pmr::memory_resource* res)
         : actor_zeta::basic_actor<future_test_actor>(res) {
     }
 
-    // All methods must be coroutines
     actor_zeta::unique_future<int> sync_add(int a, int b) {
         co_return a + b;
     }
@@ -327,16 +291,15 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 
     SECTION("sync method with ready future") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
+        actor_zeta::test::scheduler_test_t sched(1, 100);
         REQUIRE(actor != nullptr);
 
-        // Send message and get result
         auto [needs_sched, result] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 10, 20);
 
         REQUIRE(result.valid());
 
-        // Process the message
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(result.is_ready());
         int value = std::move(result).take_ready();
         REQUIRE(value == 30);
@@ -344,16 +307,15 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 
     SECTION("async coroutine method") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
+        actor_zeta::test::scheduler_test_t sched(1, 100);
         REQUIRE(actor != nullptr);
 
-        // Send message and get result
         auto [needs_sched, result] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 5, 7);
 
         REQUIRE(result.valid());
 
-        // Process the message
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(result.is_ready());
         int value = std::move(result).take_ready();
         REQUIRE(value == 35);
@@ -361,14 +323,14 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 
     SECTION("multiple calls to sync method") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
+        actor_zeta::test::scheduler_test_t sched(1, 100);
 
         auto [ns1, r1] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 1, 2);
         auto [ns2, r2] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 3, 4);
         auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 5, 6);
 
-        // Process all messages
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(std::move(r1).take_ready() == 3);
         REQUIRE(std::move(r2).take_ready() == 7);
         REQUIRE(std::move(r3).take_ready() == 11);
@@ -376,14 +338,14 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 
     SECTION("multiple calls to async method") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
+        actor_zeta::test::scheduler_test_t sched(1, 100);
 
         auto [ns1, r1] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 2, 3);
         auto [ns2, r2] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 4, 5);
         auto [ns3, r3] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 6, 7);
 
-        // Process all messages
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(std::move(r1).take_ready() == 6);
         REQUIRE(std::move(r2).take_ready() == 20);
         REQUIRE(std::move(r3).take_ready() == 42);
@@ -391,95 +353,141 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 
     SECTION("mixed sync and async calls") {
         auto actor = actor_zeta::spawn<future_test_actor>(resource);
+        actor_zeta::test::scheduler_test_t sched(1, 100);
 
         auto [ns1, sync_result] = actor_zeta::send(actor.get(), &future_test_actor::sync_add, 10, 5);
         auto [ns2, async_result] = actor_zeta::send(actor.get(), &future_test_actor::async_multiply, 3, 4);
 
-        // Process all messages
-        actor->resume(100);
-
+        sched.enqueue(actor.get());
+        sched.run();
         REQUIRE(std::move(sync_result).take_ready() == 15);
         REQUIRE(std::move(async_result).take_ready() == 12);
     }
 }
 
-// See test/coroutine-threading for current approach using co_await
+// These sections only prove the lifecycle does not crash. The failure they guard
+// against -- a coroutine frame that is never destroyed, taking its promise_type and
+// locals with it -- is invisible without a sanitizer, so run this target under ASan
+// or valgrind to actually detect it.
 
-// Test 17: Recursive coroutines are NOT SUPPORTED
-// Recursive send(this, ...) from within a coroutine will deadlock
-// because the actor is in "running" state and won't reschedule itself.
-// This is a known architectural limitation.
-//
-// If you need recursion, use iterative algorithms instead.
+// An actor cannot await a message it posted to itself. While a behavior is
+// suspended on a co_await, resume_impl() returns before it ever reaches the
+// mailbox loop, so the message that would settle the future is never
+// dispatched and the verdict stays `resume` forever.
+class self_await_actor final : public actor_zeta::basic_actor<self_await_actor> {
+public:
+    explicit self_await_actor(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<self_await_actor>(res) {
+    }
 
-// ============================================================================
-// Test 18: Memory leak detection - coroutine cleanup
-// ============================================================================
-//
-// NOTE: This test verifies that coroutines are cleaned up properly.
-// Memory leak detection requires running with AddressSanitizer or Valgrind:
-//
-//   # With AddressSanitizer:
-//   cmake -DCMAKE_CXX_FLAGS="-fsanitize=address" ...
-//   ./tests_coroutines
-//
-//   # With Valgrind:
-//   valgrind --leak-check=full ./tests_coroutines
-//
-// If set_coroutine() is missing/commented, you will see memory leaks for:
-// - promise_type object (coroutine frame)
-// - Coroutine local variables
-//
-// This test ensures basic coroutine lifecycle works without crashing.
+    actor_zeta::unique_future<int> inner() {
+        inner_ran_.store(true, std::memory_order_release);
+        co_return 7;
+    }
+
+    actor_zeta::unique_future<int> outer() {
+        // Sent to ourselves: the mailbox is not blocked (we are running), so this
+        // reports needs_sched == false and there is nothing to enqueue.
+        auto [needs_sched, f] = actor_zeta::send(this, &self_await_actor::inner);
+        actor_zeta::detail::ignore_unused(needs_sched);
+        co_return co_await std::move(f);
+    }
+
+    bool inner_ran() const noexcept { return inner_ran_.load(std::memory_order_acquire); }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<
+        &self_await_actor::inner,
+        &self_await_actor::outer
+    >;
+
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {
+        switch (msg->command()) {
+            case actor_zeta::msg_id<self_await_actor, &self_await_actor::inner>:
+                co_await dispatch(this, &self_await_actor::inner, msg);
+                break;
+            case actor_zeta::msg_id<self_await_actor, &self_await_actor::outer>:
+                co_await dispatch(this, &self_await_actor::outer, msg);
+                break;
+        }
+    }
+
+private:
+    std::atomic<bool> inner_ran_{false};
+};
+
+TEST_CASE("Recursive coroutines are NOT SUPPORTED") {
+    auto* resource = std::pmr::get_default_resource();
+    auto actor = actor_zeta::spawn<self_await_actor>(resource);
+
+    auto [needs_sched, future] = actor_zeta::send(actor.get(), &self_await_actor::outer);
+    REQUIRE(needs_sched);
+
+    // Bounded on purpose: the verdict never stops being `resume`, so an
+    // unbounded pump would spin for good rather than fail.
+    constexpr int kPumpCap = 64;
+    int pumped = 0;
+    for (int i = 0; i < kPumpCap && !future.is_ready(); ++i) {
+        auto info = actor->resume(1);
+        REQUIRE(info.result == actor_zeta::scheduler::resume_result::resume);
+        ++pumped;
+    }
+
+    // The self-addressed message is still in the mailbox, undispatched.
+    REQUIRE(pumped == kPumpCap);
+    REQUIRE_FALSE(actor->inner_ran());
+    REQUIRE_FALSE(future.is_ready());
+
+    // Leaks ~650 bytes by construction: outer() stays suspended on a co_await that
+    // can never settle, so ~behavior_t releases the future without release() being
+    // able to reclaim the frame (it only destroys a done() handle). The abandoned
+    // frame and inner's shared_state are the leak. The same shape is why CI runs
+    // with detect_leaks=0; macOS ASan does not report leaks at all.
+    future.detach();
+}
 
 TEST_CASE("coroutine cleanup does not crash") {
     auto* resource = std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<coroutine_test_actor>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
     SECTION("simple coroutine with co_return") {
-        // This test ensures basic coroutine lifecycle completes without crash
-        // Memory leak detection requires ASAN or Valgrind
         {
-            // FIXED: Use send() instead of direct call (Actor Model)
             auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_int
             );
-            actor->resume(100);
+            sched.enqueue(actor.get());
+            sched.run();
             REQUIRE(future.valid());
             REQUIRE(future.is_ready());
             int result = std::move(future).take_ready();
             REQUIRE(result == 42);
         }
-        // If we reach here without crash, basic cleanup works
-        // But memory leaks can only be detected with ASAN/Valgrind
         REQUIRE(true);
     }
 
     SECTION("multiple coroutines") {
-        // Stress test - create/destroy many coroutines
         for (int i = 0; i < 100; ++i) {
-            // FIXED: Use send() instead of direct call (Actor Model)
             auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_int
             );
-            actor->resume(100);
+            sched.enqueue(actor.get());
+            sched.run();
             int result = std::move(future).take_ready();
             REQUIRE(result == 42);
         }
-        // No crash = basic cleanup works
         REQUIRE(true);
     }
 
     SECTION("coroutine with string") {
         {
-            // FIXED: Use send() instead of direct call (Actor Model)
             auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_string
             );
-            actor->resume(100);
+            sched.enqueue(actor.get());
+            sched.run();
             REQUIRE(future.valid());
             std::string result = std::move(future).take_ready();
             REQUIRE(result == "hello");
@@ -489,14 +497,14 @@ TEST_CASE("coroutine cleanup does not crash") {
 
     SECTION("void coroutine") {
         {
-            // FIXED: Use send() instead of direct call (Actor Model)
             auto [needs_sched, future] = actor_zeta::send(
             actor.get(),
             &coroutine_test_actor::coro_void
             );
-            actor->resume(100);
+            sched.enqueue(actor.get());
+            sched.run();
             REQUIRE(future.valid());
-            std::move(future).take_ready();  // Should not throw
+            std::move(future).take_ready();
         }
         REQUIRE(true);
     }

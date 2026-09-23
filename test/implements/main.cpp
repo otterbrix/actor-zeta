@@ -2,10 +2,7 @@
 #include <catch2/catch.hpp>
 
 #include <actor-zeta.hpp>
-
-// ============================================================================
-// Contract definition
-// ============================================================================
+#include <test/tooltestsuites/scheduler_test.hpp>
 
 struct test_contract {
     actor_zeta::unique_future<void> method1(int);
@@ -20,10 +17,6 @@ struct test_contract {
 
     test_contract() = delete;
 };
-
-// ============================================================================
-// First implementation
-// ============================================================================
 
 class impl_a final : public actor_zeta::basic_actor<impl_a> {
 public:
@@ -50,7 +43,6 @@ public:
         co_return 42;
     }
 
-    // Uses implements<> instead of dispatch_traits<>
     using dispatch_traits = actor_zeta::implements<
         test_contract,
         &impl_a::method1,
@@ -81,10 +73,6 @@ private:
     int last_value_;
     std::string last_text_;
 };
-
-// ============================================================================
-// Second implementation (same contract)
-// ============================================================================
 
 class impl_b final : public actor_zeta::basic_actor<impl_b> {
 public:
@@ -141,13 +129,7 @@ private:
     std::vector<std::string> texts_;
 };
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 TEST_CASE("implements - msg_id equality across implementations") {
-    // Key test: msg_id should be the same for all implementations of the same contract
-
     constexpr auto id_a1 = actor_zeta::msg_id<impl_a, &impl_a::method1>;
     constexpr auto id_a2 = actor_zeta::msg_id<impl_a, &impl_a::method2>;
     constexpr auto id_a3 = actor_zeta::msg_id<impl_a, &impl_a::method3>;
@@ -160,7 +142,6 @@ TEST_CASE("implements - msg_id equality across implementations") {
     constexpr auto id_c2 = actor_zeta::msg_id<test_contract, &test_contract::method2>;
     constexpr auto id_c3 = actor_zeta::msg_id<test_contract, &test_contract::method3>;
 
-    // All three should be equal!
     REQUIRE(id_a1 == id_b1);
     REQUIRE(id_a1 == id_c1);
 
@@ -186,33 +167,33 @@ TEST_CASE("implements - send and dispatch work correctly") {
 
     auto actor_a = actor_zeta::spawn<impl_a>(resource);
     auto actor_b = actor_zeta::spawn<impl_b>(resource);
+    actor_zeta::test::scheduler_test_t sched(1, 100);
 
-    // Send to impl_a
     auto [needs_sched_a, future_a] = actor_zeta::send(
             actor_a.get(),
             &impl_a::method1,
         42
     );
 
-    actor_a->resume(10);
+    sched.enqueue(actor_a.get());
+    sched.run();
     REQUIRE(actor_a->call_count() == 1);
     REQUIRE(actor_a->last_value() == 42);
 
-    // Send to impl_b
     auto [needs_sched_b, future_b] = actor_zeta::send(
             actor_b.get(),
             &impl_b::method1,
         100
     );
 
-    actor_b->resume(10);
+    sched.enqueue(actor_b.get());
+    sched.run();
     REQUIRE(actor_b->call_count() == 1);
     REQUIRE(actor_b->values().size() == 1);
     REQUIRE(actor_b->values()[0] == 100);
 }
 
 TEST_CASE("implements - methods list size is correct") {
-    // Check that methods list is correctly built
     static_assert(actor_zeta::type_traits::type_list_size_v<typename impl_a::dispatch_traits::methods> == 3);
     static_assert(actor_zeta::type_traits::type_list_size_v<typename impl_b::dispatch_traits::methods> == 3);
 
