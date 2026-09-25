@@ -10,12 +10,11 @@
 #include <vector>
 
 // Guards, not repros: a sender that honours needs_sched and does NOTHING ELSE
-// must deliver every message. The sender's leave_and_maybe_schedule() and the
-// runner's ~resume_guard read-modify-write the same state word, so only two
-// orders exist: the sender's CAS lands first and the guard sees the scheduled bit
-// and upgrades awaiting -> resume, or the guard's lands first and the sender's
-// CAS returns needs_sched == true. No rescue enqueues on timeout: a rescue would
-// hide exactly the strand these tests exist to catch.
+// must deliver every message. The sender's push and the runner's park CAS the same
+// mailbox word, so only two orders exist: the push lands first and the park fails
+// (the runner keeps the turn and takes the message), or the park lands first and
+// the push unblocks the mailbox and returns needs_sched == true. No rescue enqueues
+// on timeout: a rescue would hide exactly the strand these tests exist to catch.
 
 class scheduling_race_actor final : public actor_zeta::basic_actor<scheduling_race_actor> {
 public:
@@ -50,7 +49,7 @@ private:
 
 TEST_CASE("needs_scheduling race: every message is delivered") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 10);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 10);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<scheduling_race_actor>(resource);
@@ -94,7 +93,7 @@ TEST_CASE("needs_scheduling race: every message is delivered") {
 
 TEST_CASE("needs_scheduling race: high contention stress", "[stress]") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 5);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 5);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<scheduling_race_actor>(resource);
@@ -144,7 +143,7 @@ TEST_CASE("needs_scheduling race: high contention stress", "[stress]") {
 // A second message aimed at the window while the actor is finishing the first.
 TEST_CASE("needs_scheduling race: second message lands mid-teardown") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(1, 1);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 1, 1);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<scheduling_race_actor>(resource);

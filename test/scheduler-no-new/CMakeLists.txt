@@ -1,4 +1,4 @@
-set(CURRENT_TEST_NAME tests_contended_resume)
+set(CURRENT_TEST_NAME tests_scheduler_no_new)
 
 add_executable(${CURRENT_TEST_NAME} main.cpp)
 
@@ -12,4 +12,4 @@ set_target_properties(${CURRENT_TEST_NAME}
 )
 
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 30)
+set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 120)

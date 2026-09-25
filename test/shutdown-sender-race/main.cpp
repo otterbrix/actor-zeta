@@ -1,11 +1,10 @@
 /// @file
-/// A sender already inside enqueue_impl when the actor is destroyed. It registered in
-/// the same RMW that read `destroying`, and ~cooperative_actor waits for that count
-/// (a sender is not `running`); without it the mailbox is freed under push_back. Only
-/// a REGISTERED sender is covered -- one before registration holds a raw pointer to a
-/// possibly-dead object. Deterministic: the probe MailBox parks in push_back until a
-/// timer releases it after the destructor had time to finish. Meaningful under ASan; a
-/// plain build only proves it does not hang.
+/// A sender already inside enqueue_impl when the actor is destroyed. It entered the
+/// actor in the same RMW that read `destroying`, and delete waits for everyone inside;
+/// without it the mailbox is freed under push_back. Only a REGISTERED sender is covered
+/// -- one before registration holds a raw pointer to a possibly-dead object. Deterministic:
+/// the probe MailBox parks in push_back until a timer releases it after the destructor had
+/// time to finish. Meaningful under ASan; a plain build only proves it does not hang.
 
 #include <atomic>
 #include <chrono>

@@ -45,6 +45,12 @@ namespace actor_zeta::detail {
 #ifdef __cpp_exceptions
         std::exception_ptr exception_{};
 #endif
+#ifndef NDEBUG
+        // The actor whose mailbox holds the message this state answers, marked by send(); null for a
+        // promise or a method's own state. Awaiting a state marked with yourself never ends: the
+        // message waits in your own mailbox, behind the await (cooperative_actor stops the process).
+        const void* target_ = nullptr;
+#endif
 
         explicit shared_state(std::pmr::memory_resource* r) noexcept
             : resource_(r)
@@ -177,9 +183,18 @@ namespace actor_zeta::detail {
                 deallocate();
                 return false;
             }
-            // CAS failed for another reason: the consumer is alive and waiting. `true` is load-bearing --
-            // false reads as "state gone" and final_awaiter would destroy the frame and drop the continuation.
-            flags_.fetch_and(static_cast<std::uint8_t>(~state_flags::promise_finalizing), std::memory_order_release);
+            // CAS failed for another reason: the consumer took the value (`consumed`) meanwhile. It can
+            // still release the future before the fetch_and below; its release_future() then saw
+            // finalizing and left the state to us -- so the bit we clear decides, as in the CAS.
+            // acq_rel: deallocating must see the consumer's last accesses.
+            const auto old = flags_.fetch_and(static_cast<std::uint8_t>(~state_flags::promise_finalizing),
+                                              std::memory_order_acq_rel);
+            if (old & state_flags::future_released) {
+                deallocate();
+                return false;
+            }
+            // The consumer is alive. `true` is load-bearing -- false reads as "state gone" and
+            // final_awaiter would destroy the frame and drop the continuation.
             return true;
         }
 

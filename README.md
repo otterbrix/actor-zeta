@@ -42,6 +42,7 @@ ctest --test-dir build --output-on-failure
 ## Where next
 
 - [CLAUDE.md](CLAUDE.md) — defining, spawning, messaging and shutting down actors; the rules the code holds to
+- [docs/LIFECYCLE.md](docs/LIFECYCLE.md) — an actor from `spawn()` to `delete`: the turn, the verdicts, `close()`, the contract checks
 - [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md) — `unique_future<T>` shapes that work, and the traps
 - [CHANGELOG.md](CHANGELOG.md) — history and migration guides
 - `examples/` — `coroutine`, `delegation`, `balancer`, `broadcast`, `supervisor`, `external-drive`, `asio`

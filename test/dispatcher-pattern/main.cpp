@@ -23,8 +23,8 @@
 using namespace actor_zeta;
 using namespace dispatcher_test;
 
-// Draining a ready await needs no message: resume_impl() does it on entry, before
-// it reaches the mailbox loop.
+// Draining a ready await needs no message: a suspended behavior keeps the turn, and the
+// actor's loop picks the result up on its next step, before it takes another message.
 
 /// The test is the supervisor: it owns the actors, so it is the only thing that
 /// may schedule them. The actors hold an address_t and can only record what

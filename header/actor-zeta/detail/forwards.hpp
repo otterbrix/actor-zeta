@@ -10,9 +10,6 @@ namespace actor_zeta {
     template<typename T>
     class promise;
 
-    template<class T>
-    class intrusive_ptr;
-
     namespace detail {
 
         enum class enqueue_result : uint8_t;

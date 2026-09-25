@@ -106,7 +106,7 @@ private:
     std::vector<allocation_record> records_;
 };
 
-class TestActor : public actor_zeta::basic_actor<TestActor> {
+class TestActor final : public actor_zeta::basic_actor<TestActor> {
 public:
     using base_type = actor_zeta::basic_actor<TestActor>;
 
@@ -341,5 +341,5 @@ TEST_CASE("Stress test - many coroutines") {
     INFO("  Current memory: " << tracker.current_allocated() << " bytes");
 
     auto leaked = tracker.leaked_allocations();
-    CHECK(leaked.size() <= 1);  // Only actor allocation remains
+    CHECK(leaked.size() <= 2);  // Only the actor and its loop's frame remain
 }

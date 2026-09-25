@@ -147,11 +147,6 @@ namespace actor_zeta { namespace detail {
             push_back(ptr.release());
         }
 
-        template<class... Ts>
-        void emplace_back(Ts&&... xs) {
-            push_back(new value_type(std::forward<Ts>(xs)...));
-        }
-
         void push_front(pointer ptr) noexcept {
             assert(ptr != nullptr);
             if (empty()) {
@@ -165,11 +160,6 @@ namespace actor_zeta { namespace detail {
 
         void push_front(unique_pointer ptr) noexcept {
             push_front(ptr.release());
-        }
-
-        template<class... Ts>
-        void emplace_front(Ts&&... xs) {
-            push_front(new value_type(std::forward<Ts>(xs)...));
         }
 
         iterator insert_after(iterator pos, pointer ptr) {

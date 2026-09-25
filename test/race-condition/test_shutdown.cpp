@@ -36,7 +36,7 @@ public:
 
 TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures (safe pattern)") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     std::vector<actor_zeta::unique_future<int>> futures;
@@ -80,7 +80,7 @@ TEST_CASE("Shutdown Test 4.1: Actor destroyed with pending futures (safe pattern
 
 TEST_CASE("Shutdown Test 4.2: Graceful shutdown - wait for all futures") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     std::vector<actor_zeta::unique_future<int>> futures;
@@ -128,7 +128,7 @@ TEST_CASE("Shutdown Test 4.3: Rapid shutdown with pending work") {
     constexpr int NUM_ITERATIONS = 50;
 
     for (int iter = 0; iter < NUM_ITERATIONS; ++iter) {
-        auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
+        auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 1000);
         scheduler->start();
 
         auto actor = actor_zeta::spawn<shutdown_test_actor>(resource);
@@ -163,7 +163,7 @@ TEST_CASE("Shutdown Test 4.3: Rapid shutdown with pending work") {
 
 TEST_CASE("Shutdown Test 4.4: Sequential create-destroy cycles") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     constexpr int NUM_CYCLES = 50;

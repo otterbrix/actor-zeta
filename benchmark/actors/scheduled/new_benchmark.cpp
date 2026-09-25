@@ -53,9 +53,9 @@ public:
         if (partner_) {
             auto [needs_sched, future] = actor_zeta::send(partner_, &ping_pong_actor::pong, Args{}...);
             actor_zeta::detail::ignore_unused(future);
-            // Dropping this strands the partner: it holds the scheduled bit with no
-            // job anywhere, and every later send reports needs_sched == false. This
-            // actor has no scheduler, so it records and the owner claims.
+            // Dropping this strands the partner: the send took its turn out of the
+            // mailbox, no job holds it, and every later send reports needs_sched ==
+            // false. This actor has no scheduler, so it records and the owner claims.
             if (needs_sched) {
                 partner_owed_.fetch_add(1, std::memory_order_release);
             }
@@ -101,7 +101,7 @@ public:
 
     void SetUp(const benchmark::State&) override {
         resource_ =std::pmr::get_default_resource();
-        scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(1, 1000));
+        scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(resource_, 1, 1000));
         scheduler_->start();
         actor0_ = actor_zeta::spawn<Actor>(resource_);
         actor1_ = actor_zeta::spawn<Actor>(resource_);
@@ -144,7 +144,7 @@ public:
 
     void SetUp(const benchmark::State&) override {
         resource_ =std::pmr::get_default_resource();
-        scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(1, 1000));
+        scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(resource_, 1, 1000));
         scheduler_->start();
         actor0_ = actor_zeta::spawn<Actor>(resource_);
         actor1_ = actor_zeta::spawn<Actor>(resource_);

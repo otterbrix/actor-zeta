@@ -93,7 +93,7 @@ int main() {
 
     // stop() is called explicitly before the actor is released below: ~scheduler_t does
     // not stop the workers, and a worker must never resume a freed actor.
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(1, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 1, 100);
     scheduler->start();
 
     std::cout << "\n--- Testing SYNC methods ---\n\n";

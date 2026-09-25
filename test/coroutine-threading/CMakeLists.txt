@@ -36,9 +36,8 @@ add_test(
         COMMAND tests_coroutine_simple
 )
 
-# Regression guard for the lost wakeup in cooperative_actor::resume_impl: a
-# behavior suspended on a pending co_await must not be parked, and an already
-# parked one must still have its ready continuation drained.
+# Regression guard for the lost wakeup in the actor's loop (formerly resume_impl): a
+# behavior suspended on a pending co_await keeps the turn and is never parked.
 add_executable(
         tests_coroutine_lost_wakeup
         lost_wakeup_test.cpp

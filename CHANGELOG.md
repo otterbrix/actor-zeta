@@ -5,6 +5,19 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Removed
+- **The actor's state word and its CAS loops**: `actor_state` and its helpers, `resume_impl`,
+  `cas_attempt`, `try_acquire_running`, `resume_guard`, `check_race_window`,
+  `leave_and_maybe_schedule`. The turn lives in the mailbox, and the actor keeps only a count
+  of who is inside it, for `delete` (`detail/actor_protocol.hpp`). See "Changed".
+- Mailbox `push_front`, `size`, `empty`, `peek_impl`; `message::prev`;
+  `linked_list::emplace_back` / `emplace_front`; `scheduler_t::next_worker_`. `job_ptr` is a
+  plain value, no longer a list node.
+- `test/contended-resume`: a second `resume()` at once is a contract violation now.
+- **`ref_counted`, `intrusive_ptr`, `make_counted`** (`detail/ref_counted.hpp`,
+  `detail/intrusive_ptr.hpp`, `impl/detail/ref_counted.ipp`) and `test/intrusive_ptr`. The
+  library stopped using them when the scheduler's shutdown helper did, and `deref()` freed with a
+  global `delete this`, even memory `pmr::make_counted` took from a resource. Own through
+  `spawn()`'s `unique_ptr` or `pmr::allocate_ptr` with `pmr::deleter_t`.
 - **`generator<T>` and the streaming subsystem**: `detail/generator.hpp`,
   `actor_zeta::generator`, `actor_zeta::stream_error`, `detail::generator_state`,
   `type_traits::is_generator{,_v}` / `generator_type` / `unwrap_generator{,_t}`,
@@ -19,7 +32,7 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   also resumed the consumer's frame on its own thread. Four further defects shipped
   with it, and no test asserted a yielded value. Any future design must pull through
   the mailbox, publish readiness in the `state_flags` plus continuation form
-  `behavior_t::is_awaited_ready()` reads, and assert streamed values.
+  `behavior_t::take_awaited_continuation()` reads, and assert streamed values.
 - **Blocking `unique_future` API**: `.get()`, `.wait()`, `.available()`, `.cancel()`,
   `.is_cancelled()`, and the backoff spin inside `get()`. Bring the future to ready
   and extract with `take_ready()`. Cancellation is a value: the producer calls
@@ -37,11 +50,31 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   coroutine resumed an actor's frame off its thread with no `running` serialization;
   poll from outside instead (`is_ready()` + `failed()` + `take_ready()`,
   `examples/external-drive/`).
-- **`behavior_t::resume()`**: dead code; `cooperative_actor::resume_impl` resumes behaviors.
+- **`behavior_t::resume()`**: dead code; the actor's loop resumes behaviors.
+- **`unique_future<T>::actor_promise`**: dead since the `std::coroutine_traits` workaround it
+  served was dropped (docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md).
+- **`behavior_t`'s default constructor, move assignment, `done()`, `operator bool`,
+  `is_awaited_ready()`** and `promise_type::resource_` with its constructors: dead once the loop
+  keeps each behavior as a local. `take_awaited_continuation()` now checks readiness itself and
+  returns null until the awaited result is there. The promise's resource-search helpers and its
+  template placement `operator delete` went too: `behavior()` is always an actor's member, so the
+  frame takes the actor's `resource()` directly (`test/behavior-member-only` pins the diagnostic).
 - **`shared_state<T>::take_continuation()`**: dead code; the three claim sites do
   `continuation_.exchange(nullptr, acq_rel)` directly.
 
 ### Added
+- **`cooperative_actor::close()`** returns `unique_future<void>`: the owner's graceful stop.
+  What was sent before runs, a suspended behavior finishes, later sends get
+  `operation_canceled`; idempotent. Once its future is ready, destroying the actor is safe
+  while the scheduler runs.
+- **Contract checks that stop the process** instead of corrupting it: `resume()` without a
+  turn, after `close()` or from inside a behavior; a second `delete`; a `delete` that cannot
+  drain (a bounded wait); in debug builds, two `resume()` calls at once and an actor awaiting
+  its own `send()`.
+- `docs/LIFECYCLE.md`: the turn, one step and its verdicts, `close()`, when `delete` is safe,
+  the contract checks.
+- `test/relacy/` (`ALLOW_RELACY`, Linux and CI only): a Relacy model of the turn handover,
+  `close()` and `delete`, with four mutants it must catch.
 - **`unique_future<T>::take_ready()`**: non-blocking extraction; the future must be ready.
 - **`message::set_command(message_id)`**: a router restamps the command and forwards
   the same `message_ptr` to a worker's `enqueue_impl`; the worker fills the caller's
@@ -55,6 +88,30 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   pass a caught exception on instead of flattening it to a code.
 
 ### Changed
+- **The actor is a generator.** Its loop is a coroutine whose frame comes from the actor's
+  resource (`spawn()` takes two blocks: the actor and the frame), and `resume()` pulls one
+  step. The turn -- the right to call `resume()` -- lives in the mailbox: a blocked mailbox
+  holds it, the `send()` that unblocks it takes it (`needs_sched`). A suspended behavior keeps
+  the turn (verdict `resume`); the actor parks only once its frame is suspended.
+- **`delete` on an actor is a destroying `operator delete`, and an actor class must be
+  `final`.** It waits out senders and the puller, unwinds a suspended behavior (its callers get
+  `broken_pipe`), then runs `~Actor`. See the migration guide.
+- **`sharing_scheduler(resource, threads, max_throughput)`**: the job queue, a ring of `job_ptr`
+  values, and the workers come from `resource`; once warmed up, `send` → `enqueue` → `resume`
+  allocates nothing globally. See the migration guide.
+- **Any `T&&` method parameter is a compile error** (was: `T&&` to a move-only type). See the
+  migration guide.
+- **A message lives as long as its behavior**, so `behavior()` may read it after a `co_await`;
+  `dispatch()` is `[[nodiscard]]`.
+- **`dispatch()` passes a method's error code on**: `co_return ec;` in a dispatched method fails
+  the caller's future with `ec` (`failed()`, `error()`). It used to abort in `dispatch()`'s
+  `co_await`. `dispatch()` waits on a `detail::settled<T>`, which leaves the future in place,
+  settled, instead of taking its value.
+- **Dropping a `unique_future` cancels a suspended producer**: `release()` destroys its frame,
+  whose locals unwind and whose state settles with `broken_pipe`. An external driver keeps the
+  future for as long as it resumes the handle.
+- **`promise<T>(resource)` owns its state until `get_future()`**: settling or dropping a
+  promise nobody took a future from frees the state; a second `get_future()` asserts.
 - **An actor suspended on `co_await` is no longer parked**, and `resume()` /
   `job_ptr::resume()` are `[[nodiscard]]`. The park blocked the inbox, so the next
   `send()` re-scheduled the actor and masked drivers that dropped the verdict. Now
@@ -64,22 +121,28 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 - **`make_message()`**: no sender address.
 - **`enqueue_impl()`** returns `std::pair<bool, enqueue_result>` (bool first).
 - **`behavior()`** returns `behavior_t`, a coroutine; use `co_await dispatch(...)`.
-- **`actor_state` widened from `uint8_t` to `uint32_t`**: three flags in the low bits,
-  the in-flight sender count above them. One word gives a sender and the destructor
-  one modification order without fences; five spare bits would cap the count at 31.
 - **`shared_state<void>` is no longer a separate specialization**: 95 of 104 lines
   duplicated the primary template. Layout unchanged.
-- **`try_schedule_after_enqueue` is now `leave_and_maybe_schedule`**: drops the
-  sender's registration and claims `scheduled` in one read-modify-write.
-- **The CAS bound prints before aborting, in release too** (was a bare `std::terminate()`).
 - Comments and CI notes no longer name specific consuming projects.
 
 ### Added (earlier)
-- Compile-time rejection of `T&&` to a move-only type in coroutine parameters (GCC 11.4 workaround).
+- Compile-time rejection of `T&&` to a move-only type in coroutine parameters (GCC 11.4 workaround);
+  widened to every `T&&` since.
 - `docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md`.
 - Cross-thread stress tests for `unique_future` (`test/race-condition/`).
 
 ### Fixed
+- **An actor destroyed mid-await leaked its chain**, and its caller's future never settled:
+  dropping a future did not destroy a suspended producer's frame. Now the chain unwinds, the
+  caller gets `broken_pipe`, nothing leaks, and a suspended method's locals unwind before
+  `~Actor`, not after. `delete` through a `cooperative_actor*` (`unique_actor`) skipped
+  `~Actor`; now it runs it and frees `sizeof(Actor)`.
+- **`behavior()` read a freed message after a `co_await`**: the message was released at the
+  behavior's first suspension.
+- **A `promise` nobody took a future from leaked its state.**
+- **`try_complete_finalize()` could leak the state** when the consumer released its future
+  between the failed CAS and the fallback.
+- **The scheduler allocated a job node per `enqueue`** from the global heap.
 - **Every public header compiles on its own.** The concept `detail/behavior_t.hpp`
   borrowed from `detail/future.hpp` now lives in `detail/type_traits.hpp`;
   `actor/dispatch_traits.hpp` gained `<cassert>` and a complete `actor::address_t`.
@@ -95,10 +158,6 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 - **`exponential_backoff` shifted by 32.** `1 << (attempt - 10)` reached `INT_MIN` at
   attempt 41 and undefined behaviour from 42, on any teardown wait past about 22ms.
   The exponent is capped; a ubsan job was added to CI.
-- **`try_unblock()` had no caller.** `park()` blocks the inbox on the way out;
-  `resume_impl` now unblocks it on the way in, so a concurrent `send()` to a running
-  actor no longer gets `needs_sched` and a second job node.
-- **A contended `resume()` reported `done`.** See the migration guide.
 - **A user exception no longer kills the process** and reaches the caller. See the migration guide.
 - **`take_ready()` for `void` never marked the result consumed**, so `holds_value()` stayed `true`.
 
@@ -145,20 +204,57 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 
 ## Migration Guides
 
+### Actor classes are `final` (Unreleased)
+
+`delete` on an actor is a destroying `operator delete`: it waits out senders and the puller,
+unwinds a suspended behavior, runs `~Actor` and frees `sizeof(Actor)` -- which a
+further-derived class would outgrow, hence the `static_assert`.
+
+```cpp
+class worker : public basic_actor<worker> { /* ... */ };        // before
+class worker final : public basic_actor<worker> { /* ... */ };  // after
+```
+
+### `sharing_scheduler` takes a memory resource (Unreleased)
+
+```cpp
+auto s = std::make_unique<sharing_scheduler>(4, 1000);             // before
+auto s = std::make_unique<sharing_scheduler>(resource, 4, 1000);   // after: queue and workers from `resource`
+```
+
+### No `T&&` method parameters (Unreleased)
+
+Arguments cross the actor boundary by value, as results do: a `T&&` referred into the message
+body instead of owning the argument. It was rejected for move-only `T`; now for every `T`.
+
+```cpp
+unique_future<void> store(std::string&& s);   // before
+unique_future<void> store(std::string s);     // after
+```
+
+### Stopping an actor: `close()` (Unreleased)
+
+```cpp
+auto closed = actor->close();   // what was sent before runs; later sends: operation_canceled
+for (int i = 0; i < kCap && !closed.is_ready(); ++i) { std::this_thread::yield(); }
+if (closed.is_ready()) { actor.reset(); }   // safe while the scheduler runs
+```
+
 ### `co_await send(...)` no longer compiles (Unreleased)
 
 `needs_sched` is the obligation to put the target in a run queue; an awaiter could
 only hand it back after a wait that cannot end until the target has run. It is a
-`static_assert` now. A target that drives itself (its `enqueue_impl` always returns
-`false`) needs only `co_await std::move(sent.second)`.
+`static_assert` now. The actor holds no scheduler: it records the obligation, and its
+owner enqueues the target (CLAUDE.md, "Who May Schedule"). A target that drives itself
+(its `enqueue_impl` always returns `false`) needs only `co_await std::move(sent.second)`.
 
 ```cpp
 // Before -- compiles, suspends, never resumes
 auto [needs_sched, result] = co_await send(target, &Target::compute, x);
 
-// After -- take the obligation, discharge it, then await
+// After -- take the obligation, record it for the owner, then await
 auto [needs_sched, f] = send(target, &Target::compute, x);
-if (needs_sched) { scheduler->enqueue(target); }
+if (needs_sched) { target_owed_.fetch_add(1, std::memory_order_release); }   // the owner enqueues
 auto result = co_await std::move(f);
 ```
 
@@ -169,7 +265,8 @@ auto result = co_await std::move(f);
 promise) move-constructed a `T` from unwritten bytes. Both now print why and abort in
 every build. `is_ready()` reports `promise_released`, which a promise dying without a
 value also sets; `failed()` is the gate. `co_await` has no error channel, so awaiting
-a cancelled future refuses too: poll, or build with exceptions.
+a cancelled future refuses too, with exceptions or without -- they carry only a user's
+throw, never an error code: poll instead.
 
 ```cpp
 while (!f.is_ready()) { std::this_thread::yield(); }
@@ -177,18 +274,19 @@ if (f.failed()) { return; }   // f.error(): operation_canceled, broken_pipe, int
 auto value = std::move(f).take_ready();
 ```
 
-### A contended `resume()` reports `awaiting`, not `done` (Unreleased)
+### `resume()` needs a turn (Unreleased)
 
-When `resume()` cannot take `running`, the thread that holds it discharges the
-obligation; the verdict is `awaiting`, "drop this node". `done` means finished and
-appears only during teardown. A driver that retired an actor on `done` was retiring
-one that was merely contended.
+Each actor has one turn: `needs_sched` hands it out, a `resume` verdict keeps it, `awaiting`
+puts it back in the mailbox. `resume()` without it -- on a parked actor, after `awaiting`,
+after `close()` -- stops the process, and so does a second `resume()` at once in a debug
+build (it used to report `awaiting`). Enqueue once per `needs_sched`, requeue only on
+`resume`; `done` means closed or being destroyed.
 
 ```cpp
 switch (info.result) {
-    case resume_result::resume:   requeue(actor); break;
-    case resume_result::awaiting: /* drop the node */ break;
-    case resume_result::done:     /* teardown only */ break;
+    case resume_result::resume:   requeue(actor); break;   // the turn stays with you
+    case resume_result::awaiting: /* drop the job: the turn is back in the mailbox */ break;
+    case resume_result::done:     /* closed or being destroyed */ break;
 }
 ```
 
@@ -235,9 +333,11 @@ actor_zeta::test::scheduler_test_t sched(1, 100);
 if (needs_sched) { sched.enqueue(actor.get()); }
 sched.stop();
 
-// After, hand-driven: `resume` means "requeue me". Bound the loop -- an actor
-// awaiting a producer nobody drives reports `resume` forever.
-while (actor->resume(1).result == actor_zeta::scheduler::resume_result::resume) {}
+// After, hand-driven, on a turn (`needs_sched`): `resume` means "requeue me". Bound
+// the loop -- an actor awaiting a producer nobody drives reports `resume` forever.
+if (needs_sched) {
+    while (actor->resume(1).result == actor_zeta::scheduler::resume_result::resume) {}
+}
 ```
 
 ### `generator<T>` removal (Unreleased)
@@ -345,5 +445,6 @@ std::pmr::memory_resource* resource;         // after
 
 ## See Also
 
+- [docs/LIFECYCLE.md](docs/LIFECYCLE.md)
 - [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)
 - [CLAUDE.md](CLAUDE.md)
