@@ -7,7 +7,6 @@
 
 #include "forwards.hpp"
 #include "resumable.hpp"
-#include <actor-zeta/detail/queue/singly_linked.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
@@ -30,10 +29,9 @@ namespace actor_zeta { namespace scheduler {
 
     } // namespace detail
 
-    // Type-erased job pointer using function pointers instead of virtual functions
-    struct job_ptr : actor_zeta::detail::singly_linked<job_ptr> {
-        using node_type = actor_zeta::detail::singly_linked<job_ptr>;
-
+    // Type-erased job: the resumable and its resume function, no virtual call. A plain value --
+    // the scheduler's queue stores it by value, in memory from the scheduler's resource.
+    struct job_ptr {
         void* ptr;
         resume_info (*resume_fn)(void*, size_t);
 

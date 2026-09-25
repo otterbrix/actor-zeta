@@ -48,7 +48,7 @@ TEST_CASE("Race condition stress test - future destruction timing") {
     constexpr int NUM_THREADS = 4;
 
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<stress_actor>(resource);
@@ -136,7 +136,7 @@ TEST_CASE("Race condition stress test - future destruction timing") {
 
 TEST_CASE("Race condition stress test - concurrent future destruction") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 100);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<stress_actor>(resource);
@@ -182,7 +182,7 @@ TEST_CASE("Race condition stress test - concurrent future destruction") {
 
 TEST_CASE("Memory leak detection - orphaned messages") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<stress_actor>(resource);

@@ -42,7 +42,7 @@ public:
 
 TEST_CASE("State Test 1.1: set_result vs cancel race") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<state_test_actor>(resource);
@@ -77,7 +77,7 @@ TEST_CASE("State Test 1.1: set_result vs cancel race") {
 
 TEST_CASE("State Test 1.2: is_ready() during set_result()") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<state_test_actor>(resource);
@@ -135,7 +135,7 @@ TEST_CASE("State Test 1.2: is_ready() during set_result()") {
 
 TEST_CASE("State Test 1.3: Multiple state observers") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<state_test_actor>(resource);
@@ -195,7 +195,7 @@ TEST_CASE("State Test 1.3: Multiple state observers") {
 
 TEST_CASE("State Test 1.4: State transition ordering") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<state_test_actor>(resource);
@@ -242,7 +242,7 @@ TEST_CASE("State Test 1.4: State transition ordering") {
 
 TEST_CASE("State Test 1.5: Happens-before across state transitions") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<state_test_actor>(resource);

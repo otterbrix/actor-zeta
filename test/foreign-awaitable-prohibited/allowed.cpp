@@ -41,15 +41,17 @@ int main() {
     auto* resource = std::pmr::get_default_resource();
     auto actor = spawn<actor_t>(resource);
 
+    // Each send() hands out at most one turn; the actor runs on it, then only while the verdict says `resume`.
     auto sent = send(actor.get(), &actor_t::chain, 20);
     sent.second.detach();
-    while (actor->resume(4).messages_processed != 0) {
+    if (sent.first) {
+        while (actor->resume(4).result == scheduler::resume_result::resume) {
+        }
     }
 
     auto again = send(actor.get(), &actor_t::chain, 20);
-    while (!again.second.is_ready()) {
-        if (actor->resume(4).messages_processed == 0) {
-            break;
+    if (again.first) {
+        while (actor->resume(4).result == scheduler::resume_result::resume) {
         }
     }
     if (again.second.failed() || std::move(again.second).take_ready() != 41) {

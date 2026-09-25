@@ -47,8 +47,8 @@ namespace actor_zeta {
             dispatch_traits_parser<ActorMethods...>::all_no_const_ref;
 
         template<auto... ActorMethods>
-        concept all_methods_no_rvalue_move_only =
-            dispatch_traits_parser<ActorMethods...>::all_no_rvalue_move_only;
+        concept all_methods_no_rvalue_ref =
+            dispatch_traits_parser<ActorMethods...>::all_no_rvalue_ref;
 
         template<typename Contract, auto... ActorMethods>
         concept signatures_compatible =
@@ -63,7 +63,7 @@ namespace actor_zeta {
             methods_count_matches<Contract, ActorMethods...> &&
             all_methods_valid<ActorMethods...> &&
             all_methods_no_const_ref<ActorMethods...> &&
-            all_methods_no_rvalue_move_only<ActorMethods...> &&
+            all_methods_no_rvalue_ref<ActorMethods...> &&
             signatures_compatible<Contract, ActorMethods...>;
 
     } // namespace detail

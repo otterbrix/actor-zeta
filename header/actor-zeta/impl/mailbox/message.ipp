@@ -67,7 +67,6 @@ namespace actor_zeta { namespace mailbox {
 
     message::message(std::pmr::memory_resource* resource)
         : singly_linked(nullptr)
-        , prev(nullptr)
         , body_(resource)
         , result_slot_(nullptr)
         , cleanup_fn_(nullptr)

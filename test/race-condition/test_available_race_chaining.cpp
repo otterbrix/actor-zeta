@@ -162,7 +162,7 @@ TEST_CASE("available race chaining: basic chain is safe") {
     destruction_tracker::reset();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 100);
     scheduler->start();
 
     auto worker = actor_zeta::spawn<worker_actor>(resource);
@@ -200,7 +200,7 @@ TEST_CASE("available race chaining: poll_pending pattern") {
     destruction_tracker::reset();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 50);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 50);
     scheduler->start();
 
     auto worker = actor_zeta::spawn<worker_actor>(resource);
@@ -262,7 +262,7 @@ TEST_CASE("available race chaining: concurrent senders") {
     destruction_tracker::reset();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 100);
     scheduler->start();
 
     auto worker = actor_zeta::spawn<worker_actor>(resource);

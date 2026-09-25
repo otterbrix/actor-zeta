@@ -93,7 +93,7 @@ private:
 int main() {
     auto* res = std::pmr::get_default_resource();
 
-    auto sched = std::make_unique<scheduler::sharing_scheduler>(4, 1000);
+    auto sched = std::make_unique<scheduler::sharing_scheduler>(res, 4, 1000);
     sched->start();
 
     constexpr std::size_t POOL = 4;

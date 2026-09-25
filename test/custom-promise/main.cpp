@@ -205,7 +205,7 @@ TEST_CASE("backward compatibility - old actor code works") {
     REQUIRE(actor->call_count() == 2);
 }
 
-class actor_without_custom_promise : public actor_zeta::basic_actor<actor_without_custom_promise> {
+class actor_without_custom_promise final : public actor_zeta::basic_actor<actor_without_custom_promise> {
 public:
     explicit actor_without_custom_promise(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<actor_without_custom_promise>(ptr) {}
@@ -214,7 +214,7 @@ public:
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message*) { co_return; }
 };
 
-class actor_with_custom_promise : public actor_zeta::basic_actor<actor_with_custom_promise> {
+class actor_with_custom_promise final : public actor_zeta::basic_actor<actor_with_custom_promise> {
 public:
     explicit actor_with_custom_promise(std::pmr::memory_resource* ptr)
         : actor_zeta::basic_actor<actor_with_custom_promise>(ptr) {}

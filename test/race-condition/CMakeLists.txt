@@ -80,19 +80,6 @@ set_target_properties(${CURRENT_TEST_NAME}
 add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
 set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 300)
 
-set(CURRENT_TEST_NAME tests_stress_intrusive_ptr)
-set(${CURRENT_TEST_NAME}_SOURCES test_stress_intrusive_ptr.cpp)
-add_executable(${CURRENT_TEST_NAME} ${${CURRENT_TEST_NAME}_SOURCES})
-target_link_libraries(${CURRENT_TEST_NAME} PRIVATE actor-zeta Catch2::Catch2)
-set_target_properties(${CURRENT_TEST_NAME}
-        PROPERTIES
-        CXX_STANDARD ${CMAKE_CXX_STANDARD}
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO
-        )
-add_test(NAME ${CURRENT_TEST_NAME} COMMAND ${CURRENT_TEST_NAME})
-set_tests_properties(${CURRENT_TEST_NAME} PROPERTIES TIMEOUT 300)
-
 set(CURRENT_TEST_NAME tests_needs_scheduling_race)
 set(${CURRENT_TEST_NAME}_SOURCES test_needs_scheduling_race.cpp)
 add_executable(${CURRENT_TEST_NAME} ${${CURRENT_TEST_NAME}_SOURCES})

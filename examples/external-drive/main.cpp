@@ -154,8 +154,14 @@ int main() {
         }
 
         poller.join();
-        std::cout << "  result = " << std::move(future).take_ready()
-                  << " (observed by poller: " << seen.load() << ")\n\n";
+        // take_ready() aborts on a valueless future in every build: gate on failed().
+        if (future.is_ready() && !future.failed()) {
+            std::cout << "  result = " << std::move(future).take_ready()
+                      << " (observed by poller: " << seen.load() << ")\n\n";
+        } else {
+            std::cout << "  no value to take (ready=" << future.is_ready()
+                      << ", failed=" << future.failed() << ")\n\n";
+        }
     }
 
     std::cout << "ROUTE 2 - manually draining a coroutine-backed future\n";

@@ -14,14 +14,6 @@ namespace actor_zeta { namespace mailbox {
         return inbox_.push_front(ptr.release());
     }
 
-    void default_mailbox_impl::push_front_impl(message_ptr ptr) {
-        if (ptr->is_high_priority()) {
-            urgent_queue_.push_front(ptr.release());
-        } else {
-            normal_queue_.push_front(ptr.release());
-        }
-    }
-
     message_ptr default_mailbox_impl::pop_front_impl() {
         for (;;) {
             if (auto result = urgent_queue_.pop_front()) {
@@ -65,16 +57,15 @@ namespace actor_zeta { namespace mailbox {
         return result;
     }
 
-    size_t default_mailbox_impl::size_impl() {
-        fetch_more();
-        return cached();
-    }
-
     size_t default_mailbox_impl::cached() const noexcept {
         return urgent_queue_.size() + normal_queue_.size();
     }
 
     bool default_mailbox_impl::fetch_more() {
+        // Closed for good: take_head() on the closed tag would reopen the inbox.
+        if (inbox_.closed()) {
+            return false;
+        }
         using node_type = actor_zeta::detail::singly_linked<message>;
         auto promote = [](node_type* ptr) {
             return static_cast<message*>(ptr);

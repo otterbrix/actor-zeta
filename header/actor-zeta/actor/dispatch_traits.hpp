@@ -28,15 +28,14 @@ namespace actor_zeta {
         template<typename... Args>
         concept has_any_const_lvalue_ref = (const_lvalue_ref<Args> || ...);
 
-        // Detects T&& to move-only type. Use T instead - see docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
+        // Detects T&&, for any T. Arguments cross the actor boundary by value, as results do: a
+        // T&& would refer into the message body instead of owning the argument. For move-only T
+        // it is also a GCC 11.4 bug, see docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md.
         template<typename T>
-        concept rvalue_ref_to_move_only =
-            std::is_rvalue_reference_v<T> &&
-            std::is_move_constructible_v<std::remove_reference_t<T>> &&
-            !std::is_copy_constructible_v<std::remove_reference_t<T>>;
+        concept rvalue_ref = std::is_rvalue_reference_v<T>;
 
         template<typename... Args>
-        concept has_any_rvalue_ref_to_move_only = (rvalue_ref_to_move_only<Args> || ...);
+        concept has_any_rvalue_ref = (rvalue_ref<Args> || ...);
 
         namespace type_list_check {
             template<typename ArgsList>
@@ -48,11 +47,11 @@ namespace actor_zeta {
             };
 
             template<typename ArgsList>
-            struct has_rvalue_ref_move_only_impl;
+            struct has_rvalue_ref_impl;
 
             template<typename... Args>
-            struct has_rvalue_ref_move_only_impl<type_traits::type_list<Args...>> {
-                static constexpr bool value = has_any_rvalue_ref_to_move_only<Args...>;
+            struct has_rvalue_ref_impl<type_traits::type_list<Args...>> {
+                static constexpr bool value = has_any_rvalue_ref<Args...>;
             };
         }
 
@@ -60,7 +59,7 @@ namespace actor_zeta {
         concept type_list_has_const_lvalue_ref = type_list_check::has_const_ref_impl<ArgsList>::value;
 
         template<typename ArgsList>
-        concept type_list_has_rvalue_ref_move_only = type_list_check::has_rvalue_ref_move_only_impl<ArgsList>::value;
+        concept type_list_has_rvalue_ref = type_list_check::has_rvalue_ref_impl<ArgsList>::value;
 
         template<auto MethodPtr>
         struct method_return_type_check {
@@ -79,10 +78,10 @@ namespace actor_zeta {
 
             static constexpr bool is_coroutine = type_traits::is_unique_future_v<result_type>;
             static constexpr bool has_const_ref = type_list_has_const_lvalue_ref<args_types>;
-            static constexpr bool has_rvalue_ref_move_only = type_list_has_rvalue_ref_move_only<args_types>;
+            static constexpr bool has_rvalue_ref = type_list_has_rvalue_ref<args_types>;
 
             static constexpr bool no_const_ref = !is_coroutine || !has_const_ref;
-            static constexpr bool no_rvalue_move_only = !is_coroutine || !has_rvalue_ref_move_only;
+            static constexpr bool no_rvalue_ref = !is_coroutine || !has_rvalue_ref;
         };
 
         template<typename T>
@@ -114,8 +113,8 @@ namespace actor_zeta {
                 (method_return_type_check<MethodPtrs>::is_valid && ...);
             static constexpr bool all_no_const_ref =
                 (coroutine_parameter_check<MethodPtrs>::no_const_ref && ...);
-            static constexpr bool all_no_rvalue_move_only =
-                (coroutine_parameter_check<MethodPtrs>::no_rvalue_move_only && ...);
+            static constexpr bool all_no_rvalue_ref =
+                (coroutine_parameter_check<MethodPtrs>::no_rvalue_ref && ...);
         };
 
         template<auto First>
@@ -124,7 +123,7 @@ namespace actor_zeta {
 
             static constexpr bool all_valid = method_return_type_check<First>::is_valid;
             static constexpr bool all_no_const_ref = coroutine_parameter_check<First>::no_const_ref;
-            static constexpr bool all_no_rvalue_move_only = coroutine_parameter_check<First>::no_rvalue_move_only;
+            static constexpr bool all_no_rvalue_ref = coroutine_parameter_check<First>::no_rvalue_ref;
         };
     } // namespace detail
 
@@ -151,10 +150,12 @@ namespace actor_zeta {
             "After co_await, message is destroyed and const& becomes dangling. Use by-value instead.");
 
         static_assert(
-            parser::all_no_rvalue_move_only,
-            "Coroutine methods must not have T&& parameters for move-only types (e.g., std::unique_ptr<T>&&). "
-            "GCC 11.4 has a bug where operator new doesn't receive arguments for such signatures. "
-            "Use by-value instead: T (not T&&). See docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md");
+            parser::all_no_rvalue_ref,
+            "Coroutine methods must not have T&& parameters, for any T. Arguments are passed by "
+            "value, as results are (unique_future<T> has no reference T): a T&& would refer into "
+            "the message body instead of owning the argument. For move-only T, GCC 11.4 also fails "
+            "to pass arguments to operator new (docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md). "
+            "Take the parameter by value: T, not T&&.");
     };
 
     template<>

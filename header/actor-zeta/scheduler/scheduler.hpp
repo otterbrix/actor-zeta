@@ -1,31 +1,34 @@
 #pragma once
 
-#include <atomic>
 #include <cassert>
 #include <condition_variable>
-#include <limits>
+#include <cstddef>
 #include <memory>
-#include <set>
-#include <thread>
+#include <memory_resource>
+#include <mutex>
 #include <vector>
 
-#include <actor-zeta/detail/ref_counted.hpp>
+#include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/scheduler/job_ptr.hpp>
 #include <actor-zeta/scheduler/worker.hpp>
 
 namespace actor_zeta { namespace scheduler {
 
+    // Takes its memory from `resource` -- the job queue and the workers -- never from the global
+    // operator new; only std::thread allocates on its own, in start().
     template<class Policy>
     class scheduler_t {
     public:
         using policy_data = typename Policy::coordinator_data;
         using worker_type = worker<Policy>;
 
-        scheduler_t(size_t num_worker_threads, size_t max_throughput_param)
-            : next_worker_(0)
+        scheduler_t(std::pmr::memory_resource* resource, size_t num_worker_threads, size_t max_throughput_param)
+            : resource_(resource)
             , max_throughput_(max_throughput_param)
             , num_workers_(num_worker_threads)
-            , data_(this) {
+            , workers_(resource)
+            , data_(resource) {
+            assert(resource && "scheduler_t: resource must not be null");
         }
 
         inline size_t max_throughput() const {
@@ -50,7 +53,8 @@ namespace actor_zeta { namespace scheduler {
             workers_.reserve(num);
 
             for (size_t i = 0; i < num; ++i) {
-                workers_.emplace_back(new worker_type(i, this, init, max_throughput_));
+                workers_.emplace_back(pmr::allocate_ptr<worker_type>(resource_, i, this, init, max_throughput_),
+                                      pmr::deleter_t(resource_));
             }
 
             for (auto& w : workers_) {
@@ -59,8 +63,9 @@ namespace actor_zeta { namespace scheduler {
         }
 
         void stop() {
-            class shutdown_helper : public ref_counted {
-            public:
+            // One shutdown job per worker, one at a time: whichever worker takes it finishes what
+            // it was running and leaves its loop.
+            struct shutdown_helper {
                 resume_info resume(size_t) {
                     std::unique_lock<std::mutex> guard(mtx);
                     ++completed_count;
@@ -74,24 +79,14 @@ namespace actor_zeta { namespace scheduler {
                     --completed_count;
                 }
 
-                shutdown_helper(): completed_count(0) {}
-
                 std::mutex mtx;
                 std::condition_variable cv;
-                std::atomic<size_t> completed_count;
+                size_t completed_count = 0;
             };
             shutdown_helper sh;
-            std::set<worker_type*> alive_workers;
-            auto num = num_workers();
-            for (size_t i = 0; i < num; ++i) {
-                alive_workers.insert(worker_by_id(i));
-                sh.ref();
-            }
-            while (!alive_workers.empty()) {
-                auto it = alive_workers.begin();
-                (*it)->external_enqueue(&sh);
+            for (auto& w : workers_) {
+                w->external_enqueue(&sh);
                 sh.wait_for_completion();
-                alive_workers.erase(it);
             }
 
             for (auto& w : workers_) {
@@ -111,10 +106,10 @@ namespace actor_zeta { namespace scheduler {
         }
 
     private:
-        std::atomic<size_t> next_worker_;
+        std::pmr::memory_resource* resource_;
         size_t max_throughput_;
         size_t num_workers_;
-        std::vector<std::unique_ptr<worker_type>> workers_;
+        std::pmr::vector<std::unique_ptr<worker_type, pmr::deleter_t>> workers_;
         policy_data data_;
         Policy policy_;
     };

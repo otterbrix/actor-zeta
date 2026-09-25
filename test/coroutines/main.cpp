@@ -370,10 +370,11 @@ TEST_CASE("Handler integration - unique_future<T> return types") {
 // locals with it -- is invisible without a sanitizer, so run this target under ASan
 // or valgrind to actually detect it.
 
-// An actor cannot await a message it posted to itself. While a behavior is
-// suspended on a co_await, resume_impl() returns before it ever reaches the
-// mailbox loop, so the message that would settle the future is never
-// dispatched and the verdict stays `resume` forever.
+// An actor cannot await a message it posted to itself: while a behavior is suspended on a
+// co_await, the loop keeps the turn and does not read the mailbox, so the message that would
+// settle the future is never dispatched. A debug build stops the process at once
+// (test/protocol-violations, self_await); in release the verdict stays `resume` forever.
+#ifdef NDEBUG
 class self_await_actor final : public actor_zeta::basic_actor<self_await_actor> {
 public:
     explicit self_await_actor(std::pmr::memory_resource* res)
@@ -437,13 +438,12 @@ TEST_CASE("Recursive coroutines are NOT SUPPORTED") {
     REQUIRE_FALSE(actor->inner_ran());
     REQUIRE_FALSE(future.is_ready());
 
-    // Leaks ~650 bytes by construction: outer() stays suspended on a co_await that
-    // can never settle, so ~behavior_t releases the future without release() being
-    // able to reclaim the frame (it only destroys a done() handle). The abandoned
-    // frame and inner's shared_state are the leak. The same shape is why CI runs
-    // with detect_leaks=0; macOS ASan does not report leaks at all.
+    // outer() stays suspended on a co_await that can never settle. Destroying the actor
+    // unwinds it: the chain's futures destroy their frames even mid-body, and the
+    // caller's future settles with broken_pipe.
     future.detach();
 }
+#endif
 
 TEST_CASE("coroutine cleanup does not crash") {
     auto* resource = std::pmr::get_default_resource();
@@ -508,4 +508,42 @@ TEST_CASE("coroutine cleanup does not crash") {
         }
         REQUIRE(true);
     }
+}
+// behavior() awaits a promise the test holds, so the test decides when the result is there.
+class gated_behavior_actor final : public actor_zeta::basic_actor<gated_behavior_actor> {
+public:
+    explicit gated_behavior_actor(std::pmr::memory_resource* res)
+        : actor_zeta::basic_actor<gated_behavior_actor>(res) {
+    }
+
+    actor_zeta::unique_future<void> noop() {
+        co_return;
+    }
+
+    using dispatch_traits = actor_zeta::dispatch_traits<&gated_behavior_actor::noop>;
+
+    actor_zeta::behavior_t behavior(actor_zeta::mailbox::message*) {
+        co_await std::move(gate_);
+    }
+
+    actor_zeta::unique_future<void> gate_;
+};
+
+// The loop pulls a suspended behavior with take_awaited_continuation() alone: before the awaited
+// result is there it must hand out nothing, or the continuation is gone and the behavior hangs.
+TEST_CASE("take_awaited_continuation() hands the continuation out only once the result is ready") {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto actor = actor_zeta::spawn<gated_behavior_actor>(&resource);
+    actor_zeta::promise<void> gate(&resource);
+    actor->gate_ = gate.get_future();
+
+    actor_zeta::behavior_t behavior = actor->behavior(nullptr);
+    REQUIRE(behavior.is_busy());
+    REQUIRE_FALSE(behavior.take_awaited_continuation());
+
+    gate.set_value();
+    auto cont = behavior.take_awaited_continuation();
+    REQUIRE(cont);
+    cont.resume();
+    REQUIRE_FALSE(behavior.is_busy());
 }

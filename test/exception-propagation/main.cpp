@@ -221,7 +221,10 @@ int main() {
     {
         auto driven = spawn<thrower_actor>(resource);
         auto sent = send(driven.get(), &thrower_actor::inner, -1);
-        while (driven->resume(4).messages_processed != 0) {
+        // Run on the turn send() hands out, then only while the verdict says `resume`.
+        if (sent.first) {
+            while (driven->resume(4).result == scheduler::resume_result::resume) {
+            }
         }
 
         check(sent.second.is_ready(), "send(): a thrown body still completes the future");
@@ -248,11 +251,13 @@ int main() {
         auto sent = send(rude.get(), &rude_actor::ping);
         sent.second.detach();
 
+        check(sent.first, "behavior() throw: a fresh actor owes a turn");
         const auto verdict = rude->resume(4);
         check(verdict.messages_processed == 1, "behavior() throw: the message was taken");
 
         auto again = send(rude.get(), &rude_actor::ping);
         again.second.detach();
+        check(again.first, "behavior() throw: the parked actor owes a turn again");
         const auto second = rude->resume(4);
         check(second.messages_processed == 1, "behavior() throw: the actor survives it");
     }
@@ -265,6 +270,7 @@ int main() {
         actor2->gate_ = gate.get_future();
 
         auto sent = send(actor2.get(), &late_thrower::after_gate);
+        check(sent.first, "late throw: a fresh actor owes a turn");
         const auto suspended = actor2->resume(4);
         check(suspended.result == scheduler::resume_result::resume,
               "late throw: the method parked on a pending future");
@@ -292,7 +298,9 @@ int main() {
     {
         auto actor3 = spawn<late_thrower>(resource);
         auto sent = send(actor3.get(), &late_thrower::void_outer);
-        while (actor3->resume(4).messages_processed != 0) {
+        if (sent.first) {
+            while (actor3->resume(4).result == scheduler::resume_result::resume) {
+            }
         }
 
         check(sent.second.failed(), "void chain: the caller is told it failed");
@@ -310,7 +318,7 @@ int main() {
 
     // Across threads, on a real scheduler -- the shape a caller actually uses.
     {
-        auto sched = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 8);
+        auto sched = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 8);
         sched->start();
         {
             auto worker = spawn<thrower_actor>(resource);

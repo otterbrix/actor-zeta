@@ -33,13 +33,11 @@ int main() {
     auto* resource = std::pmr::get_default_resource();
     auto worker = spawn<worker_t>(resource);
 
+    // Run on the turn send() hands out, then only while the verdict says `resume`.
     auto [needs_sched, future] = send(worker.get(), &worker_t::compute, 21);
-    while (!future.is_ready()) {
-        auto info = worker->resume(1);
-        if (!info.messages_processed && !needs_sched) {
-            break;
+    if (needs_sched) {
+        while (worker->resume(1).result == scheduler::resume_result::resume) {
         }
-        needs_sched = false;
     }
 
     if (future.failed()) {
