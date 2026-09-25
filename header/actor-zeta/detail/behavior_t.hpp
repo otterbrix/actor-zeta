@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <type_traits>
 #include <utility>
 
 #include <actor-zeta/detail/coroutine.hpp>
@@ -83,11 +84,12 @@ namespace actor_zeta {
             // at all, or GCC dropped `this` (it does for out-of-line methods).
             template<typename Self, typename... Args>
             static void* operator new(std::size_t size, const Self& self, const Args&...) {
-                static_assert(detail::has_resource_method<const Self>,
+                using actor_type = std::remove_reference_t<Self>; // GCC 11.4 deduces Self as Actor&
+                static_assert(detail::has_resource_method<const actor_type>,
                               "behavior() must be an actor member function defined inline: its frame "
                               "comes from the actor's resource() (GCC does not pass 'this' for "
                               "out-of-line methods)");
-                if constexpr (detail::has_resource_method<const Self>) {
+                if constexpr (detail::has_resource_method<const actor_type>) {
                     return detail::allocate_coro_frame(self.resource(), size);
                 } else {
                     std::abort(); // unreachable: the static_assert stops the build

@@ -3,10 +3,8 @@
 #include <cassert>
 #include <condition_variable>
 #include <cstddef>
-#include <memory>
 #include <memory_resource>
 #include <mutex>
-#include <vector>
 
 #include <actor-zeta/detail/memory.hpp>
 #include <actor-zeta/scheduler/job_ptr.hpp>
@@ -26,9 +24,21 @@ namespace actor_zeta { namespace scheduler {
             : resource_(resource)
             , max_throughput_(max_throughput_param)
             , num_workers_(num_worker_threads)
-            , workers_(resource)
             , data_(resource) {
             assert(resource && "scheduler_t: resource must not be null");
+        }
+
+        // Frees the workers start() made. A plain array, not a std::pmr::vector: libstdc++ 11 destroys
+        // a vector's elements through the deprecated polymorphic_allocator::destroy, which Clang
+        // reports and -Werror fails. Destroying a started scheduler without stop() still terminates:
+        // ~std::thread on a joinable worker.
+        ~scheduler_t() {
+            if (workers_) {
+                for (size_t i = 0; i < num_workers_; ++i) {
+                    pmr::deallocate_ptr(resource_, workers_[i]);
+                }
+                resource_->deallocate(workers_, num_workers_ * sizeof(worker_type*), alignof(worker_type*));
+            }
         }
 
         inline size_t max_throughput() const {
@@ -40,7 +50,7 @@ namespace actor_zeta { namespace scheduler {
         }
 
         worker_type* worker_by_id(size_t x) {
-            return workers_[x].get();
+            return workers_[x];
         }
 
         policy_data& data() {
@@ -49,16 +59,14 @@ namespace actor_zeta { namespace scheduler {
 
         void start() {
             typename worker_type::policy_data init{this};
-            auto num = num_workers();
-            workers_.reserve(num);
-
-            for (size_t i = 0; i < num; ++i) {
-                workers_.emplace_back(pmr::allocate_ptr<worker_type>(resource_, i, this, init, max_throughput_),
-                                      pmr::deleter_t(resource_));
+            workers_ = static_cast<worker_type**>(
+                resource_->allocate(num_workers_ * sizeof(worker_type*), alignof(worker_type*)));
+            for (size_t i = 0; i < num_workers_; ++i) {
+                workers_[i] = pmr::allocate_ptr<worker_type>(resource_, i, this, init, max_throughput_);
             }
 
-            for (auto& w : workers_) {
-                w->start();
+            for (size_t i = 0; i < num_workers_; ++i) {
+                workers_[i]->start();
             }
         }
 
@@ -84,18 +92,18 @@ namespace actor_zeta { namespace scheduler {
                 size_t completed_count = 0;
             };
             shutdown_helper sh;
-            for (auto& w : workers_) {
-                w->external_enqueue(&sh);
+            for (size_t i = 0; i < num_workers_; ++i) {
+                workers_[i]->external_enqueue(&sh);
                 sh.wait_for_completion();
             }
 
-            for (auto& w : workers_) {
-                w->get_thread().join();
+            for (size_t i = 0; i < num_workers_; ++i) {
+                workers_[i]->get_thread().join();
             }
 
             auto clear_job = [](job_ptr) {};
-            for (auto& w : workers_) {
-                policy_.foreach_resumable(w.get(), clear_job);
+            for (size_t i = 0; i < num_workers_; ++i) {
+                policy_.foreach_resumable(workers_[i], clear_job);
             }
             policy_.foreach_central_resumable(this, clear_job);
         }
@@ -109,7 +117,7 @@ namespace actor_zeta { namespace scheduler {
         std::pmr::memory_resource* resource_;
         size_t max_throughput_;
         size_t num_workers_;
-        std::pmr::vector<std::unique_ptr<worker_type, pmr::deleter_t>> workers_;
+        worker_type** workers_ = nullptr; // num_workers_ of them, from resource_, made by start()
         policy_data data_;
         Policy policy_;
     };
