@@ -200,3 +200,21 @@ TEST_CASE("the actor's loop frame lives in the actor's resource") {
     REQUIRE(res.blocks_.load() == 0);
     REQUIRE(res.bytes_.load() == 0);
 }
+
+// close() of a parked actor ends its loop then and there: the frame goes back to the resource, and
+// only the actor's own block is left until delete.
+TEST_CASE("close() of a parked actor frees its loop frame") {
+    counting_resource res;
+    teardown_log log;
+    {
+        auto actor = spawn<waiter>(&res, &log);
+        REQUIRE(res.blocks_.load() == 2);
+        {
+            auto closed = actor->close();
+            REQUIRE(closed.is_ready());
+        }
+        REQUIRE(res.blocks_.load() == 1);
+    }
+    REQUIRE(res.blocks_.load() == 0);
+    REQUIRE(res.bytes_.load() == 0);
+}

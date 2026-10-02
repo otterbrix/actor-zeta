@@ -178,10 +178,10 @@ namespace actor_zeta { namespace actor {
 #ifndef NDEBUG
             protocol::begin_turn(inside_);
 #endif
-            if (mailbox().blocked()) {
-                protocol::violation("resume() on a parked actor: no send() handed out a turn");
-            }
-            if (loop_.done()) {
+            // A parked actor -- no turn handed out -- stops the process at the loop's first
+            // pop_front(): the mailbox refuses to be read while parked. A closed one has no loop left,
+            // or a finished one.
+            if (!loop_ || loop_.done()) {
                 protocol::violation("resume() on a closed actor: after close() nobody holds a turn");
             }
 
@@ -209,11 +209,8 @@ namespace actor_zeta { namespace actor {
                 if (mailbox().try_block()) {
                     verdict = scheduler::resume_result::awaiting;
                 } else {
-                    if (mailbox().closed()) {
-                        protocol::violation("resume() on a closed actor: after close() nobody holds a turn");
-                    }
 #ifndef NDEBUG
-                    protocol::begin_turn(inside_); // still ours
+                    protocol::begin_turn(inside_); // still ours: messages wait
 #endif
                 }
             }
@@ -244,11 +241,16 @@ namespace actor_zeta { namespace actor {
 
             // In order behind everything sent so far. Refused, the marker settles itself: closed.
             if (mailbox().push_back(std::move(marker)) == detail::enqueue_result::unblocked_reader) {
-                // It was parked, and this push took the turn: close now, the marker with the rest.
+                // It was parked, and this push took the turn: close now, the marker with the rest,
+                // and end the loop -- parked, it holds no behavior and no message. With no loop left
+                // a later resume() stops at its entry check; nobody else may run the actor meanwhile,
+                // as this call holds the turn.
 #ifndef NDEBUG
                 protocol::begin_turn(inside_);
 #endif
                 mailbox().close();
+                loop_.destroy();
+                loop_ = {};
 #ifndef NDEBUG
                 protocol::end_turn(inside_);
 #endif
@@ -333,8 +335,11 @@ namespace actor_zeta { namespace actor {
             self->publish_destroying_and_drain();
             // The loop's frame holds the behavior and its message: destroying it unwinds the chain
             // (callers get broken_pipe), then drops the message -- while every member is alive.
-            self->loop_.destroy();
-            self->loop_ = {};
+            // close() of a parked actor may have ended it already.
+            if (self->loop_) {
+                self->loop_.destroy();
+                self->loop_ = {};
+            }
 
             auto* resource = self->resource_;
             auto* actor = static_cast<Actor*>(self);

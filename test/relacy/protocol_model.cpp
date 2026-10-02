@@ -198,10 +198,14 @@ namespace {
         }
     };
 
-    // default_mailbox::fetch_more: the taken list is newest first; reverse it onto the cache.
+    // default_mailbox::fetch_more: the taken list is newest first; reverse it onto the cache. A parked
+    // mailbox is never read: the loop would be running without a turn.
     bool fetch_more(model_actor* a) {
         if (a->box.closed()) {
             return false;
+        }
+        if (a->box.blocked()) {
+            protocol::violation("resume() on a parked actor: no send() handed out a turn");
         }
         std::uintptr_t list = a->box.take_head(0);
         if (list == 0) {
@@ -275,9 +279,6 @@ namespace {
             return verdict::done;
         }
         protocol::begin_turn(a->inside);
-        if (a->box.blocked()) {
-            protocol::violation("resume() on a parked actor: no send() handed out a turn");
-        }
 
         verdict v = verdict::resume;
         int handled = 0;
@@ -309,9 +310,6 @@ namespace {
             if (cache_empty && a->box.try_block()) {
                 protocol::leave(a->g);
                 return verdict::awaiting;
-            }
-            if (a->box.closed()) {
-                protocol::violation("resume() on a closed actor: after close() nobody holds a turn");
             }
             // One step per resume(): a message that came before the park waits for the next one.
             w.live_turns.fetch_add(1, rl::memory_order_relaxed);

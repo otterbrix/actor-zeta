@@ -9,7 +9,8 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
   `cas_attempt`, `try_acquire_running`, `resume_guard`, `check_race_window`,
   `leave_and_maybe_schedule`. The turn lives in the mailbox, and the actor keeps only a count
   of who is inside it, for `delete` (`detail/actor_protocol.hpp`). See "Changed".
-- Mailbox `push_front`, `size`, `empty`, `peek_impl`; `message::prev`;
+- Mailbox `push_front`, `size`, `empty`, `peek_impl`, `try_unblock` (it handed out a turn with no
+  message), and the queries `blocked()` / `closed()`; `message::prev`;
   `linked_list::emplace_back` / `emplace_front`; `scheduler_t::next_worker_`. `job_ptr` is a
   plain value, no longer a list node.
 - `test/contended-resume`: a second `resume()` at once is a contract violation now.
@@ -66,7 +67,7 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 - **`cooperative_actor::close()`** returns `unique_future<void>`: the owner's graceful stop.
   What was sent before runs, a suspended behavior finishes, later sends get
   `operation_canceled`; idempotent. Once its future is ready, destroying the actor is safe
-  while the scheduler runs.
+  while the scheduler runs. A parked actor is closed at once, and its loop frame freed.
 - **Contract checks that stop the process** instead of corrupting it: `resume()` without a
   turn, after `close()` or from inside a behavior; a second `delete`; a `delete` that cannot
   drain (a bounded wait); in debug builds, two `resume()` calls at once and an actor awaiting
@@ -132,6 +133,8 @@ All notable changes to actor-zeta. Format based on [Keep a Changelog](https://ke
 - Cross-thread stress tests for `unique_future` (`test/race-condition/`).
 
 ### Fixed
+- **`pop_front()` on a parked mailbox unparked it**, silently in release, handing the turn to nobody;
+  it now stops the process (the same "resume() on a parked actor" check, made by the mailbox).
 - **An actor destroyed mid-await leaked its chain**, and its caller's future never settled:
   dropping a future did not destroy a suspended producer's frame. Now the chain unwinds, the
   caller gets `broken_pipe`, nothing leaks, and a suspended method's locals unwind before

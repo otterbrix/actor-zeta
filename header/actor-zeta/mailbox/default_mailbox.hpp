@@ -15,10 +15,7 @@ namespace actor_zeta { namespace mailbox {
 
         actor_zeta::detail::enqueue_result push_back_impl(message_ptr);
         message_ptr pop_front_impl();
-        bool closed_impl() const noexcept;
-        bool blocked_impl() const noexcept;
         bool try_block_impl();
-        bool try_unblock_impl();
         size_t close_impl();
 
     private:
@@ -42,17 +39,8 @@ namespace actor_zeta { namespace mailbox {
         mailbox::message_ptr pop_front() {
             return self()->pop_front_impl();
         }
-        bool closed() const noexcept {
-            return self()->closed_impl();
-        }
-        bool blocked() const noexcept {
-            return self()->blocked_impl();
-        }
         bool try_block() {
             return self()->try_block_impl();
-        }
-        bool try_unblock() {
-            return self()->try_unblock_impl();
         }
         size_t close() {
             return self()->close_impl();
@@ -61,10 +49,6 @@ namespace actor_zeta { namespace mailbox {
     private:
         auto self() noexcept -> T* {
             return static_cast<T*>(this);
-        }
-
-        auto self() const noexcept -> const T* {
-            return static_cast<const T*>(this);
         }
     };
 

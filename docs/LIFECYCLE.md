@@ -67,8 +67,9 @@ and reports `resume`. A worker yields its thread after a step that handled nothi
 3. **Steps** as above. A behavior and its message are locals of the loop's frame: the message
    lives until its behavior finishes, so `behavior()` may read it after a `co_await`.
 4. **`close()`** returns `unique_future<void>` and queues a marker behind everything sent so far.
-   - A parked actor: the marker's push takes the turn, the owner closes the mailbox itself, and
-     the future is ready at once.
+   - A parked actor: the marker's push takes the turn, the owner closes the mailbox itself, frees
+     the loop's frame (parked, it holds no behavior and no message), and the future is ready at
+     once.
    - Otherwise the turn holder reaches the marker in order, closes the mailbox, and the loop
      finishes: verdict `done`. A behavior suspended before the marker finishes first.
    - From then on `send()` is refused: `operation_canceled`. `close()` is idempotent: every

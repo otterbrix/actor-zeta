@@ -235,6 +235,20 @@ namespace {
         return 0;
     }
 
+    // Reading a parked mailbox would take the turn nobody was handed: the mailbox stops the process.
+    int pop_parked_mailbox() {
+        mailbox::default_mailbox box;
+        if (!box.try_block()) {
+            std::printf("HARNESS BROKEN: a fresh mailbox must park\n");
+            return 2;
+        }
+
+        std::signal(SIGABRT, on_stop);
+        [[maybe_unused]] auto msg = box.pop_front();
+
+        carried_on("pop_front() read a parked mailbox");
+    }
+
     struct check {
         const char* name;
         int (*run)();
@@ -249,6 +263,7 @@ namespace {
         {"delete_from_inside", delete_from_inside},
         {"self_await", self_await},
         {"await_neighbour", await_neighbour},
+        {"pop_parked_mailbox", pop_parked_mailbox},
     };
 
 } // namespace

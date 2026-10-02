@@ -25,7 +25,7 @@ set_target_properties(${CURRENT_TEST_NAME}
 # since ctest treats a signal as a crash regardless. await_neighbour is a control: it traps
 # nothing and must finish.
 foreach (AZ_CHECK second_get_future nested_resume resume_without_turn resume_after_close double_delete delete_from_inside
-                  self_await await_neighbour)
+                  self_await await_neighbour pop_parked_mailbox)
     add_test(NAME protocol_violation_${AZ_CHECK} COMMAND ${CURRENT_TEST_NAME} ${AZ_CHECK})
 endforeach ()
 # delete_from_inside waits out the bounded wait for the actor to drain.
@@ -49,6 +49,6 @@ set_target_properties(${AZ_RELEASE_CHECKS}
         CXX_STANDARD_REQUIRED YES
         CXX_EXTENSIONS NO
 )
-foreach (AZ_CHECK nested_resume resume_without_turn resume_after_close double_delete)
+foreach (AZ_CHECK nested_resume resume_without_turn resume_after_close double_delete pop_parked_mailbox)
     add_test(NAME protocol_violation_release_${AZ_CHECK} COMMAND ${AZ_RELEASE_CHECKS} ${AZ_CHECK})
 endforeach ()
