@@ -64,7 +64,7 @@ public:
 
 TEST_CASE("Refcount Test 2.1: Concurrent actor + future release") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<refcount_test_actor>(resource);
@@ -99,7 +99,7 @@ TEST_CASE("Refcount Test 2.1: Concurrent actor + future release") {
 
 TEST_CASE("Refcount Test 2.2: Stress test with 1000 concurrent futures") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<refcount_test_actor>(resource);
@@ -164,7 +164,7 @@ TEST_CASE("Refcount Test 2.2: Stress test with 1000 concurrent futures") {
 
 TEST_CASE("Refcount Test 2.3: Refcount correctness under various destruction patterns") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<refcount_test_actor>(resource);

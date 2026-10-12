@@ -50,7 +50,7 @@ public:
 
 TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<aba_test_actor>(resource);
@@ -107,7 +107,7 @@ TEST_CASE("ABA Test 1: Concurrent push_front/take_head stress test") {
 
 TEST_CASE("ABA Test 2: Rapid actor creation/destruction stress test") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 1000);
     scheduler->start();
 
     constexpr int NUM_ITERATIONS = 5;  // Minimal for TSAN
@@ -140,7 +140,7 @@ TEST_CASE("ABA Test 2: Rapid actor creation/destruction stress test") {
 
 TEST_CASE("ABA Test 3: Concurrent enqueue from multiple threads") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 8, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<aba_test_actor>(resource);
@@ -176,7 +176,7 @@ TEST_CASE("ABA Test 3: Concurrent enqueue from multiple threads") {
 
 TEST_CASE("ABA Test 4: Interleaved enqueue/resume stress test") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 8, 1000);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<aba_test_actor>(resource);

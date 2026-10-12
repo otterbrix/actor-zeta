@@ -2,11 +2,16 @@
 
 #include <actor-zeta.hpp>
 
+#include <utility>
+
 template<typename... Args>
 class ping_pong_actor final : public actor_zeta::basic_actor<ping_pong_actor<Args...>> {
     using base_type = actor_zeta::basic_actor<ping_pong_actor<Args...>>;
 
     ping_pong_actor* partner_;
+    // The partner's turn from send(): an actor cannot schedule its partner, so it records the
+    // turn and the supervisor claims it. A plain bool: the supervisor drives both on one thread.
+    bool partner_owed_ = false;
 
 public:
     explicit ping_pong_actor(std::pmr::memory_resource* resource)
@@ -24,6 +29,7 @@ public:
         if (partner_) {
             auto [needs_sched, future] = actor_zeta::send(partner_, &ping_pong_actor::ping, Args{}...);
             actor_zeta::detail::ignore_unused(future);
+            partner_owed_ = partner_owed_ || needs_sched;
         }
         co_return;
     }
@@ -32,12 +38,17 @@ public:
         if (partner_) {
             auto [needs_sched, future] = actor_zeta::send(partner_, &ping_pong_actor::pong, Args{}...);
             actor_zeta::detail::ignore_unused(future);
+            partner_owed_ = partner_owed_ || needs_sched;
         }
         co_return;
     }
 
     actor_zeta::unique_future<void> pong(Args...) {
         co_return;
+    }
+
+    bool take_partner_obligation() noexcept {
+        return std::exchange(partner_owed_, false);
     }
 
     actor_zeta::behavior_t behavior(actor_zeta::mailbox::message* msg) {

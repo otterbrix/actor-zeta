@@ -47,6 +47,12 @@ namespace actor_zeta {
 
             auto [msg, future] = detail::make_message<value_type>(
                 actor->resource(), cmd, std::forward<Args>(args)...);
+#ifndef NDEBUG
+            // The actor that answers (see shared_state::target_); a base pointer is cast down to it.
+            if constexpr (std::is_base_of_v<ActorPtr, Actor>) {
+                future.internal_state()->target_ = static_cast<const Actor*>(actor);
+            }
+#endif
 
             // On queue_closed the message destructor calls cleanup_fn_, which sets
             // operation_canceled on the slot and releases the promise — no manual
@@ -71,6 +77,9 @@ namespace actor_zeta {
 
             auto [msg, future] = detail::make_message<value_type>(
                 target.resource(), cmd, std::forward<Args>(args)...);
+#ifndef NDEBUG
+            future.internal_state()->target_ = target.get(); // see shared_state::target_
+#endif
             auto [needs_sched, result] = target.enqueue_impl(std::move(msg));
             ignore_unused(result);
             return {needs_sched, std::move(future)};

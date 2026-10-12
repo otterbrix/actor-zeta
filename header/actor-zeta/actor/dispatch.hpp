@@ -63,8 +63,9 @@ namespace actor_zeta {
     }
 
     // Run the method on the message; its result fills the caller's promise via the message's result_slot.
+    // [[nodiscard]]: behavior() must co_await it -- a dropped future destroys the method's frame.
     template<class Actor, typename Method>
-    unique_future<void> dispatch(Actor* self, Method method, mailbox::message* msg) {
+    [[nodiscard]] unique_future<void> dispatch(Actor* self, Method method, mailbox::message* msg) {
         using call_trait = type_traits::get_callable_trait_t<Method>;
         using result_type = typename call_trait::result_type;
         using args_type_list = typename call_trait::args_types;
@@ -78,7 +79,7 @@ namespace actor_zeta {
         static_assert(
             dispatch_validation::no_non_const_refs_v<args_type_list>,
             "dispatch(): non-const lvalue reference parameters (T&) are not allowed. "
-            "Use value (T), const reference (const T&), or rvalue reference (T&&)");
+            "Take parameters by value (T).");
 
         static_assert(
             type_traits::is_unique_future_v<result_type>,
@@ -91,8 +92,9 @@ namespace actor_zeta {
                    "dispatch(): message argument count mismatch");
         }
 
-        // ORDER IS LOAD-BEARING: get_result_promise() and transfer_ownership() must run BEFORE
-        // the first suspension below -- past it, resume_impl's message_guard destroys the message.
+        // The message lives until the behavior that dispatches it is done (cooperative_actor holds
+        // it), so these reads may come after a co_await in behavior(). transfer_ownership(): from here
+        // on result_promise settles the caller, and ~message stays silent.
         using value_type = typename type_traits::is_unique_future<result_type>::value_type;
 
         auto result_promise = msg->template get_result_promise<value_type>();
@@ -101,18 +103,24 @@ namespace actor_zeta {
         msg->transfer_ownership();   // ~message won't run cleanup anymore
         auto method_future = invoke_actor_method<Actor, Method, args_type_list, args_size>(self, method, msg);
 
-        // The catch carries a user exception ACROSS actors: without it the unwind destroys
-        // result_promise first, settling the caller with broken_pipe and no exception. Guarded:
-        // under -fno-exceptions there is no catch wrapper and no promise<T>::exception().
+        // The method's outcome, not its value: a co_return of an std::error_code fails the caller's
+        // future with that code. The catch carries a user exception ACROSS actors: without it the
+        // unwind destroys result_promise first, settling the caller with broken_pipe and no
+        // exception. Guarded: under -fno-exceptions there is no catch wrapper and no
+        // promise<T>::exception().
 #ifdef __cpp_exceptions
         try {
 #endif
-            if constexpr (std::is_void_v<value_type>) {
-                co_await std::move(method_future);
+            detail::settled<value_type> outcome{std::move(method_future)};
+            co_await outcome; // outcome.future is ready now; nothing taken yet
+            if (outcome.future.failed()) {
+                outcome.future.internal_state()->rethrow_if_exception(); // a throw goes to the catch below
+                result_promise.error(outcome.future.error());
+            } else if constexpr (std::is_void_v<value_type>) {
+                std::move(outcome.future).take_ready();
                 result_promise.set_value();
             } else {
-                auto value = co_await std::move(method_future);
-                result_promise.set_value(std::move(value));
+                result_promise.set_value(std::move(outcome.future).take_ready());
             }
 #ifdef __cpp_exceptions
         } catch (...) {

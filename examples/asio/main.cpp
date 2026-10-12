@@ -114,7 +114,7 @@ int main() {
     auto* res = std::pmr::get_default_resource();
     asio::io_context ctx;
 
-    auto sched = std::make_unique<scheduler::sharing_scheduler>(2, 100);
+    auto sched = std::make_unique<scheduler::sharing_scheduler>(res, 2, 100);
     sched->start();
     auto actor = spawn<compute_actor>(res);
 

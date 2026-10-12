@@ -54,14 +54,23 @@ public:
         if (actor_0_ && scheduler_) {
             auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
             actor_zeta::detail::ignore_unused(future);
-            scheduler_->enqueue(actor_0_.get());
+            if (needs_sched) {
+                scheduler_->enqueue(actor_0_.get());
+            }
         } else if (actor_0_) {
             auto [needs_sched, future] = actor_zeta::send(actor_0_.get(), &Actor::start);
             actor_zeta::detail::ignore_unused(future);
-            // One message each: start -> ping -> pong, so three passes over the pair.
-            drive(actor_0_.get());
-            drive(actor_1_.get());
-            drive(actor_0_.get());
+            // One message each: start -> ping -> pong, so three passes over the pair. A child
+            // runs only on a turn: the one send() handed out, or the one its partner recorded.
+            if (needs_sched) {
+                drive(actor_0_.get());
+            }
+            if (actor_0_->take_partner_obligation()) {
+                drive(actor_1_.get());
+            }
+            if (actor_1_->take_partner_obligation()) {
+                drive(actor_0_.get());
+            }
         }
         co_return;
     }

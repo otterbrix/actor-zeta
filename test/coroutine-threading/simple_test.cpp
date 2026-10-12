@@ -118,27 +118,32 @@ public:
         client_ = c;
     }
 
-    /// Returns true while at least one actor still asks to be rescheduled; the
-    /// caller's loop discharges that verdict by coming round again.
-    ///
-    /// With a client present the worker runs only on an obligation the client
-    /// recorded: a blind resume would hide a dropped needs_sched, which strands
-    /// an actor for good. With no client there is no obligation to honour, so
-    /// the worker is the only thing to drive.
+    /// The test's send() handed out a turn (needs_sched).
+    void owe_worker() { worker_turn_ = true; }
+    void owe_client() { client_turn_ = true; }
+
+    /// Runs each actor that holds a turn: one handed out by send() -- the test's, or the
+    /// obligation the client recorded for the worker -- or kept by a `resume` verdict.
+    /// A blind resume would hide a dropped needs_sched, which strands an actor for good.
+    /// Returns true while some actor still holds a turn.
     bool run_once() {
-        bool wants_more = false;
-        if (client_) {
-            wants_more |= client_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
+        if (client_ && client_turn_) {
+            client_turn_ = client_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
         }
-        if (worker_ && (!client_ || client_->take_worker_obligation())) {
-            wants_more |= worker_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
+        if (client_ && client_->take_worker_obligation()) {
+            worker_turn_ = true;
         }
-        return wants_more;
+        if (worker_ && worker_turn_) {
+            worker_turn_ = worker_->resume(1).result == actor_zeta::scheduler::resume_result::resume;
+        }
+        return client_turn_ || worker_turn_;
     }
 
 private:
     worker_actor* worker_ = nullptr;
     client_actor* client_ = nullptr;
+    bool worker_turn_ = false;
+    bool client_turn_ = false;
 };
 
 
@@ -150,6 +155,9 @@ TEST_CASE("worker only") {
     supervisor.set_actors(worker.get());
 
     auto [needs_sched, future] = send(worker.get(), &worker_actor::compute, 21);
+    if (needs_sched) {
+        supervisor.owe_worker();
+    }
 
     // Bounded so a mis-wired pump fails the assertion below instead of hanging.
     constexpr int kPumpCap = 64;
@@ -172,6 +180,9 @@ TEST_CASE("client-worker coroutine with supervisor") {
     supervisor.set_actors(worker.get(), client.get());
 
     auto [needs_sched, future] = send(client.get(), &client_actor::process, 21);
+    if (needs_sched) {
+        supervisor.owe_client();
+    }
 
     // Bounded so a mis-wired pump fails the assertion below instead of hanging.
     constexpr int kPumpCap = 64;
@@ -184,6 +195,9 @@ TEST_CASE("client-worker coroutine with supervisor") {
     REQUIRE(result == 52);  // 21 * 2 + 10 = 52
 
     auto [needs_sched2, result_future] = send(client.get(), &client_actor::get_result);
+    if (needs_sched2) {
+        supervisor.owe_client();
+    }
     for (int i = 0; i < kPumpCap && !result_future.is_ready(); ++i) {
         supervisor.run_once();
     }

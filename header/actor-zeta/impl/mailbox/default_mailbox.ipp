@@ -1,25 +1,18 @@
 #pragma once
 
+#include <actor-zeta/detail/actor_protocol.hpp>
 #include <actor-zeta/mailbox/default_mailbox.hpp>
 
 namespace actor_zeta { namespace mailbox {
 
     default_mailbox_impl::~default_mailbox_impl() {
-        if (!closed_impl()) {
+        if (!inbox_.closed()) {
             close_impl();
         }
     }
 
     actor_zeta::detail::enqueue_result default_mailbox_impl::push_back_impl(message_ptr ptr) {
         return inbox_.push_front(ptr.release());
-    }
-
-    void default_mailbox_impl::push_front_impl(message_ptr ptr) {
-        if (ptr->is_high_priority()) {
-            urgent_queue_.push_front(ptr.release());
-        } else {
-            normal_queue_.push_front(ptr.release());
-        }
     }
 
     message_ptr default_mailbox_impl::pop_front_impl() {
@@ -36,20 +29,8 @@ namespace actor_zeta { namespace mailbox {
         }
     }
 
-    bool default_mailbox_impl::closed_impl() const noexcept {
-        return inbox_.closed();
-    }
-
-    bool default_mailbox_impl::blocked_impl() const noexcept {
-        return inbox_.blocked();
-    }
-
     bool default_mailbox_impl::try_block_impl() {
         return cached() == 0 && inbox_.try_block();
-    }
-
-    bool default_mailbox_impl::try_unblock_impl() {
-        return inbox_.try_unblock();
     }
 
     size_t default_mailbox_impl::close_impl() {
@@ -65,16 +46,21 @@ namespace actor_zeta { namespace mailbox {
         return result;
     }
 
-    size_t default_mailbox_impl::size_impl() {
-        fetch_more();
-        return cached();
-    }
-
     size_t default_mailbox_impl::cached() const noexcept {
         return urgent_queue_.size() + normal_queue_.size();
     }
 
     bool default_mailbox_impl::fetch_more() {
+        // Closed for good: take_head() on the closed tag would reopen the inbox.
+        if (inbox_.closed()) {
+            return false;
+        }
+        // Parked: the turn is in the mailbox, and only the actor's loop reads it -- so the loop is
+        // running without a turn. take_head() would unpark it and hand that turn to nobody.
+        if (inbox_.blocked()) {
+            ::actor_zeta::detail::actor_protocol<>::violation(
+                "resume() on a parked actor: no send() handed out a turn");
+        }
         using node_type = actor_zeta::detail::singly_linked<message>;
         auto promote = [](node_type* ptr) {
             return static_cast<message*>(ptr);

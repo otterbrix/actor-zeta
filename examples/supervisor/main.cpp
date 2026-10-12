@@ -164,7 +164,7 @@ int main() {
     auto* resource =std::pmr::get_default_resource();
 
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(2, 1000));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 2, 1000));
     scheduler->start();
 
     auto supervisor = actor_zeta::spawn<supervisor_actor>(resource, scheduler.get());

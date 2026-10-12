@@ -1,0 +1,39 @@
+name: Relacy model CI
+
+# header/actor-zeta/detail/actor_protocol.hpp, model-checked with Relacy: the scenarios in
+# test/relacy pass on every interleaving the search explores, and each mutant -- one broken rule
+# the actor depends on -- is caught. Linux only: see test/relacy/CMakeLists.txt.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    container:
+      image: gcc:13
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install CMake
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update && apt-get install -y cmake
+
+      # Release: the search runs millions of iterations. The model checks with RL_ASSERT and the
+      # protocol with Atomics::violation, so NDEBUG removes no check.
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DALLOW_RELACY=ON
+
+      - name: Build
+        run: cmake --build build --target protocol_model -j
+
+      - name: Model and mutants
+        run: ctest --test-dir build -R protocol_model --output-on-failure

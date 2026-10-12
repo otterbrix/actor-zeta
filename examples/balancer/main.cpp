@@ -233,7 +233,7 @@ static constexpr auto sleep_time = std::chrono::milliseconds(100);
 int main() {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 1, 100));
     // Workers must be running before the first forward: only the scheduler drives the
     // children. stop() below runs before `collection` (and its children) are destroyed.
     scheduler->start();
@@ -244,17 +244,19 @@ int main() {
     collection->create();
     collection->create();
 
+    // collection_t runs inline, so each future is settled when send() returns -- but maybe with an
+    // error (no child to forward to, say): await_child() gates on failed() before take_ready().
     std::cerr << "\n=== Testing INSERT operations (round-robin balancing) ===" << std::endl;
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key1"), std::string("value1")); std::move(f).take_ready(); }
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key2"), std::string("value2")); std::move(f).take_ready(); }
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key3"), std::string("value3")); std::move(f).take_ready(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key1"), std::string("value1")); await_child(f); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key2"), std::string("value2")); await_child(f); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::insert, std::string("key3"), std::string("value3")); await_child(f); }
 
     std::cerr << "\n=== Testing UPDATE operations ===" << std::endl;
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key1"), std::string("updated1")); std::move(f).take_ready(); }
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key2"), std::string("updated2")); std::move(f).take_ready(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key1"), std::string("updated1")); await_child(f); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::update, std::string("key2"), std::string("updated2")); await_child(f); }
 
     std::cerr << "\n=== Testing REMOVE operations ===" << std::endl;
-    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::remove, std::string("key3")); std::move(f).take_ready(); }
+    { auto [ns, f] = actor_zeta::send(collection.get(), &collection_t::remove, std::string("key3")); await_child(f); }
 
     std::this_thread::sleep_for(sleep_time);
 

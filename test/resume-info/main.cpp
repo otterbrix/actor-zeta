@@ -54,14 +54,6 @@ TEST_CASE("resume_info - actor returns correct message count") {
     auto* resource =std::pmr::get_default_resource();
     auto actor = actor_zeta::spawn<test_actor>(resource);
 
-    SECTION("No messages - returns 0") {
-        auto info = actor->resume(100);
-        // When no messages, messages_processed should be 0
-        REQUIRE(info.messages_processed == 0);
-        // Result can be resume (try_block failed) or awaiting (try_block succeeded)
-        // or done (inbox closed)
-    }
-
     SECTION("Single message") {
         auto [needs_sched, fut] = actor_zeta::send(actor.get(), &test_actor::test);
 

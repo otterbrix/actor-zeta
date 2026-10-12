@@ -148,7 +148,7 @@ TEST_CASE("available race: basic destroy on available") {
     sentinel_data::reset_counters();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 100);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<available_race_actor>(resource);
@@ -207,7 +207,7 @@ TEST_CASE("available race: complex coroutine with multiple locals") {
     sentinel_data::reset_counters();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 50);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 50);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<available_race_actor>(resource);
@@ -243,7 +243,7 @@ TEST_CASE("available race: high concurrency stress") {
     sentinel_data::reset_counters();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 50);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 50);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<available_race_actor>(resource);
@@ -294,7 +294,7 @@ TEST_CASE("available race: poll_pending pattern simulation") {
     sentinel_data::reset_counters();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 100);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<available_race_actor>(resource);
@@ -351,7 +351,7 @@ TEST_CASE("available race: safe destroy with delay (workaround demo)") {
     sentinel_data::reset_counters();
 
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 100);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<available_race_actor>(resource);

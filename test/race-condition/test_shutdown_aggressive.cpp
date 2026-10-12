@@ -9,10 +9,10 @@
 #include <thread>
 #include <vector>
 
-// Stress, not proof: teardown under load. ~cooperative_actor publishes
-// `destroying` and then wait_for_activity_to_drain()s for the thread holding
-// `running` and for any sender already past enqueue_impl's gate -- that much it
-// does protect, and that is what these cases exercise.
+// Stress, not proof: teardown under load. delete publishes `destroying` and then
+// waits out everyone inside the actor -- the puller in resume() and any sender
+// already in enqueue_impl -- that much it does protect, and that is what these
+// cases exercise.
 //
 // What it CANNOT protect is a job already sitting in the scheduler's queue: the
 // actor holds no scheduler and cannot revoke it, so a worker picking that job up
@@ -71,7 +71,7 @@ private:
 
 TEST_CASE("Aggressive Shutdown Test: Automatic teardown under load") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 1000);
     scheduler->start();
 
     constexpr int NUM_ITERATIONS = 10;
@@ -108,7 +108,7 @@ TEST_CASE("Aggressive Shutdown Test: Automatic teardown under load") {
 
 TEST_CASE("Stress Test: Concurrent actor creation/destruction") {
     auto* resource =std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 1000);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 8, 1000);
     scheduler->start();
 
     std::atomic<int> completed{0};

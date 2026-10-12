@@ -31,9 +31,13 @@ namespace actor_zeta {
         promise(const promise&) = delete;
         promise& operator=(const promise&) = delete;
 
+        // Until get_future() the promise is the state's only side: the future side starts out
+        // released, so settling or dropping a promise nobody took a future from frees the state.
+        // Relaxed: the state is not published yet.
         explicit promise(std::pmr::memory_resource* res)
             : state_(detail::allocate_shared_state<T>(res)) {
             assert(res && "promise constructed with null resource");
+            state_->flags_.store(detail::state_flags::future_released, std::memory_order_relaxed);
         }
 
         // Non-owning view onto an existing state (message::get_result_promise).
@@ -110,7 +114,7 @@ namespace actor_zeta {
         }
 
         // The producer's exit. The continuation is NOT taken or resumed here -- the
-        // consumer's own resume_impl() does that, on its own thread. promise_finalizing
+        // consumer's loop does that on its next step, on its own thread. promise_finalizing
         // BEFORE release_promise(), or a concurrent release_future() deallocates under us.
         void settle() noexcept {
             assert(state_ && "settle() without a state");
@@ -223,8 +227,8 @@ namespace actor_zeta {
 
         // The producing coroutine's handle, for propagate_awaited_state() and for external
         // drivers that hand-roll the drain (examples/external-drive). The frame is OWNED by
-        // this future -- a finished producer parks at final_suspend and release() reclaims it --
-        // so the handle cannot be destroyed under the caller. Withheld once the state is ready:
+        // this future -- release() destroys it, finished or suspended mid-body -- so a driver
+        // keeps the future for as long as it resumes the handle. Withheld once the state is ready:
         // resuming a coroutine at its final suspend point is undefined ([coroutine.handle.resumption]).
         // Empty is also normal for a promise<T>-backed future. Serialization is the caller's.
         [[nodiscard]] detail::coroutine_handle<promise_type> coroutine_handle() const noexcept {
@@ -236,13 +240,15 @@ namespace actor_zeta {
 
     private:
         void release() noexcept {
-            // Reclaim the frame BEFORE releasing the state: done() means parked at final_suspend
-            // and ours; mid-body it is the producer's, whose final_awaiter (steps 3/4) destroys it
-            // on seeing future_released. After release_future(), done() could read freed memory.
-            if (handle_ && handle_.done()) {
+            // The future owns its producer's frame, finished or not. Suspended mid-body, nothing
+            // else resumes it -- a promise-backed await completes flag-only, and the drain reaches
+            // the frame only through the chain this future belongs to -- so dropping the future
+            // cancels the producer: its locals and awaited futures unwind, and ~promise_type_base
+            // settles the state with broken_pipe. BEFORE release_future(), which may free the state.
+            if (handle_) {
                 handle_.destroy();
+                handle_ = {};
             }
-            handle_ = {};
 
             if (state_) {
                 state_->release_future();
@@ -315,7 +321,8 @@ namespace actor_zeta {
 
                     void await_resume() noexcept {}
                 };
-                return final_awaiter{this->state_};
+                // The awaiter takes the promise side: past here ~promise_type_base must not settle it again.
+                return final_awaiter{std::exchange(this->state_, nullptr)};
             }
 
             void unhandled_exception() noexcept {
@@ -340,7 +347,15 @@ namespace actor_zeta {
                 : resource_(extract_resource_or_abort(std::forward<First>(first), std::forward<Args>(args)...))
                 , state_(nullptr) {}
 
-            ~promise_type_base() noexcept = default;
+            // state_ is still set only for a frame destroyed mid-body (final_suspend() takes it): the
+            // future dropped it before an outcome. Settle as promise<T> does when dropped. Nothing
+            // touches the state after release_promise(), so no finalizing bit is needed.
+            ~promise_type_base() noexcept {
+                if (state_) {
+                    state_->set_error(std::make_error_code(std::errc::broken_pipe));
+                    [[maybe_unused]] const bool freed = state_->release_promise();
+                }
+            }
 
         protected:
             template<typename U>
@@ -476,35 +491,6 @@ namespace actor_zeta {
             }
         };
 
-        // Promise for std::coroutine_traits specialization with explicit Actor& parameter.
-        template<typename Actor>
-        struct actor_promise : promise_type_selected<actor_promise<Actor>> {
-            using base_type = promise_type_selected<actor_promise<Actor>>;
-
-            template<typename... Args>
-            actor_promise(Actor& actor, Args&&...) noexcept
-                : base_type(actor.resource()) {}
-
-            template<typename... Args>
-            static void* operator new(std::size_t size, const Args&... args) {
-                auto* res = promise_type_base<actor_promise>::extract_resource_or_abort(args...);
-                return detail::allocate_coro_frame(res, size);
-            }
-
-            template<typename... Args>
-            static void operator delete(void* ptr, std::size_t size, const Args&...) noexcept {
-                detail::deallocate_coro_frame(ptr, size);
-            }
-
-            static void operator delete(void* ptr, std::size_t size) noexcept {
-                detail::deallocate_coro_frame(ptr, size);
-            }
-
-            static void operator delete(void* ptr) noexcept {
-                detail::deallocate_coro_frame_unsized(ptr);
-            }
-        };
-
     private:
         state_type* state_;
         detail::coroutine_handle<promise_type> handle_;
@@ -513,6 +499,11 @@ namespace actor_zeta {
     template<typename T>
     unique_future<T> promise<T>::get_future() noexcept {
         assert(state_ && "get_future() on moved-from promise");
+        // The future side comes alive. Relaxed: no future exists yet, so nothing else touches the flags.
+        [[maybe_unused]] const auto old = state_->flags_.fetch_and(
+            static_cast<std::uint8_t>(~detail::state_flags::future_released), std::memory_order_relaxed);
+        assert((old & detail::state_flags::future_released) &&
+               "get_future() on a promise that already has a future");
         return unique_future<T>(state_);
     }
 

@@ -80,7 +80,7 @@ public:
     supervisor_lite(memory_resource* ptr)
         : actor_zeta::actor::actor_mixin<supervisor_lite>()
         , resource_(ptr)
-        , e_(new actor_zeta::sharing_scheduler(2, 1000)) {
+        , e_(new actor_zeta::sharing_scheduler(ptr, 2, 1000)) {
         e_->start();
     }
 

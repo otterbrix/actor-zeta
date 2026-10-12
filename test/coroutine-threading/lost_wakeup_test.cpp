@@ -13,14 +13,13 @@
 #include <thread>
 #include <vector>
 
-// Guard for the lost wakeup in cooperative_actor::resume_impl. A behavior that
-// re-suspends on a fresh await from inside the entry-path drain is kept off the park path by
-// two lines: the is_busy() re-check after cont.resume() (else try_block() parks a
-// PENDING await -- verdict `awaiting`, job dropped) and that drain sitting ABOVE the
-// blocked-check (completion is flag-only and a bare enqueue does not unblock the
-// inbox, so a parked actor's ready continuation would never drain). Pinned by hand with
-// resume(1), no threads or clocks, on the VERDICT of the drain step; plus a [stress]
-// soak decided by progress, never by a clock.
+// Guard for the lost wakeup in the actor's loop (formerly resume_impl). A behavior that
+// re-suspends on a fresh await from inside the drain must keep the turn: the loop re-checks
+// is_busy() after cont.resume(), else the step reads as "not busy" and resume() parks a
+// PENDING await -- verdict `awaiting`, no job anywhere, and completion is flag-only, so
+// nothing would run the actor again. Pinned by hand with resume(1), no threads or clocks,
+// on the VERDICT of the drain step; plus a [stress] soak decided by progress, never by a
+// clock.
 
 using namespace actor_zeta;
 
@@ -87,7 +86,7 @@ namespace {
             const int first = co_await std::move(first_future);
             first_await_done_.store(true, std::memory_order_release);
 
-            // Issued from INSIDE the entry-path cont.resume(): resume_impl regains control on a fresh chain.
+            // Issued from INSIDE the loop's cont.resume(): the loop regains control on a fresh chain.
             auto [needs_sched_second, second_future] = send(producer_, &producer_actor::produce, first);
             second_send_needs_sched_.store(needs_sched_second ? 1 : 0, std::memory_order_release);
 
@@ -190,7 +189,8 @@ namespace {
         std::atomic<int> producer_obligations_;
     };
 
-    // `times` worker turns, returning the LAST verdict; on a parked actor, a bare enqueue().
+    // Up to `times` worker turns, returning the LAST verdict. The caller holds a turn on entry
+    // (needs_sched, or a `resume` verdict); after any other verdict the next turn is not ours.
     template<typename Actor>
     scheduler::resume_result resume_n(Actor* actor,
                                       int times,
@@ -200,6 +200,9 @@ namespace {
         for (int i = 0; i < times; ++i) {
             last = actor->resume(/*max_throughput*/ 1).result;
             trace.emplace_back(std::string(tag) + "=" + to_string(last));
+            if (last != scheduler::resume_result::resume) {
+                break;
+            }
         }
         return last;
     }
@@ -259,11 +262,13 @@ TEST_CASE("lost-wakeup: a second sequential co_await must not strand the behavio
         resume_n(producer.get(), 2, trace, "producer");
     }
 
-    // (5) No message pushed on purpose -- the bare enqueue is the only wake-up once
-    // parked -- and it must make progress whether or not the inbox is blocked.
+    // (5) No message pushed on purpose: the turn held since (3) is the only wake-up, and
+    // following its `resume` verdicts must carry the chain to the end.
     constexpr int kDrainCap = 64;
-    for (int i = 0; i < kDrainCap && consumer->completed_count() == 0; ++i) {
-        resume_n(consumer.get(), 1, trace, "consumer");
+    auto verdict = drain_verdict;
+    for (int i = 0; i < kDrainCap && consumer->completed_count() == 0 &&
+                    verdict == scheduler::resume_result::resume; ++i) {
+        verdict = resume_n(consumer.get(), 1, trace, "consumer");
     }
 
     INFO("trace: " << render(trace));
@@ -338,7 +343,7 @@ TEST_CASE("lost-wakeup: multi-thread soak, consumer co_awaits producer", "[stres
 
     const unsigned hw = std::thread::hardware_concurrency();
     const unsigned num_workers = hw < 4u ? 4u : hw;
-    auto scheduler = std::make_unique<scheduler::sharing_scheduler>(num_workers, 1);
+    auto scheduler = std::make_unique<scheduler::sharing_scheduler>(resource, num_workers, 1);
     scheduler->start();
 
     auto producer = spawn<producer_actor>(resource); // outlives the senders; destroyed only after stop()

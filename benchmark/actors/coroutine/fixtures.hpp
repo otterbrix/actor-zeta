@@ -29,7 +29,7 @@ constexpr size_t NUM_WORKERS = 4;
                                                                                              \
         void SetUp(const benchmark::State&) override {                                      \
             resource_ =std::pmr::get_default_resource();                            \
-            scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(NUM_WORKERS, 1000)); \
+            scheduler_.reset(new actor_zeta::scheduler::scheduler_t<actor_zeta::scheduler::work_sharing>(resource_, NUM_WORKERS, 1000)); \
             scheduler_->start();                                                             \
             supervisor_ = actor_zeta::spawn<Supervisor>(resource_, scheduler_.get());       \
             auto [needs_sched, future] = actor_zeta::send(supervisor_.get(), &Supervisor::prepare); \

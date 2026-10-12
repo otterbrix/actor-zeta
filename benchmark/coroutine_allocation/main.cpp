@@ -3,7 +3,7 @@
 #include <memory_resource>
 #include <vector>
 
-class BenchActor : public actor_zeta::basic_actor<BenchActor> {
+class BenchActor final : public actor_zeta::basic_actor<BenchActor> {
 public:
     using base_type = actor_zeta::basic_actor<BenchActor>;
 
@@ -139,8 +139,8 @@ static void BM_FutureState_Int(benchmark::State& state) {
 
     for (auto _ : state) {
         actor_zeta::promise<int> p(resource);
+        auto future = p.get_future(); // before set_value: settling hands the state over
         p.set_value(42);
-        auto future = p.get_future();
         benchmark::DoNotOptimize(future);
         int result = std::move(future).take_ready();
         benchmark::DoNotOptimize(result);
@@ -155,8 +155,8 @@ static void BM_FutureState_Void(benchmark::State& state) {
 
     for (auto _ : state) {
         actor_zeta::promise<void> p(resource);
+        auto future = p.get_future(); // before set_value: settling hands the state over
         p.set_value();
-        auto future = p.get_future();
         benchmark::DoNotOptimize(future);
         std::move(future).take_ready();
     }

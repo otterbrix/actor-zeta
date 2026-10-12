@@ -35,6 +35,7 @@ TEST_CASE("promise<void>: construction allocates shared_state") {
 TEST_CASE("promise<int>: construction from existing state") {
     auto* resource = std::pmr::get_default_resource();
     auto* state = allocate_shared_state<int>(resource);
+    unique_future<int> future(state); // the other side, as message::get_result_promise has one
 
     promise<int> p(state);
 
@@ -367,4 +368,51 @@ TEST_CASE("promise: queue_closed - future gets error") {
     REQUIRE(future.is_ready());
     REQUIRE(future.failed());
     REQUIRE(future.error() == std::make_error_code(std::errc::broken_pipe));
+}
+
+// A promise whose future was never taken is the only side of its state: dropping or
+// settling it must return the state to the resource, not wait for a future release
+// that can never come.
+TEST_CASE("promise without get_future: the state goes back to the resource") {
+    struct counting_resource : std::pmr::memory_resource {
+        std::pmr::memory_resource* upstream_ = std::pmr::new_delete_resource();
+        std::atomic<int> outstanding_{0};
+
+        void* do_allocate(std::size_t bytes, std::size_t align) override {
+            outstanding_.fetch_add(1, std::memory_order_relaxed);
+            return upstream_->allocate(bytes, align);
+        }
+
+        void do_deallocate(void* p, std::size_t bytes, std::size_t align) override {
+            outstanding_.fetch_sub(1, std::memory_order_relaxed);
+            upstream_->deallocate(p, bytes, align);
+        }
+
+        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+            return this == &other;
+        }
+    };
+
+    counting_resource tracked;
+
+    SECTION("dropped unsettled") {
+        { promise<int> p(&tracked); }
+        REQUIRE(tracked.outstanding_.load() == 0);
+    }
+
+    SECTION("settled with a value") {
+        {
+            promise<int> p(&tracked);
+            p.set_value(42);
+        }
+        REQUIRE(tracked.outstanding_.load() == 0);
+    }
+
+    SECTION("settled with an error") {
+        {
+            promise<void> p(&tracked);
+            p.error(std::make_error_code(std::errc::operation_canceled));
+        }
+        REQUIRE(tracked.outstanding_.load() == 0);
+    }
 }

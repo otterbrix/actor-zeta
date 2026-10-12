@@ -12,7 +12,7 @@
 // take_ready(), works for every future; (2) MANUAL DRAIN via coroutine_handle() --
 // COROUTINE-BACKED futures only (a method called directly, not through send()): read
 // the deepest awaited state, claim the continuation, resume it. Route 2 is why
-// coroutine_handle() is public: the one way to resume a frame outside `running`.
+// coroutine_handle() is public: the one way to resume a frame outside resume().
 
 using namespace actor_zeta;
 

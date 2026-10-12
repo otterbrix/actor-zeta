@@ -5,6 +5,8 @@
 
 #include "actor-zeta/scheduler/job_ptr.hpp"
 
+#include <algorithm>
+#include <cassert>
 #include <limits>
 
 namespace actor_zeta { namespace test {
@@ -36,6 +38,11 @@ namespace actor_zeta { namespace test {
     }
 
     void scheduler_test_t::enqueue(scheduler::job_ptr job) {
+        // One turn per actor: a second job for a queued actor is a dropped verdict or a blind
+        // enqueue, and on a real scheduler two workers would resume the actor at once.
+        assert(std::none_of(jobs.begin(), jobs.end(),
+                            [&](const scheduler::job_ptr& queued) { return queued.raw_ptr() == job.raw_ptr(); }) &&
+               "scheduler_test_t::enqueue: the actor already has a job queued");
         jobs.push_back(job);
     }
 

@@ -34,8 +34,15 @@ namespace actor_zeta { namespace pmr {
     void deallocate_ptr(std::pmr::memory_resource* resource, Target* target) {
         assert(resource);
         assert(target);
-        target->~Target();
-        resource->deallocate(target, sizeof(Target), alignof(Target));
+        if constexpr (requires { typename Target::is_cooperative_actor_type; }) {
+            // An actor frees itself (cooperative_actor's destroying delete): the right destructor
+            // and sizeof(Actor) even through a base pointer, into the resource the actor holds.
+            assert(target->resource() == resource && "actor freed into a resource it was not spawned from");
+            delete target;
+        } else {
+            target->~Target();
+            resource->deallocate(target, sizeof(Target), alignof(Target));
+        }
     }
 
     class deleter_t final {

@@ -1,13 +1,9 @@
 /// @file
-/// The window between park()'s try_block() and ~resume_guard's CAS. A sender landing
-/// there gets `unblocked_reader` while the runner still holds `running`, so
-/// leave_and_maybe_schedule() must set the `scheduled` bit and report needs_sched ==
-/// FALSE; ~resume_guard then upgrades awaiting -> resume: one job node, never zero
-/// (stranded), never two. Deterministic, not stress: a probe mailbox parks the runner
-/// inside the window, once per guard. Phase A parks in try_block_impl(), where
-/// check_race_window() downgrades on its own. Phase B parks in blocked_impl() and
-/// returns the pre-sender value, so park() commits to `awaiting` and only the
-/// `scheduled` bit can rescue the message; without B, dropping the bit stays green.
+/// The window between the park -- a successful try_block() -- and the end of resume(). Once the mailbox
+/// is blocked, the turn is back in it: a sender landing in the window must be handed the turn
+/// (needs_sched == true), the runner must report `awaiting`, and running the actor on the
+/// sender's turn delivers the message -- one turn, never zero (stranded), never two.
+/// Deterministic, not stress: a probe mailbox holds the runner inside the window.
 
 #include <atomic>
 #include <cstdio>
@@ -20,44 +16,22 @@ using namespace actor_zeta;
 
 namespace {
 
-    enum class phase { off, before_race_window, after_race_window };
-
-    std::atomic<phase> g_phase{phase::off};
+    std::atomic<bool> g_hold_runner{false};
     std::atomic<bool> g_runner_parked{false};
     std::atomic<bool> g_sender_done{false};
-    std::atomic<bool> g_just_blocked{false};
-
-    void park_runner_until_sender_is_done() {
-        g_runner_parked.store(true, std::memory_order_release);
-        while (!g_sender_done.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-        }
-    }
 
     class probe_mailbox_impl : public mailbox::default_mailbox_impl {
     public:
         bool try_block_impl() {
             const bool blocked = mailbox::default_mailbox_impl::try_block_impl();
-            if (!blocked) {
-                return blocked;
-            }
-            // Inbox is parked and `running` is still held: this is the window.
-            if (g_phase.load(std::memory_order_acquire) == phase::before_race_window) {
-                park_runner_until_sender_is_done();
-            } else if (g_phase.load(std::memory_order_acquire) == phase::after_race_window) {
-                g_just_blocked.store(true, std::memory_order_release);
+            // The mailbox is blocked and the runner is still inside resume(): the window.
+            if (blocked && g_hold_runner.load(std::memory_order_acquire)) {
+                g_runner_parked.store(true, std::memory_order_release);
+                while (!g_sender_done.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
             }
             return blocked;
-        }
-
-        bool blocked_impl() const noexcept {
-            const bool value = mailbox::default_mailbox_impl::blocked_impl();
-            // Only the call check_race_window() makes right after try_block() succeeded.
-            if (g_phase.load(std::memory_order_acquire) == phase::after_race_window &&
-                g_just_blocked.exchange(false, std::memory_order_acq_rel)) {
-                park_runner_until_sender_is_done(); // then return the stale value: park() must commit to awaiting
-            }
-            return value;
         }
     };
 
@@ -88,90 +62,64 @@ namespace {
 
 } // namespace
 
-namespace {
-
-    // Returns 0 on success, 1 on a failed check, 2 if the harness itself misfired.
-    int run_phase(phase which, const char* label) {
-        g_phase.store(phase::off, std::memory_order_release);
-        g_runner_parked.store(false, std::memory_order_release);
-        g_sender_done.store(false, std::memory_order_release);
-        g_just_blocked.store(false, std::memory_order_release);
-        worker_t::processed.store(0, std::memory_order_release);
-
-        auto* resource = std::pmr::get_default_resource();
-        auto actor = spawn<worker_t>(resource);
-        auto* raw = actor.get();
-
-        // Born parked: the first send owes the scheduling; the resume drains it and parks again -- the window.
-        auto first = send(raw, &worker_t::ping);
-        if (!first.first) {
-            std::printf("[%s] HARNESS BROKEN: first send to a fresh actor must report "
-                        "needs_sched\n", label);
-            return 2;
-        }
-        first.second.detach();
-
-        g_phase.store(which, std::memory_order_release);
-
-        std::atomic<bool> second_needs_sched{false};
-        std::thread sender([&] {
-            while (!g_runner_parked.load(std::memory_order_acquire)) {
-                std::this_thread::yield();
-            }
-            auto sent = send(raw, &worker_t::ping);
-            second_needs_sched.store(sent.first, std::memory_order_release);
-            sent.second.detach();
-            g_sender_done.store(true, std::memory_order_release);
-        });
-
-        const auto verdict = raw->resume(8);
-        sender.join();
-        g_phase.store(phase::off, std::memory_order_release);
-
-        if (!g_runner_parked.load(std::memory_order_acquire)) {
-            std::printf("[%s] HARNESS BROKEN: the runner never reached the window\n", label);
-            return 2;
-        }
-
-        if (second_needs_sched.load(std::memory_order_acquire)) {
-            std::printf("[%s] the sender was told to enqueue while the runner still held "
-                        "running -- that is a second job node\n", label);
-            return 1;
-        }
-
-        if (verdict.result != scheduler::resume_result::resume) {
-            std::printf("[%s] verdict was `awaiting`: the only job node is dropped and the "
-                        "message the sender left behind is stranded\n", label);
-            return 1;
-        }
-
-        // Honour the verdict the way a worker does; the message must come out.
-        for (int i = 0; i < 16 && worker_t::processed.load(std::memory_order_acquire) < 2; ++i) {
-            const auto info = raw->resume(8);
-            if (info.result == scheduler::resume_result::awaiting) {
-                break;
-            }
-        }
-
-        if (worker_t::processed.load(std::memory_order_acquire) != 2) {
-            std::printf("[%s] processed %d of 2\n", label,
-                        worker_t::processed.load(std::memory_order_acquire));
-            return 1;
-        }
-
-        std::printf("[%s] sender owes nothing, verdict upgraded to resume, both "
-                    "messages delivered\n", label);
-        return 0;
-    }
-
-} // namespace
-
+// Returns 0 on success, 1 on a failed check, 2 if the harness itself misfired.
 int main() {
-    if (const int rc = run_phase(phase::before_race_window, "check_race_window")) {
-        return rc;
+    std::pmr::synchronized_pool_resource pool;
+    auto* resource = &pool;
+    auto actor = spawn<worker_t>(resource);
+    auto* raw = actor.get();
+
+    // Born parked: the first send hands out the turn; the resume drains it and parks -- the window.
+    auto first = send(raw, &worker_t::ping);
+    if (!first.first) {
+        std::printf("HARNESS BROKEN: the first send to a fresh actor must report needs_sched\n");
+        return 2;
     }
-    if (const int rc = run_phase(phase::after_race_window, "scheduled_while_running")) {
-        return rc;
+    first.second.detach();
+
+    g_hold_runner.store(true, std::memory_order_release);
+
+    std::atomic<bool> second_needs_sched{false};
+    std::thread sender([&] {
+        while (!g_runner_parked.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        auto sent = send(raw, &worker_t::ping);
+        second_needs_sched.store(sent.first, std::memory_order_release);
+        sent.second.detach();
+        g_sender_done.store(true, std::memory_order_release);
+    });
+
+    const auto verdict = raw->resume(8);
+    sender.join();
+    g_hold_runner.store(false, std::memory_order_release);
+
+    if (!g_runner_parked.load(std::memory_order_acquire)) {
+        std::printf("HARNESS BROKEN: the runner never reached the window\n");
+        return 2;
     }
+
+    if (!second_needs_sched.load(std::memory_order_acquire)) {
+        std::printf("the sender unblocked a parked mailbox but was not handed the turn: nobody "
+                    "runs the actor for its message\n");
+        return 1;
+    }
+
+    if (verdict.result != scheduler::resume_result::awaiting) {
+        std::printf("the runner parked but did not report `awaiting`: with the sender's turn "
+                    "that is two turns for one actor\n");
+        return 1;
+    }
+
+    // The sender's turn, honoured the way a worker does; the message must come out.
+    while (raw->resume(8).result == scheduler::resume_result::resume) {
+    }
+
+    if (worker_t::processed.load(std::memory_order_acquire) != 2) {
+        std::printf("processed %d of 2\n", worker_t::processed.load(std::memory_order_acquire));
+        return 1;
+    }
+
+    std::printf("the parked runner gave the turn to the sender; both messages delivered\n");
     return 0;
 }

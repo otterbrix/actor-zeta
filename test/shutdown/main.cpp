@@ -67,7 +67,7 @@ private:
 TEST_CASE("shutdown - basic test") {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 1, 100));
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
@@ -106,7 +106,7 @@ TEST_CASE("shutdown - basic test") {
 TEST_CASE("shutdown - multiple actors") {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 1, 100));
 
     std::vector<std::unique_ptr<worker_actor, actor_zeta::pmr::deleter_t>> actors;
     for (int i = 0; i < 3; ++i) {
@@ -151,7 +151,7 @@ TEST_CASE("shutdown - multiple actors") {
 TEST_CASE("shutdown - immediate stop") {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 1, 100));
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
@@ -183,7 +183,7 @@ TEST_CASE("shutdown - immediate stop") {
 TEST_CASE("shutdown - concurrent enqueue during destruction") {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 1, 100));
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
     scheduler->start();
@@ -220,7 +220,7 @@ TEST_CASE("shutdown - concurrent enqueue during destruction") {
 TEST_CASE("shutdown - concurrent resume during destruction") {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(1, 100));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 1, 100));
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 
@@ -251,7 +251,7 @@ TEST_CASE("shutdown - concurrent resume during destruction") {
 TEST_CASE("shutdown - three-way race: enqueue + resume + destroy") {
     auto* resource =std::pmr::get_default_resource();
     std::unique_ptr<actor_zeta::scheduler::sharing_scheduler> scheduler(
-        new actor_zeta::scheduler::sharing_scheduler(2, 100));
+        new actor_zeta::scheduler::sharing_scheduler(resource, 2, 100));
 
     auto actor = actor_zeta::spawn<worker_actor>(resource);
 

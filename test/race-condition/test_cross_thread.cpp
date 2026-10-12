@@ -166,7 +166,7 @@ TEST_CASE("cross-thread: concurrent start polling") {
 
 TEST_CASE("cross-thread: polling with scheduler") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 100);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<cross_thread_worker>(resource);
@@ -192,7 +192,7 @@ TEST_CASE("cross-thread: polling with scheduler") {
 
 TEST_CASE("cross-thread: slow computation stress") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 50);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 50);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<cross_thread_worker>(resource);
@@ -233,7 +233,7 @@ TEST_CASE("cross-thread: slow computation stress") {
 
 TEST_CASE("cross-thread: batch processing") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 100);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<cross_thread_worker>(resource);
@@ -276,7 +276,7 @@ TEST_CASE("cross-thread: batch processing") {
 
 TEST_CASE("cross-thread: multiple actors") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(4, 50);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 4, 50);
     scheduler->start();
 
     constexpr int NUM_ACTORS = 4;
@@ -330,7 +330,7 @@ TEST_CASE("cross-thread: multiple actors") {
 
 TEST_CASE("cross-thread: fire-and-forget") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(2, 100);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 2, 100);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<cross_thread_worker>(resource);
@@ -379,7 +379,7 @@ TEST_CASE("cross-thread: immediate available") {
 
 TEST_CASE("cross-thread: high contention") {
     auto* resource = std::pmr::get_default_resource();
-    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(8, 20);
+    auto scheduler = std::make_unique<actor_zeta::scheduler::sharing_scheduler>(resource, 8, 20);
     scheduler->start();
 
     auto actor = actor_zeta::spawn<cross_thread_worker>(resource);

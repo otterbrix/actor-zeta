@@ -24,7 +24,7 @@ private:
     size_t max_throughput_;
 };
 
-class old_style_actor : public basic_actor<old_style_actor> {
+class old_style_actor final : public basic_actor<old_style_actor> {
 public:
     unique_future<void> method1(int x) {
         counter_ += x;
@@ -140,7 +140,7 @@ static void BM_OldStyleDispatch(benchmark::State& state) {
 
 BENCHMARK(BM_OldStyleDispatch)->DenseRange(0, 4)->Unit(benchmark::kNanosecond);
 
-class coroutine_actor : public basic_actor<coroutine_actor> {
+class coroutine_actor final : public basic_actor<coroutine_actor> {
 public:
     unique_future<int> compute(int x) {
         co_return x * 2;

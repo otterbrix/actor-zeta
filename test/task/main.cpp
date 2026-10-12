@@ -36,7 +36,7 @@ TEST_CASE("cross-thread: scheduler worker produces, main thread polls take_ready
     auto* resource = std::pmr::get_default_resource();
 
     std::unique_ptr<scheduler::sharing_scheduler> sched(
-        new scheduler::sharing_scheduler(2, 100));
+        new scheduler::sharing_scheduler(resource, 2, 100));
     sched->start();
 
     auto actor = spawn<compute_actor>(resource);

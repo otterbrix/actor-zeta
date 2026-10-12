@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory_resource>
+#include <type_traits>
 
 #include <actor-zeta/actor/forwards.hpp>
 #include <actor-zeta/detail/forwards.hpp>
@@ -39,7 +40,6 @@ namespace actor_zeta { namespace mailbox {
         message(std::allocator_arg_t, std::pmr::memory_resource* resource, message&& other) noexcept;
 
         ~message() noexcept;
-        message* prev;
         auto command() const noexcept -> message_id;
 
         // Restamp the command for router/delegation patterns; body and result_slot
@@ -60,6 +60,21 @@ namespace actor_zeta { namespace mailbox {
             cleanup_fn_ = [](void* p) {
                 auto* s = static_cast<::actor_zeta::detail::shared_state<T>*>(p);
                 s->set_error(std::make_error_code(std::errc::operation_canceled));
+                [[maybe_unused]] bool deallocated = s->release_promise();
+            };
+        }
+
+        // close()'s marker. However it dies -- processed, cancelled by an earlier close(), refused
+        // by a closed mailbox, bounced by delete -- the actor takes no more messages, and that is
+        // all its future reports: every path settles it with a value.
+        // A template like init_future_slot: shared_state is only declared here.
+        template<typename T>
+        void init_close_slot(::actor_zeta::detail::shared_state<T>* state) noexcept {
+            static_assert(std::is_void_v<T>, "close()'s marker carries no value");
+            result_slot_ = state;
+            cleanup_fn_ = [](void* p) {
+                auto* s = static_cast<::actor_zeta::detail::shared_state<T>*>(p);
+                s->set_value();
                 [[maybe_unused]] bool deallocated = s->release_promise();
             };
         }

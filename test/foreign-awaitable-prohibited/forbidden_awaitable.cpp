@@ -26,8 +26,8 @@ namespace {
 
         behavior_t behavior(mailbox::message*) {
             // A suspension point that never runs propagate_awaited_state(), so the
-            // behavior could be suspended and not is_busy() -- and park() would then
-            // be reachable for a live behavior.
+            // behavior could be suspended and not is_busy() -- and the actor's loop
+            // would take the live behavior for finished.
             co_await foreign_awaitable{};
         }
     };

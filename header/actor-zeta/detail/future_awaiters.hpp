@@ -46,6 +46,16 @@ namespace actor_zeta {
             }
         }
 
+        // co_await on a named settled<U> waits for its future as co_await std::move(f) does, then
+        // leaves the future there, ready, instead of taking its value -- so an error code can be
+        // passed on, not refused. dispatch() awaits a method this way. A named local and a void
+        // result on purpose: with a temporary settled<U> and the future returned from await_resume(),
+        // GCC 11 lost the value (test/dispatch-error-code).
+        template<typename U>
+        struct settled {
+            unique_future<U> future;
+        };
+
         template<typename Derived>
         struct future_awaiter_mixin {
             // Deepest awaited state (the drain reads it); the outer's copy of it; the outer itself, type-erased.
@@ -57,6 +67,13 @@ namespace actor_zeta {
 
             void* outer_promise_raw_ = nullptr;
             void (*outer_update_fn_)(void*) = nullptr;
+
+#ifndef NDEBUG
+            // The deepest awaited state's target_, carried up like awaited_flags_: the loop at the root
+            // checks whom the chain waits on.
+            const void* awaited_target_ = nullptr;
+            const void** propagated_to_target_ = nullptr;
+#endif
 
             Derived* self() noexcept { return static_cast<Derived*>(this); }
 
@@ -98,6 +115,31 @@ namespace actor_zeta {
                 return owning_awaiter{std::move(future), this};
             }
 
+            // The outcome, not the value: see settled. Suspends and publishes the chain exactly as above;
+            // the future stays in the awaiting frame, which owns it.
+            template<typename U>
+            auto await_transform(settled<U>& awaited) noexcept {
+                propagate_awaited_state(awaited.future);
+
+                struct outcome_awaiter {
+                    unique_future<U>* awaited_;
+                    future_awaiter_mixin* promise_;
+
+                    bool await_ready() const noexcept {
+                        return awaited_->internal_state()->has_result();
+                    }
+
+                    detail::coroutine_handle<> await_suspend(detail::coroutine_handle<> h) noexcept {
+                        return detail::future_await_suspend_cas(awaited_->internal_state(), h);
+                    }
+
+                    void await_resume() noexcept {
+                        promise_->clear_awaited_chain();
+                    }
+                };
+                return outcome_awaiter{&awaited.future, this};
+            }
+
             // Exists only to reject `co_await send(...)`, which can never complete; the message says why.
             template<typename U>
             auto await_transform(std::pair<bool, unique_future<U>>&&) noexcept {
@@ -107,17 +149,16 @@ namespace actor_zeta {
                               "the await cannot finish until someone has scheduled the "
                               "target with it. Split it: "
                               "auto [needs_sched, f] = send(target, &T::m, args...); "
-                              "if (needs_sched) scheduler->enqueue(target); "
-                              "auto r = co_await std::move(f);");
+                              "record needs_sched for this actor's owner, who enqueues the "
+                              "target -- an actor holds no scheduler; "
+                              "then auto r = co_await std::move(f);");
                 return detail::suspend_never{};
             }
 
             template<typename U>
             void propagate_awaited_state(unique_future<U>& future) noexcept {
                 if (future.internal_state()->has_result()) {
-                    awaited_flags_ = nullptr;
-                    awaited_continuation_ = nullptr;
-                    update_propagated_outer();
+                    clear_awaited_chain();
                     return;
                 }
 
@@ -127,6 +168,9 @@ namespace actor_zeta {
 
                     inner_promise.propagated_to_flags_ = &awaited_flags_;
                     inner_promise.propagated_to_cont_ = &awaited_continuation_;
+#ifndef NDEBUG
+                    inner_promise.propagated_to_target_ = &awaited_target_;
+#endif
 
                     inner_promise.outer_promise_raw_ = this;
                     inner_promise.outer_update_fn_ = &call_update_propagated_outer;
@@ -134,13 +178,22 @@ namespace actor_zeta {
                     if (inner_promise.awaited_flags_) {
                         awaited_flags_ = inner_promise.awaited_flags_;
                         awaited_continuation_ = inner_promise.awaited_continuation_;
+#ifndef NDEBUG
+                        awaited_target_ = inner_promise.awaited_target_;
+#endif
                     } else {
                         awaited_flags_ = &future.internal_state()->flags_;
                         awaited_continuation_ = &future.internal_state()->continuation_;
+#ifndef NDEBUG
+                        awaited_target_ = future.internal_state()->target_;
+#endif
                     }
                 } else {
                     awaited_flags_ = &future.internal_state()->flags_;
                     awaited_continuation_ = &future.internal_state()->continuation_;
+#ifndef NDEBUG
+                    awaited_target_ = future.internal_state()->target_;
+#endif
                 }
 
                 update_propagated_outer();
@@ -157,6 +210,11 @@ namespace actor_zeta {
                 if (propagated_to_cont_) {
                     *propagated_to_cont_ = awaited_continuation_;
                 }
+#ifndef NDEBUG
+                if (propagated_to_target_) {
+                    *propagated_to_target_ = awaited_target_;
+                }
+#endif
                 if (outer_update_fn_ && outer_promise_raw_) {
                     outer_update_fn_(outer_promise_raw_);
                 }
@@ -165,6 +223,9 @@ namespace actor_zeta {
             void clear_awaited_chain() noexcept {
                 awaited_flags_ = nullptr;
                 awaited_continuation_ = nullptr;
+#ifndef NDEBUG
+                awaited_target_ = nullptr;
+#endif
                 update_propagated_outer();
             }
         };

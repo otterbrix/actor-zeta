@@ -112,13 +112,12 @@ jobs:
       - name: Test
         working-directory: build/Debug
         env:
-          # detect_leaks=0: a future abandoned while its producer is still suspended
-          # never releases its coroutine frame -- a known leak that would make this job
-          # red and hide the memory-safety signal it exists for.
+          # detect_leaks=1: dropping a future destroys its producer frame even mid-body, and
+          # destroying an actor unwinds its suspended chain first -- nothing is left to leak.
           # halt_on_error fails the job on the FIRST report instead of running on past
           # corrupted state; second_deadlock_stack gives both stacks for a lock-order
           # inversion.
-          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
           TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --output-on-failure

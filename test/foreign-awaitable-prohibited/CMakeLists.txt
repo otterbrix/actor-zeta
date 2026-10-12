@@ -1,13 +1,15 @@
-# A behavior may co_await exactly two things: a unique_future<T>, and the
+# A behavior may co_await exactly: a unique_future<T>; a detail::settled<T>, the same wait
+# that leaves the future in place instead of taking its value (dispatch() uses it); and the
 # pair<bool, unique_future<T>> that send() returns (itself a static_assert). Nothing
 # else, and no co_yield.
 #
 # await_transform is a MEMBER of the promise, so [expr.await]/3.2 routes every co_await
 # in a behavior through it, and every suspension point runs propagate_awaited_state()
 # and publishes awaited_flags_. That is what makes "a suspended behavior is always
-# is_busy()" true, and what keeps park() -- `awaiting` with no job in any queue --
-# unreachable for a live behavior. A third overload, or a yield_value, would be a
-# suspension point that skips the publication and silently breaks the invariant.
+# is_busy()" true, and what keeps the actor's loop from taking a live behavior for
+# finished -- destroying its frame and parking the actor under a pending await. Another
+# overload that skipped the publication, or a yield_value, would be such a suspension point
+# and silently break the invariant.
 #
 # Checked at configure time: the property under test is the ABSENCE of an overload,
 # and running the permitted shapes would never notice a new one.
@@ -29,7 +31,7 @@ endfunction()
 az_require_no_compile(forbidden_awaitable.cpp
         "A behavior must not co_await a foreign awaitable: that is a suspension point \
 that never publishes awaited_flags_, so the behavior can be suspended and not \
-is_busy(), and park() becomes reachable for a live behavior.")
+is_busy(), and the actor's loop takes a live behavior for finished.")
 
 az_require_no_compile(forbidden_yield.cpp
         "behavior_t::promise_type must not grow a yield_value: co_yield would be a \

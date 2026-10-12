@@ -64,11 +64,11 @@ namespace actor_zeta { namespace scheduler {
     private:
         void run() {
             for (;;) {
-                auto node = policy_.dequeue(this);
-                assert(node && "Dequeued null job");
-                policy_.before_resume(this, *node);
-                auto res = node->resume(max_throughput_);
-                policy_.after_resume(this, *node);
+                job_ptr job = policy_.dequeue(this);
+                assert(job && "Dequeued null job");
+                policy_.before_resume(this, job);
+                auto res = job.resume(max_throughput_);
+                policy_.after_resume(this, job);
                 switch (res) {
                     case resume_result::resume: {
                         // A `resume` that handled nothing is a spin on something the
@@ -78,18 +78,18 @@ namespace actor_zeta { namespace scheduler {
                         if (res.messages_processed == 0) {
                             std::this_thread::yield();
                         }
-                        policy_.resume_job_later(this, std::move(node));
+                        policy_.resume_job_later(this, job);
                         break;
                     }
                     case resume_result::done: {
-                        policy_.after_completion(this, *node);
+                        policy_.after_completion(this, job);
                         break;
                     }
                     case resume_result::awaiting: {
                         break;
                     }
                     case resume_result::shutdown: {
-                        policy_.after_completion(this, *node);
+                        policy_.after_completion(this, job);
                         policy_.before_shutdown(this);
                         return;
                     }

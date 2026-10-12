@@ -144,22 +144,19 @@ The check is implemented in `dispatch_traits.hpp`:
 
 ```cpp
 template<typename T>
-concept rvalue_ref_to_move_only =
-    std::is_rvalue_reference_v<T> &&
-    std::is_move_constructible_v<std::remove_reference_t<T>> &&
-    !std::is_copy_constructible_v<std::remove_reference_t<T>>;
+concept rvalue_ref = std::is_rvalue_reference_v<T>;
 ```
 
-This catches:
-- `std::unique_ptr<T>&&`
-- `std::unique_lock<T>&&`
-- Any custom move-only type passed by `T&&`
+This catches every `T&&` parameter:
+- move-only types such as `std::unique_ptr<T>&&` — the GCC bug described here;
+- copyable types such as `std::string&&` — arguments cross the actor boundary by value, and a
+  `T&&` would refer into the message body instead of owning the argument.
 
 ## Recommendations
 
-1. **For library users**: Use by-value parameters for move-only types in coroutine methods
+1. **For library users**: Use by-value parameters in coroutine methods
 2. **For CI**: Test on both GCC 11.4 (Ubuntu 22.04) and GCC 11.5+ to catch regressions
-3. **For new code**: Prefer `T` over `T&&` for move-only coroutine parameters
+3. **For new code**: Take `T`, never `T&&`, in coroutine methods
 
 ## Historical Context
 

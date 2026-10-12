@@ -67,6 +67,10 @@ examples/
 4. `auto actor = spawn<MyActor>(memory_resource, args...)`
 5. `auto [needs_sched, future] = send(actor.get(), &MyActor::method, args...)`
 6. `if (needs_sched) scheduler->enqueue(actor.get())`
+7. Stop: `auto closed = actor->close()`; once `closed` is ready, destroying the actor is safe
+
+The actor is a generator: its loop is a coroutine, and `resume()` pulls one step of it.
+`docs/LIFECYCLE.md` has the turn, the verdicts, `close()` and the contract checks.
 
 ### Who May Schedule (CRITICAL)
 
@@ -78,10 +82,10 @@ owns the actors -- the supervisor that spawned them, or the code that drives the
 in a test. A `cooperative_actor` never holds a scheduler.
 
 So an actor that sends to a peer cannot discharge the `needs_sched` it gets back.
-It must not drop it either: a dropped obligation leaves the target with the
-`scheduled` bit set and no job anywhere, and every later `send()` to it then
-reports `needs_sched == false` -- the actor is unreachable for good, with no
-assert and no diagnostic. Record it and let the owner claim it:
+It must not drop it either: a dropped obligation took the target's turn out of its
+mailbox with no job to hold it, and every later `send()` to it then reports
+`needs_sched == false` -- the actor is unreachable for good, with no assert and no
+diagnostic. Whoever receives `needs_sched` enqueues. Record it and let the owner claim it:
 
 ```cpp
 // In the actor: an address, so record.
@@ -113,7 +117,7 @@ does not stop its workers when destroyed, and destroying a started scheduler run
 #### Safe Pattern 1: Stop Scheduler First (Recommended)
 
 ```cpp
-auto scheduler = std::make_unique<sharing_scheduler>(4, 1000);
+auto scheduler = std::make_unique<sharing_scheduler>(resource, 4, 1000);
 scheduler->start();
 auto actor = spawn<MyActor>(resource);
 for (int i = 0; i < 100; ++i) {
@@ -141,7 +145,7 @@ std::vector<unique_future<int>> futures;
         if (f.failed()) { continue; }           // is_ready() is not a value gate
         auto result = std::move(f).take_ready();
     }
-}  // actor destroyed: safe, all work complete
+}  // actor destroyed: safe, all work complete -- unless a behavior awaits more after dispatch()
 scheduler->stop();
 ```
 
@@ -154,7 +158,7 @@ class Application {
 public:
     explicit Application(std::pmr::memory_resource* res)
         : actor_(spawn<MyActor>(res))
-        , scheduler_(std::make_unique<sharing_scheduler>(4, 1000)) { scheduler_->start(); }
+        , scheduler_(std::make_unique<sharing_scheduler>(res, 4, 1000)) { scheduler_->start(); }
     ~Application() {
         scheduler_->stop();   // not automatic; members then destroy in reverse: ~scheduler_, ~actor_
     }
@@ -164,11 +168,24 @@ public:
 The declaration order puts `~scheduler_` before `~actor_`; the `stop()` call is what
 makes the pattern safe.
 
+#### Safe Pattern 4: Close, Then Destroy
+
+```cpp
+auto closed = actor->close();   // everything sent before runs; later sends: operation_canceled
+for (int i = 0; i < kCap && !closed.is_ready(); ++i) { std::this_thread::yield(); }
+if (closed.is_ready()) {
+    actor.reset();              // safe while the scheduler runs: no job for the actor remains
+}
+```
+
+Bound the wait: an actor whose obligation was dropped, or whose behavior awaits a producer
+nobody runs, never reaches the marker.
+
 #### Unsafe Pattern (DO NOT USE)
 
 ```cpp
-// WRONG: the actor dies while a worker may still hold its job_ptr. ~cooperative_actor
-// waits for the current resume() to return, then frees; the worker's next resume() is
+// WRONG: the actor dies while a worker may still hold its job_ptr. delete waits for
+// the current resume() to return, then frees; the worker's next resume() is
 // a use-after-free. Keeping the future does not help: it settles as failed()
 // (broken_pipe) if the frame was torn down, but the scheduler still holds the actor.
 {
@@ -185,12 +202,18 @@ scheduler->stop();   // too late
 | `stop()` then destroy actor | Yes |
 | Wait all futures, then destroy | Yes |
 | Actor declared before scheduler (RAII), `stop()` called in the destructor | Yes |
+| `close()`, its future ready, then destroy -- the scheduler still running | Yes |
 | Destroy a started scheduler without `stop()` | **NO**: `std::terminate()` |
 | Destroy actor while scheduler running | **NO** |
 | Destroy actor with pending futures | **NO** |
 
 ### Memory Management
-- `spawn()` returns `std::unique_ptr<Actor, pmr::deleter_t>`
+- `spawn()` returns `std::unique_ptr<Actor, pmr::deleter_t>` and takes two blocks from the
+  resource: the actor and its loop's coroutine frame; destroying the actor returns both
+- An actor class must be `final` (a `static_assert`): its destroying `operator delete` runs
+  `~Actor` and frees `sizeof(Actor)`
+- `sharing_scheduler(resource, threads, max_throughput)`: the job queue and the workers come
+  from `resource`; once warmed up, `send` → `enqueue` → `resume` allocates nothing globally
 - Messages and their `shared_state` are allocated from the **receiver's** memory resource
 - Coroutine frames come from the actor's resource: a `unique_future<T>` coroutine must
   be an inline actor member function or take a `std::pmr::memory_resource*`
@@ -198,7 +221,7 @@ scheduler->stop();   // too late
 ### Type System (no RTTI)
 - `detail/rtt.hpp`: runtime-typed message bodies
 - Actors are owned by the `unique_ptr` from `spawn()` and referred to by `address_t`
-  (`actor->address()`); `detail/intrusive_ptr.hpp` exists but is not used for actors
+  (`actor->address()`)
 
 ## Code Conventions
 
@@ -256,13 +279,16 @@ if (needs_sched) scheduler->enqueue(target.get());
 while (!future.is_ready()) { std::this_thread::yield(); }
 int result = future.failed() ? -1 : std::move(future).take_ready();
 
-// Same thread, no scheduler: pump the actor. `resume` means "run me again";
-// bound the loop, since an actor awaiting a producer nobody drives says it forever.
-auto [_, f] = send(actor.get(), &Actor::compute, 42);
-for (int i = 0; i < 100 && !f.is_ready(); ++i) {
-    if (actor->resume(1).result != scheduler::resume_result::resume) break;
+// Same thread, no scheduler: pump the actor, only on a turn -- `needs_sched` hands one
+// out, a `resume` verdict keeps it, and after `awaiting` it is back in the mailbox.
+// Bound the loop, since an actor awaiting a producer nobody drives says `resume` forever.
+auto [needs_sched, f] = send(actor.get(), &Actor::compute, 42);
+if (needs_sched) {
+    for (int i = 0; i < 100; ++i) {
+        if (actor->resume(1).result != scheduler::resume_result::resume) break;
+    }
 }
-int r = f.failed() ? -1 : std::move(f).take_ready();
+int r = (f.is_ready() && !f.failed()) ? std::move(f).take_ready() : -1;
 
 // Inside an actor coroutine: it holds an address, not a scheduler, so it records
 // the obligation and its owner claims it (see "Who May Schedule").
@@ -270,8 +296,9 @@ auto [needs_sched, f2] = send(other_address_, &Other::process, x);
 if (needs_sched) { other_owed_.fetch_add(1, std::memory_order_release); }
 int v = co_await std::move(f2);
 
-// Fire-and-forget
-auto [_, fut] = send(target.get(), &Target::method, arg1, arg2);
+// Fire-and-forget: drop the future, never the obligation
+auto [needs_sched, fut] = send(target.get(), &Target::method, arg1, arg2);
+if (needs_sched) scheduler->enqueue(target.get());
 fut.detach();
 ```
 
@@ -281,7 +308,7 @@ you: `enqueue()` the actor, then `stop()` drains until a full sweep makes no pro
 ### Coroutine Parameters
 ```cpp
 unique_future<void> process(std::unique_ptr<Data> data);    // OK: by value
-unique_future<void> process(std::unique_ptr<Data>&& data);  // compile error, see docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
+unique_future<void> process(std::unique_ptr<Data>&& data);  // compile error: no T&& for any T, see docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md
 ```
 
 ## Common Mistakes
@@ -292,12 +319,16 @@ unique_future<void> process(std::unique_ptr<Data>&& data);  // compile error, se
 | `std::shared_ptr<Actor>` | the `unique_ptr` from `spawn()`; pass `address_t` around |
 | `throw` in library code | `assert()` for impossible states, error codes for contracts |
 | `typeid` / `dynamic_cast` | `rtt.hpp` |
-| `T&&` for a move-only type in a coroutine | `T` by value |
+| `T&&` parameter, any `T` | `T` by value (`static_assert`) |
+| an actor class without `final` | `class A final : public basic_actor<A>` (`static_assert`) |
 | `const T&` in a coroutine | `T` by value (dangles after `co_await`) |
 | `co_await send(...)` | `static_assert`; split: pair, `enqueue`, `co_await std::move(f)` |
 | `.get()` / `.wait()` / `.available()` | do not exist; `co_await`, pump, or poll, then `take_ready()` |
 | `take_ready()` after `is_ready()` alone | check `failed()` first; a valueless extraction aborts in every build |
 | ignoring `resume()`'s verdict | `[[nodiscard]]`; requeue on `resume`, drop on `awaiting`, no `(void)` cast |
+| `resume()` without a turn, e.g. after `awaiting` | stops the process; resume only on `needs_sched` or a `resume` verdict |
+| dropping a direct call's future (`auto f = this->m(...)`) before it finishes | cancels the method mid-body; `co_await` it or keep it |
+| awaiting your own `send()` | the reply waits behind the await: debug stops the process, release spins; `co_await this->method(...)` |
 | an actor holding a `scheduler*` | only a supervisor owns one; others record the obligation |
 | dropping `needs_sched` | strands the target for good; record it for the owner |
 
@@ -306,7 +337,12 @@ unique_future<void> process(std::unique_ptr<Data>&& data);  // compile error, se
 `CHANGELOG.md` has the detail and the migration guides.
 
 - `co_await send(...)` is a compile error; extracting from a valueless future aborts in every build.
-- A contended `resume()` returns `awaiting`; `done` means finished. `resume()` is `[[nodiscard]]` and a suspended behavior is no longer parked, so the verdict is the only signal.
+- The actor is a generator: its loop is a coroutine in a frame from the actor's resource, and `resume()` pulls one step. A suspended behavior keeps the turn (verdict `resume`); the park happens only once the frame is suspended.
+- `close()` returns `unique_future<void>`; once it is ready, destroying the actor is safe while the scheduler runs.
+- Contract violations stop the process: `resume()` without a turn, after `close()` or from inside a behavior; a second `delete`; in debug, two `resume()` calls at once and awaiting your own `send()`. `resume()` is `[[nodiscard]]`; `done` means closed or destroyed.
+- `delete` is a destroying `operator delete`: actor classes are `final`, and a suspended behavior unwinds (callers get `broken_pipe`).
+- `sharing_scheduler(resource, threads, max_throughput)`; no global allocation once warmed up.
+- Any `T&&` method parameter is a compile error; `dispatch()` is `[[nodiscard]]`; a message lives as long as its behavior.
 - A user exception reaches the caller's future (`EXCEPTIONS_DISABLE=OFF`) instead of killing the process.
 - Gone: `generator<T>` and streaming (batch with `unique_future<std::vector<T>>`), `.get()`/`.wait()`/`.available()`/`.cancel()`, the `future_state<T>` family, `actor_mixin`'s default `enqueue_impl`.
 - Added: `message::set_command()` for non-blocking routers (`examples/delegation/`), `promise<T>::exception()`.
@@ -321,12 +357,13 @@ cmake --build build && cd build && ctest --output-on-failure
 ```
 
 A typical actor-lifetime ASan report reads `heap-use-after-free` in
-`std::atomic<actor_state>::load()` under `cooperative_actor::resume()` /
-`resume_impl<MyActor>()`, freed by `~cooperative_actor()`. Fix: `scheduler->stop()`
-before the actor is destroyed.
+`actor_protocol::enter()` (the actor's first atomic) under `cooperative_actor::resume()`,
+freed by the actor's `operator delete`. Fix: `scheduler->stop()`, or `close()` and wait
+for its future, before the actor is destroyed.
 
 ## Additional Resources
 
+- [docs/LIFECYCLE.md](docs/LIFECYCLE.md): the turn, the verdicts, `close()`, contract checks
 - [CHANGELOG.md](CHANGELOG.md), [PROMISE_FUTURE_GUIDE.md](PROMISE_FUTURE_GUIDE.md)
 - [docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md](docs/GCC_COROUTINE_OPERATOR_NEW_BUG.md)
 - `examples/`, `test/`
