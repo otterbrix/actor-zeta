@@ -14,6 +14,17 @@
 #include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
+// gcc-12 and gcc-13 mis-size the destination of a 1-byte atomic load when this
+// header's release() is inlined into deep caller chains (-Wstringop-overflow;
+// false positive: the read is a plain acquire load of a member atomic). Known
+// compiler defect: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=107694 and
+// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=113775. Clang neither has the
+// defect nor knows the warning name, so the quiet zone compiles for gcc only.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+
 namespace actor_zeta {
 
     template<typename T>
@@ -305,7 +316,7 @@ namespace actor_zeta {
                         state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
                                                 std::memory_order_release);
 
-                        // 3. true: the future was already released, the state is gone, the frame is owned by this future.
+                        // 3. true: future was already released, the state is gone, the frame is owned by this future.
                         bool cancelled = state_->release_promise();
 
                         // The promise side is settled; null it so ~promise_type_base, which
@@ -579,3 +590,7 @@ namespace actor_zeta {
     }
 
 } // namespace actor_zeta
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif

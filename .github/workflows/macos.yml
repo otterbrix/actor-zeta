@@ -16,7 +16,7 @@ jobs:
         cxx_standard: [20]
         build_type: ["Release", "Debug"]
         exceptions_disable: ["ON", "OFF"]
-        os: ["macos-14", "macos-15"]
+        os: ["macos-15"]
 
     runs-on: ${{ matrix.os }}
 
