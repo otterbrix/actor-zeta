@@ -14,6 +14,17 @@
 #include <actor-zeta/detail/shared_state.hpp>
 #include <actor-zeta/detail/type_traits.hpp>
 
+// gcc-12 and gcc-13 mis-size the destination of a 1-byte atomic load when this
+// header's release() is inlined into deep caller chains (-Wstringop-overflow;
+// false positive: the read is a plain acquire load of a member atomic). Known
+// compiler defect: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=107694 and
+// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=113775. Clang neither has the
+// defect nor knows the warning name, so the quiet zone compiles for gcc only.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+
 namespace actor_zeta {
 
     template<typename T>
@@ -237,12 +248,23 @@ namespace actor_zeta {
     private:
         void release() noexcept {
             // Reclaim the frame BEFORE releasing the state: done() means parked at final_suspend
-            // and ours; mid-body it is the producer's, whose final_awaiter (steps 3/4) destroys it
-            // on seeing future_released. After release_future(), done() could read freed memory.
-            if (handle_ && handle_.done()) {
-                handle_.destroy();
+            // and is owned by this future; before final_suspend it is owned by the producer's
+            // final_awaiter (steps 3/4), which destroys it on seeing future_released.
+            // After release_future(), done() could read freed memory.
+            if (handle_) {
+                // A completed coroutine is parked at final_suspend and can be reclaimed
+                // here. If promise_released is still unset, final_suspend never ran: an
+                // abandoned child is still owned by this future and can be reclaimed too.
+                // Once the release has run, the frame may already be destroyed and done()
+                // would read freed memory. Nothing may resume it: the caller quiesced
+                // every resumer first.
+                if (handle_.done()
+                        || !(state_->flags_.load(std::memory_order_acquire)
+                             & detail::state_flags::promise_released)) {
+                    handle_.destroy();
+                }
+                handle_ = {};
             }
-            handle_ = {};
 
             if (state_) {
                 state_->release_future();
@@ -294,8 +316,12 @@ namespace actor_zeta {
                         state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
                                                 std::memory_order_release);
 
-                        // 3. true: the future was already released, the state is gone, the frame is ours.
+                        // 3. true: future was already released, the state is gone, the frame is owned by this future.
                         bool cancelled = state_->release_promise();
+
+                        // The promise side is settled; null it so ~promise_type_base, which
+                        // repeats this release while state_ is set, never touches it again.
+                        self.promise().state_ = nullptr;
 
                         if (cancelled) {
                             self.destroy();
@@ -340,7 +366,19 @@ namespace actor_zeta {
                 : resource_(extract_resource_or_abort(std::forward<First>(first), std::forward<Args>(args)...))
                 , state_(nullptr) {}
 
-            ~promise_type_base() noexcept = default;
+            ~promise_type_base() noexcept {
+                // Destroyed before final_suspend - its release never ran; run it here.
+                // No-op on every completed path: final_suspend leaves state_ null.
+                if (state_ != nullptr) {
+                    state_->flags_.fetch_or(detail::state_flags::promise_finalizing,
+                                            std::memory_order_release);
+                    if (!state_->release_promise()) {
+                        [[maybe_unused]] const bool state_still_alive =
+                            state_->try_complete_finalize();
+                    }
+                    state_ = nullptr;
+                }
+            }
 
         protected:
             template<typename U>
@@ -552,3 +590,7 @@ namespace actor_zeta {
     }
 
 } // namespace actor_zeta
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
